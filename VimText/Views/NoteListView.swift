@@ -344,7 +344,7 @@ struct NoteListView: View {
         let isSelected = !isSearching && viewModel.selectedNoteId == note.id
         let isHovered = hoveredNoteId == note.id
 
-        NoteRowView(note: note, folderName: folderName(for: note))
+        NoteRowView(note: note, folderName: folderName(for: note), onCopyPath: { copyPath(for: note) })
             .id(note.id)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -469,11 +469,22 @@ struct NoteListView: View {
             viewModel.togglePin(note)
         }
 
+        Button("Copy Path") {
+            copyPath(for: note)
+        }
+
         Divider()
 
         Button("Delete", role: .destructive) {
             viewModel.deleteNote(note)
         }
+    }
+
+    private func copyPath(for note: Note) {
+        let path = StorageManager.shared.fileURL(for: note).path
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(path, forType: .string)
     }
 }
 

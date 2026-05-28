@@ -43,6 +43,10 @@ final class StorageManager {
         }
     }
 
+    func fileURL(for note: Note) -> URL {
+        notesURL.appendingPathComponent("\(note.id.uuidString).json")
+    }
+
     func saveNote(_ note: Note) {
         let url = notesURL.appendingPathComponent("\(note.id.uuidString).json")
         guard let data = try? encoder.encode(note) else { return }

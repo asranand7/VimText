@@ -3,7 +3,9 @@ import SwiftUI
 struct NoteRowView: View {
     let note: Note
     var folderName: String = "Notes"
+    var onCopyPath: (() -> Void)? = nil
     @EnvironmentObject private var themeManager: ThemeManager
+    @State private var didCopy = false
 
     private var theme: AppTheme { themeManager.theme }
 
@@ -41,6 +43,21 @@ struct NoteRowView: View {
                     Image(systemName: "pin.fill")
                         .font(.caption2)
                         .foregroundStyle(theme.accent)
+                }
+                if let onCopyPath {
+                    Button {
+                        onCopyPath()
+                        didCopy = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                            didCopy = false
+                        }
+                    } label: {
+                        Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                            .font(.caption2)
+                            .foregroundStyle(didCopy ? theme.accent : theme.secondaryText)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copy note file path")
                 }
             }
 
