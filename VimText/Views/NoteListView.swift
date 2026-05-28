@@ -10,6 +10,14 @@ struct NoteListView: View {
     @State private var searchFocusTrigger = false
     @State private var highlightedIndex: Int? = nil
     @State private var hoveredNoteId: UUID? = nil
+    @State private var showSidebarColorPicker = false
+
+    private var sidebarTintBinding: Binding<Color> {
+        Binding(
+            get: { themeManager.sidebarTint },
+            set: { themeManager.setSidebarTint($0) }
+        )
+    }
 
     private var allSelected: Bool {
         !viewModel.filteredNotes.isEmpty && selectedNoteIds.count == viewModel.filteredNotes.count
@@ -20,7 +28,15 @@ struct NoteListView: View {
     private var glassBackground: some View {
         ZStack {
             VisualEffectView(material: .sidebar)
-            theme.surface.opacity(0.45)
+            theme.surface.opacity(0.4)
+            LinearGradient(
+                colors: [
+                    themeManager.sidebarTint.opacity(theme.isDark ? 0.20 : 0.16),
+                    themeManager.sidebarTint.opacity(0.02)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
         }
         .ignoresSafeArea()
     }
@@ -57,11 +73,55 @@ struct NoteListView: View {
         return orderSeen.sorted().map { (groups[$0]!.0, groups[$0]!.1) }
     }
 
+    private var sidebarColorPicker: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Sidebar Color")
+                .font(.system(.headline, design: .rounded))
+
+            ColorPicker("Custom color", selection: sidebarTintBinding, supportsOpacity: false)
+                .font(.system(.subheadline, design: .rounded))
+
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(26), spacing: 10), count: 7), spacing: 10) {
+                ForEach(sidebarTintPresets, id: \.self) { hex in
+                    Button {
+                        themeManager.sidebarTintHex = hex
+                    } label: {
+                        Circle()
+                            .fill(Color(hex: hex))
+                            .frame(width: 24, height: 24)
+                            .overlay(
+                                Circle().strokeBorder(
+                                    Color.primary.opacity(themeManager.sidebarTintHex == hex ? 0.9 : 0.12),
+                                    lineWidth: themeManager.sidebarTintHex == hex ? 2 : 1
+                                )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Button {
+                themeManager.resetSidebarTint()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.uturn.backward")
+                    Text("Use Theme Color")
+                }
+                .font(.system(.caption, design: .rounded).weight(.medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(themeManager.isUsingCustomSidebarTint ? theme.accent : .secondary)
+            .disabled(!themeManager.isUsingCustomSidebarTint)
+        }
+        .padding(16)
+        .frame(width: 260)
+    }
+
     private func sectionHeader(_ title: String) -> some View {
         HStack {
             Text(title)
                 .font(.system(.caption, design: .rounded).weight(.bold))
-                .foregroundStyle(theme.secondaryText.opacity(0.7))
+                .foregroundStyle(themeManager.sidebarTint)
                 .textCase(nil)
             Spacer()
         }
@@ -230,6 +290,19 @@ struct NoteListView: View {
                     .help("Delete selected notes")
                 }
 
+                Button {
+                    showSidebarColorPicker.toggle()
+                } label: {
+                    Image(systemName: "paintbrush.pointed")
+                        .font(.caption)
+                        .foregroundStyle(themeManager.sidebarTint)
+                }
+                .buttonStyle(.plain)
+                .help("Sidebar Color")
+                .popover(isPresented: $showSidebarColorPicker, arrowEdge: .bottom) {
+                    sidebarColorPicker
+                }
+
                 Menu {
                     if !isSelectionMode {
                         Button("Select Notes…") {
@@ -344,7 +417,7 @@ struct NoteListView: View {
         let isSelected = !isSearching && viewModel.selectedNoteId == note.id
         let isHovered = hoveredNoteId == note.id
 
-        NoteRowView(note: note, folderName: folderName(for: note), onCopyPath: { copyPath(for: note) })
+        NoteRowView(note: note, folderName: folderName(for: note), isHovered: isHovered, onCopyPath: { copyPath(for: note) })
             .id(note.id)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)

@@ -91,14 +91,47 @@ final class ThemeManager: ObservableObject {
         didSet { UserDefaults.standard.set(themeID, forKey: Self.storageKey) }
     }
 
+    /// Optional user-picked sidebar tint (hex). When nil, the theme accent is used.
+    @Published var sidebarTintHex: String? {
+        didSet { UserDefaults.standard.set(sidebarTintHex, forKey: Self.sidebarKey) }
+    }
+
     private static let storageKey = "selectedThemeID"
+    private static let sidebarKey = "sidebarTintHex"
 
     init() {
         themeID = UserDefaults.standard.string(forKey: Self.storageKey) ?? AppTheme.light.id
+        sidebarTintHex = UserDefaults.standard.string(forKey: Self.sidebarKey)
     }
 
     var theme: AppTheme { AppTheme.theme(id: themeID) }
+
+    /// Effective sidebar tint color: custom pick, or theme accent.
+    var sidebarTint: Color {
+        if let hex = sidebarTintHex { return Color(hex: hex) }
+        return theme.accent
+    }
+
+    var isUsingCustomSidebarTint: Bool { sidebarTintHex != nil }
+
+    func setSidebarTint(_ color: Color) {
+        let ns = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(color)
+        sidebarTintHex = String(
+            format: "%02X%02X%02X",
+            Int((ns.redComponent * 255).rounded()),
+            Int((ns.greenComponent * 255).rounded()),
+            Int((ns.blueComponent * 255).rounded())
+        )
+    }
+
+    func resetSidebarTint() { sidebarTintHex = nil }
 }
+
+let sidebarTintPresets: [String] = [
+    "E5A50A", "FF6B6B", "F06595", "CC5DE8", "845EF7",
+    "5C7CFA", "339AF0", "22B8CF", "20C997", "51CF66",
+    "94D82D", "FCC419", "FF922B", "868E96"
+]
 
 extension Color {
     init(hex: String) {

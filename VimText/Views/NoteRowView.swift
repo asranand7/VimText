@@ -3,6 +3,7 @@ import SwiftUI
 struct NoteRowView: View {
     let note: Note
     var folderName: String = "Notes"
+    var isHovered: Bool = false
     var onCopyPath: (() -> Void)? = nil
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var didCopy = false
@@ -32,19 +33,22 @@ struct NoteRowView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
                 Text(note.displayTitle)
-                    .font(.system(.body, design: .rounded).weight(.semibold))
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .foregroundStyle(theme.text)
                     .lineLimit(1)
-                Spacer()
+
+                Spacer(minLength: 4)
+
                 if note.isPinned {
                     Image(systemName: "pin.fill")
-                        .font(.caption2)
+                        .font(.system(size: 10))
                         .foregroundStyle(theme.accent)
                 }
-                if let onCopyPath {
+
+                if let onCopyPath, isHovered || didCopy {
                     Button {
                         onCopyPath()
                         didCopy = true
@@ -53,34 +57,41 @@ struct NoteRowView: View {
                         }
                     } label: {
                         Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                            .font(.caption2)
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(didCopy ? theme.accent : theme.secondaryText)
+                            .frame(width: 18, height: 18)
+                            .background(
+                                Circle().fill(theme.text.opacity(didCopy ? 0 : 0.06))
+                            )
                     }
                     .buttonStyle(.plain)
                     .help("Copy note file path")
+                    .transition(.opacity)
                 }
             }
 
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Text(formattedDate)
-                    .font(.caption)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(theme.secondaryText)
+                    .fixedSize()
 
                 Text(note.preview)
-                    .font(.caption)
-                    .foregroundStyle(theme.secondaryText.opacity(0.65))
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.secondaryText.opacity(0.6))
                     .lineLimit(1)
             }
 
             HStack(spacing: 4) {
                 Image(systemName: "folder")
-                    .font(.system(size: 10))
+                    .font(.system(size: 9))
                 Text(folderName)
-                    .font(.caption2)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
             }
-            .foregroundStyle(theme.secondaryText.opacity(0.75))
-            .padding(.top, 1)
+            .foregroundStyle(theme.secondaryText.opacity(0.55))
+            .padding(.top, 2)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 7)
+        .animation(.easeInOut(duration: 0.12), value: isHovered)
     }
 }
