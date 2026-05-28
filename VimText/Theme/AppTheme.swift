@@ -32,15 +32,45 @@ struct AppTheme: Identifiable, Hashable {
 }
 
 extension AppTheme {
+    static let indigo = AppTheme(
+        id: "indigo", name: "Indigo (Recommended)", isDark: false,
+        editorBg: "FFFFFF", surfaceBg: "F8FAFC", textColor: "0F172A",
+        secondaryColor: "64748B", accentColor: "4F46E5", separatorColor: "E2E8F0"
+    )
+    static let sageGreen = AppTheme(
+        id: "sage-green", name: "Sage Green", isDark: false,
+        editorBg: "FCFDFB", surfaceBg: "F1F5F0", textColor: "1E2E22",
+        secondaryColor: "68756A", accentColor: "4E7A67", separatorColor: "E2EAE0"
+    )
+    static let graphite = AppTheme(
+        id: "graphite", name: "Graphite", isDark: true,
+        editorBg: "121214", surfaceBg: "1C1C1F", textColor: "E4E4E7",
+        secondaryColor: "A1A1AA", accentColor: "A8A8B2", separatorColor: "2A2A2E"
+    )
+    static let lavender = AppTheme(
+        id: "lavender", name: "Lavender", isDark: false,
+        editorBg: "FAF9FD", surfaceBg: "F2EEF7", textColor: "2D1D4A",
+        secondaryColor: "7C6E9E", accentColor: "8A5CF6", separatorColor: "EAE3F1"
+    )
+    static let sand = AppTheme(
+        id: "sand", name: "Sand", isDark: false,
+        editorBg: "FDFCF7", surfaceBg: "F6F3E9", textColor: "3E2723",
+        secondaryColor: "8D6E63", accentColor: "C28A3E", separatorColor: "EFEAE0"
+    )
+    static let oceanBlue = AppTheme(
+        id: "ocean-blue", name: "Ocean Blue", isDark: false,
+        editorBg: "F7FAFC", surfaceBg: "EEF5F9", textColor: "0F172A",
+        secondaryColor: "475569", accentColor: "0284C7", separatorColor: "E1EDF4"
+    )
     static let light = AppTheme(
         id: "light", name: "Light", isDark: false,
         editorBg: "FCFCFB", surfaceBg: "F4F3F0", textColor: "26262B",
         secondaryColor: "8E8D87", accentColor: "D99A0B", separatorColor: "EAE8E3"
     )
-    static let graphite = AppTheme(
-        id: "graphite", name: "Graphite", isDark: false,
-        editorBg: "FAFAF9", surfaceBg: "ECECEA", textColor: "202124",
-        secondaryColor: "85827C", accentColor: "3F4146", separatorColor: "DEDDD9"
+    static let dark = AppTheme(
+        id: "dark", name: "Dark", isDark: true,
+        editorBg: "1C1C1E", surfaceBg: "252528", textColor: "E6E6E8",
+        secondaryColor: "98989D", accentColor: "FFD60A", separatorColor: "38383A"
     )
     static let ink = AppTheme(
         id: "ink", name: "Ink", isDark: true,
@@ -51,11 +81,6 @@ extension AppTheme {
         id: "gray", name: "Gray", isDark: true,
         editorBg: "3A3D42", surfaceBg: "32353A", textColor: "D6D9DE",
         secondaryColor: "9BA0A8", accentColor: "7FB0C9", separatorColor: "4A4E54"
-    )
-    static let dark = AppTheme(
-        id: "dark", name: "Dark", isDark: true,
-        editorBg: "1C1C1E", surfaceBg: "252528", textColor: "E6E6E8",
-        secondaryColor: "98989D", accentColor: "FFD60A", separatorColor: "38383A"
     )
     static let catppuccinLatte = AppTheme(
         id: "catppuccin-latte", name: "Catppuccin Latte", isDark: false,
@@ -89,8 +114,8 @@ extension AppTheme {
     )
 
     static let all: [AppTheme] = [
-        light, graphite, ink, gray, dark,
-        catppuccinLatte, catppuccinMocha,
+        indigo, sageGreen, graphite, lavender, sand, oceanBlue,
+        light, dark, ink, gray, catppuccinLatte, catppuccinMocha,
         nord, dracula, gruvbox, solarizedDark
     ]
 
@@ -113,7 +138,7 @@ final class ThemeManager: ObservableObject {
     private static let sidebarKey = "sidebarTintHex"
 
     init() {
-        themeID = UserDefaults.standard.string(forKey: Self.storageKey) ?? AppTheme.light.id
+        themeID = UserDefaults.standard.string(forKey: Self.storageKey) ?? AppTheme.indigo.id
         sidebarTintHex = UserDefaults.standard.string(forKey: Self.sidebarKey)
     }
 

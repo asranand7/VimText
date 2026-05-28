@@ -186,40 +186,40 @@ struct NoteListView: View {
                             )
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, isSearchFocused ? 8 : 7)
-                .frame(minHeight: 38)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .frame(minHeight: 36)
                 .background(
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .fill(theme.isDark ? Color.white.opacity(0.07) : Color.white.opacity(0.48))
+                    Capsule()
+                        .fill(theme.isDark ? Color.white.opacity(0.06) : Color.white.opacity(0.38))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    Capsule()
                         .strokeBorder(
-                            isSearchFocused ? themeManager.sidebarTint.opacity(0.58) : Color.primary.opacity(0.08),
-                            lineWidth: isSearchFocused ? 1.5 : 0.5
+                            isSearchFocused ? themeManager.sidebarTint.opacity(0.58) : Color.primary.opacity(0.06),
+                            lineWidth: isSearchFocused ? 1.2 : 0.5
                         )
                 )
                 .shadow(
-                    color: themeManager.sidebarTint.opacity(isSearchFocused ? 0.22 : 0),
-                    radius: isSearchFocused ? 14 : 0,
-                    y: isSearchFocused ? 4 : 0
+                    color: themeManager.sidebarTint.opacity(isSearchFocused ? 0.16 : 0),
+                    radius: isSearchFocused ? 10 : 0,
+                    y: isSearchFocused ? 3 : 0
                 )
-                .scaleEffect(isSearchFocused ? 1.015 : 1, anchor: .center)
+                .scaleEffect(isSearchFocused ? 1.012 : 1, anchor: .center)
                 .animation(DS.snappy, value: isSearchFocused)
 
                 Button(action: { viewModel.createNote() }) {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(theme.accent)
-                        .frame(width: 38, height: 38)
+                        .frame(width: 36, height: 36)
                         .background(
-                            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                .fill(theme.isDark ? Color.white.opacity(0.08) : Color.white.opacity(0.52))
+                            Circle()
+                                .fill(theme.isDark ? Color.white.opacity(0.06) : Color.white.opacity(0.42))
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                            Circle()
+                                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
                         )
                 }
                 .buttonStyle(PressableIconButtonStyle())

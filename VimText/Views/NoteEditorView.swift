@@ -43,32 +43,34 @@ struct NoteEditorView: View {
 
     private var editorHeader: some View {
         HStack(spacing: 16) {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 Image(systemName: "folder")
                     .font(.system(size: 11))
                 Text(folderName)
-                    .font(.system(.caption, design: .default).weight(.medium))
+                    .font(.system(.subheadline, design: .default).weight(.semibold))
             }
-            .foregroundStyle(theme.secondaryText.opacity(0.8))
+            .foregroundStyle(theme.text.opacity(0.85))
 
             Spacer()
 
             if let note = note {
                 Text(formatDate(note.modifiedAt))
-                    .font(.system(.caption, design: .default).weight(.medium))
-                    .foregroundStyle(theme.secondaryText.opacity(0.85))
+                    .font(.system(.subheadline, design: .default).weight(.medium))
+                    .foregroundStyle(theme.secondaryText.opacity(0.8))
             }
 
             Spacer()
 
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 Button(action: {
                     if let note = note {
-                        viewModel.togglePin(note)
+                        withAnimation(DS.snappy) {
+                            viewModel.togglePin(note)
+                        }
                     }
                 }) {
                     Image(systemName: note?.isPinned == true ? "pin.fill" : "pin")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(note?.isPinned == true ? theme.accent : theme.secondaryText)
                 }
                 .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
@@ -78,7 +80,7 @@ struct NoteEditorView: View {
                     showDeleteConfirm = true
                 }) {
                     Image(systemName: "trash")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(theme.secondaryText)
                 }
                 .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
@@ -102,17 +104,26 @@ struct NoteEditorView: View {
                     }
                 } label: {
                     Image(systemName: "textformat.size")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(theme.secondaryText)
                 }
                 .menuStyle(.borderlessButton)
                 .frame(width: 20)
                 .help("Font Settings")
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(theme.separator.opacity(0.4), lineWidth: 0.5)
+            )
+            .shadow(color: Color.black.opacity(theme.isDark ? 0.12 : 0.03), radius: 5, y: 2)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 11)
-        .background(theme.surface.opacity(theme.isDark ? 0.18 : 0.34))
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
+        .background(editorPaperFill)
     }
 
     var body: some View {
@@ -200,19 +211,24 @@ struct NoteEditorView: View {
     }
 
     private var editorArea: some View {
-        VimTextView(
-            text: $content,
-            rtfData: $rtfData,
-            vimEngine: vimEngine,
-            findController: findController,
-            onSave: { saveCurrentNote() },
-            font: editorFont,
-            startInInsertMode: startInInsertMode,
-            backgroundColor: .clear,
-            textColor: theme.textNS,
-            accentColor: theme.accentNS,
-            paperStyle: paperStyle
-        )
+        HStack(spacing: 0) {
+            Spacer(minLength: 32)
+            VimTextView(
+                text: $content,
+                rtfData: $rtfData,
+                vimEngine: vimEngine,
+                findController: findController,
+                onSave: { saveCurrentNote() },
+                font: editorFont,
+                startInInsertMode: startInInsertMode,
+                backgroundColor: .clear,
+                textColor: theme.textNS,
+                accentColor: theme.accentNS,
+                paperStyle: paperStyle
+            )
+            .frame(maxWidth: 800)
+            Spacer(minLength: 32)
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(editorPaperFill)
         .onChange(of: content) { _, newValue in
@@ -321,25 +337,93 @@ struct NoteEditorView: View {
         .background(Color.clear)
     }
 
+    private var wordCount: Int {
+        content.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.count
+    }
+
+    private var readingTime: Int {
+        max(1, Int(ceil(Double(wordCount) / 200.0)))
+    }
+
+    private var paperStyleIconName: String {
+        switch paperStyle {
+        case "dotted": return "grid"
+        case "lined": return "list.bullet.indent"
+        default: return "doc.text"
+        }
+    }
+
+    private var paperStyleDisplayName: String {
+        switch paperStyle {
+        case "dotted": return "Dotted"
+        case "lined": return "Lined"
+        default: return "Plain"
+        }
+    }
+
     private var statusBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
+            // Mode Pill
             modeIndicator
-
-            if !vimEngine.statusMessage.isEmpty {
-                Text(vimEngine.statusMessage)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(theme.secondaryText)
+            
+            // Saved status pill
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.green)
+                Text("Saved")
+                    .font(.system(.caption, design: .default).weight(.semibold))
             }
-
+            .foregroundStyle(theme.secondaryText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
+            .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
+            
             Spacer()
-
-            Text(cursorInfo)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(theme.secondaryText)
+            
+            // Reading stats pill
+            HStack(spacing: 4) {
+                Image(systemName: "clock")
+                    .font(.system(size: 10))
+                Text("\(wordCount) words · \(readingTime) min read")
+                    .font(.system(.caption, design: .default).weight(.semibold))
+            }
+            .foregroundStyle(theme.secondaryText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
+            .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
+            
+            // Paper Style Pill
+            HStack(spacing: 4) {
+                Image(systemName: paperStyleIconName)
+                    .font(.system(size: 10))
+                Text(paperStyleDisplayName)
+                    .font(.system(.caption, design: .default).weight(.medium))
+            }
+            .foregroundStyle(theme.secondaryText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
+            .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
+            
+            // Cursor Coordinates Pill
+            HStack(spacing: 4) {
+                Image(systemName: "scope")
+                    .font(.system(size: 10))
+                Text(cursorInfo)
+                    .font(.system(.caption, design: .monospaced))
+            }
+            .foregroundStyle(theme.secondaryText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
+            .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Color.clear)
+        .padding(.vertical, 10)
+        .background(editorPaperFill)
     }
 
     private var themeMenu: some View {
