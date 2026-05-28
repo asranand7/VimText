@@ -108,7 +108,7 @@ struct VimTextView: NSViewRepresentable {
         scrollView.scrollerKnobStyle = .default
         // Right inset so the scroller floats 12pt from the panel edge
         scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
-        scrollView.scrollerInsets = NSEdgeInsets(top: 6, left: 0, bottom: 6, right: 4)
+        scrollView.scrollerInsets = NSEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
         // Vertical scroller subclass for slim capsule rendering
         scrollView.verticalScroller = PremiumScroller()
         // Preserve native momentum / physics
@@ -2741,9 +2741,10 @@ final class PremiumScroller: NSScroller {
         let knobRect = rect(for: .knob)
         guard knobRect.height > 0 else { return }
 
-        // Thumb dimensions: 6pt wide, floating 4pt from the right rail edge.
+        // Pin the 6pt thumb flush to the far-right edge of the knob rect.
         let thumbWidth: CGFloat = 6
-        let thumbX = knobRect.minX + (knobRect.width - thumbWidth) / 2
+        let edgeGap: CGFloat = 0
+        let thumbX = knobRect.maxX - thumbWidth - edgeGap
         let thumbInsetY: CGFloat = 2
         let thumbRect = CGRect(
             x: thumbX,
@@ -2765,16 +2766,4 @@ final class PremiumScroller: NSScroller {
 
     // Draw nothing for the track — keep it completely transparent.
     override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {}
-
-    // Tell AppKit we only need a narrow strip for the knob slot.
-    override func rect(for partCode: NSScroller.Part) -> NSRect {
-        let r = super.rect(for: partCode)
-        if partCode == .knobSlot || partCode == .knob {
-            // Centre a 14pt-wide column within the full scroller rect.
-            let targetWidth: CGFloat = 14
-            let x = r.maxX - targetWidth
-            return NSRect(x: x, y: r.minY, width: targetWidth, height: r.height)
-        }
-        return r
-    }
 }

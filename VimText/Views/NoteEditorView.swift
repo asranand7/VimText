@@ -236,7 +236,6 @@ struct NoteEditorView: View {
             accentColor: theme.accentNS,
             paperStyle: paperStyle
         )
-        .frame(maxWidth: 920, alignment: .leading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(editorPaperFill)
         .onChange(of: content) { _, newValue in
