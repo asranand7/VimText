@@ -55,9 +55,19 @@ final class NotesViewModel: ObservableObject {
     }
 
     init() {
-        load()
+        Task { await loadAsync() }
+    }
+
+    private func loadAsync() async {
+        let (loadedNotes, loadedFolders) = await Task.detached(priority: .userInitiated) {
+            (StorageManager.shared.loadNotes(), StorageManager.shared.loadFolders())
+        }.value
+        notes = loadedNotes
+        folders = loadedFolders
         if notes.isEmpty {
             createWelcomeNote()
+        } else if selectedNoteId == nil || !notes.contains(where: { $0.id == selectedNoteId }) {
+            selectedNoteId = filteredNotes.first?.id
         }
     }
 
