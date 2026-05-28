@@ -211,24 +211,19 @@ struct NoteEditorView: View {
     }
 
     private var editorArea: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 32)
-            VimTextView(
-                text: $content,
-                rtfData: $rtfData,
-                vimEngine: vimEngine,
-                findController: findController,
-                onSave: { saveCurrentNote() },
-                font: editorFont,
-                startInInsertMode: startInInsertMode,
-                backgroundColor: .clear,
-                textColor: theme.textNS,
-                accentColor: theme.accentNS,
-                paperStyle: paperStyle
-            )
-            .frame(maxWidth: 800)
-            Spacer(minLength: 32)
-        }
+        VimTextView(
+            text: $content,
+            rtfData: $rtfData,
+            vimEngine: vimEngine,
+            findController: findController,
+            onSave: { saveCurrentNote() },
+            font: editorFont,
+            startInInsertMode: startInInsertMode,
+            backgroundColor: .clear,
+            textColor: theme.textNS,
+            accentColor: theme.accentNS,
+            paperStyle: paperStyle
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(editorPaperFill)
         .onChange(of: content) { _, newValue in
