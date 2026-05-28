@@ -42,7 +42,7 @@ struct NoteEditorView: View {
                 Image(systemName: "folder")
                     .font(.system(size: 11))
                 Text(folderName)
-                    .font(.system(.caption, design: .rounded).weight(.medium))
+                    .font(.system(.caption, design: .default).weight(.medium))
             }
             .foregroundStyle(theme.secondaryText.opacity(0.8))
 
@@ -50,7 +50,7 @@ struct NoteEditorView: View {
 
             if let note = note {
                 Text(formatDate(note.modifiedAt))
-                    .font(.system(.caption, design: .rounded).weight(.medium))
+                    .font(.system(.caption, design: .default).weight(.medium))
                     .foregroundStyle(theme.secondaryText.opacity(0.85))
             }
 
@@ -350,7 +350,7 @@ struct NoteEditorView: View {
 
     private var modeIndicator: some View {
         Text(vimEngine.mode.displayName)
-            .font(.system(.caption, design: .rounded).weight(.bold))
+            .font(.system(.caption, design: .default).weight(.bold))
             .foregroundStyle(.white)
             .padding(.horizontal, 10)
             .padding(.vertical, 3)

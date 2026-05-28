@@ -116,7 +116,7 @@ struct CommandPaletteView: View {
             
             TextField("Search notes or type commands…", text: $state.searchText)
                 .textFieldStyle(.plain)
-                .font(.system(.title3, design: .rounded))
+                .font(.system(.title3, design: .default))
                 .focused($isFieldFocused)
                 .foregroundStyle(theme.text)
                 .onSubmit {
@@ -132,7 +132,7 @@ struct CommandPaletteView: View {
             }
             
             Text("ESC")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(.system(size: 10, weight: .bold, design: .default))
                 .foregroundStyle(theme.secondaryText.opacity(0.7))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
@@ -151,7 +151,7 @@ struct CommandPaletteView: View {
                         .font(.system(size: 32, weight: .thin))
                         .foregroundStyle(theme.secondaryText.opacity(0.4))
                     Text("No results found")
-                        .font(.system(.callout, design: .rounded))
+                        .font(.system(.callout, design: .default))
                         .foregroundStyle(theme.secondaryText)
                     Spacer()
                 }
@@ -164,7 +164,7 @@ struct CommandPaletteView: View {
                                 VStack(alignment: .leading, spacing: 0) {
                                     if idx == 0 || isNewSection(at: idx, in: items) {
                                         Text(sectionHeaderTitle(for: item))
-                                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                                            .font(.system(size: 10, weight: .bold, design: .default))
                                             .foregroundStyle(theme.secondaryText.opacity(0.6))
                                             .padding(.horizontal, 12)
                                             .padding(.top, idx == 0 ? 6 : 14)
@@ -230,7 +230,7 @@ struct CommandPaletteView: View {
                         }
                 )
         }
-        .font(.system(size: 11, design: .rounded))
+        .font(.system(size: 11, design: .default))
         .foregroundStyle(theme.secondaryText.opacity(0.8))
         .padding(.leading, 16)
         .padding(.trailing, 10)
@@ -301,7 +301,7 @@ struct CommandPaletteView: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text(note.displayTitle)
-                    .font(.system(.body, design: .rounded).weight(.semibold))
+                    .font(.system(.body, design: .default).weight(.semibold))
                     .foregroundStyle(theme.text)
                 Spacer()
                 if note.isPinned {
@@ -345,7 +345,7 @@ struct CommandPaletteView: View {
                 .frame(width: 20, height: 20)
             
             Text(cmd.name)
-                .font(.system(.body, design: .rounded).weight(.medium))
+                .font(.system(.body, design: .default).weight(.medium))
                 .foregroundStyle(theme.text)
             
             Spacer()

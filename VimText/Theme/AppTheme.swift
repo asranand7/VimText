@@ -31,8 +31,8 @@ struct AppTheme: Identifiable, Hashable {
 extension AppTheme {
     static let light = AppTheme(
         id: "light", name: "Light", isDark: false,
-        editorBg: "FFFFFF", surfaceBg: "F6F6F7", textColor: "1D1D1F",
-        secondaryColor: "8A8A8E", accentColor: "E5A50A", separatorColor: "E2E2E5"
+        editorBg: "FCFCFB", surfaceBg: "F4F3F0", textColor: "26262B",
+        secondaryColor: "8E8D87", accentColor: "D99A0B", separatorColor: "EAE8E3"
     )
     static let gray = AppTheme(
         id: "gray", name: "Gray", isDark: true,
@@ -132,6 +132,20 @@ let sidebarTintPresets: [String] = [
     "5C7CFA", "339AF0", "22B8CF", "20C997", "51CF66",
     "94D82D", "FCC419", "FF922B", "868E96"
 ]
+
+/// Shared design tokens for a consistent, Linear-inspired motion & shape language.
+enum DS {
+    /// Primary spring for selection, panel and content transitions. Fast, settled, understated.
+    static let spring = Animation.spring(response: 0.32, dampingFraction: 0.82)
+    /// Snappier spring for hover / press microinteractions.
+    static let snappy = Animation.spring(response: 0.24, dampingFraction: 0.8)
+    /// Crossfade used for content / page-state changes.
+    static let crossfade = Animation.easeInOut(duration: 0.22)
+
+    static let cardRadius: CGFloat = 12
+    static let panelRadius: CGFloat = 16
+    static let controlRadius: CGFloat = 10
+}
 
 extension Color {
     init(hex: String) {

@@ -36,7 +36,7 @@ struct NoteRowView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(note.displayTitle)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .font(.system(size: 14, weight: .semibold, design: .default))
                     .foregroundStyle(theme.text)
                     .lineLimit(1)
 
@@ -72,7 +72,7 @@ struct NoteRowView: View {
 
             HStack(spacing: 5) {
                 Text(formattedDate)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .font(.system(size: 11, weight: .medium, design: .default))
                     .foregroundStyle(theme.secondaryText)
                     .fixedSize()
 
@@ -86,7 +86,7 @@ struct NoteRowView: View {
                 Image(systemName: "folder")
                     .font(.system(size: 9))
                 Text(folderName)
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .font(.system(size: 10, weight: .medium, design: .default))
             }
             .foregroundStyle(theme.secondaryText.opacity(0.55))
             .padding(.top, 2)

@@ -11,6 +11,7 @@ struct NoteListView: View {
     @State private var highlightedIndex: Int? = nil
     @State private var hoveredNoteId: UUID? = nil
     @State private var showSidebarColorPicker = false
+    @State private var isSearchFocused = false
 
     private var sidebarTintBinding: Binding<Color> {
         Binding(
@@ -76,10 +77,10 @@ struct NoteListView: View {
     private var sidebarColorPicker: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Sidebar Color")
-                .font(.system(.headline, design: .rounded))
+                .font(.system(.headline, design: .default))
 
             ColorPicker("Custom color", selection: sidebarTintBinding, supportsOpacity: false)
-                .font(.system(.subheadline, design: .rounded))
+                .font(.system(.subheadline, design: .default))
 
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(26), spacing: 10), count: 7), spacing: 10) {
                 ForEach(sidebarTintPresets, id: \.self) { hex in
@@ -107,7 +108,7 @@ struct NoteListView: View {
                     Image(systemName: "arrow.uturn.backward")
                     Text("Use Theme Color")
                 }
-                .font(.system(.caption, design: .rounded).weight(.medium))
+                .font(.system(.caption, design: .default).weight(.medium))
             }
             .buttonStyle(.plain)
             .foregroundStyle(themeManager.isUsingCustomSidebarTint ? theme.accent : .secondary)
@@ -120,7 +121,7 @@ struct NoteListView: View {
     private func sectionHeader(_ title: String) -> some View {
         HStack {
             Text(title)
-                .font(.system(.caption, design: .rounded).weight(.bold))
+                .font(.system(.caption, design: .default).weight(.bold))
                 .foregroundStyle(themeManager.sidebarTint)
                 .textCase(nil)
             Spacer()
@@ -140,6 +141,7 @@ struct NoteListView: View {
                     SearchField(
                         text: $viewModel.searchText,
                         focusTrigger: $searchFocusTrigger,
+                        isFocused: $isSearchFocused,
                         onArrowDown: { moveHighlight(down: true) },
                         onArrowUp: { moveHighlight(down: false) },
                         onEnter: { selectHighlighted() },
@@ -160,12 +162,22 @@ struct NoteListView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(Color.primary.opacity(theme.isDark ? 0.08 : 0.05))
-                .cornerRadius(10)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
+                .background(
+                    RoundedRectangle(cornerRadius: DS.controlRadius, style: .continuous)
+                        .fill(Color.primary.opacity(theme.isDark ? 0.08 : 0.05))
                 )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.controlRadius, style: .continuous)
+                        .strokeBorder(
+                            isSearchFocused ? themeManager.sidebarTint.opacity(0.55) : Color.primary.opacity(0.1),
+                            lineWidth: isSearchFocused ? 1.5 : 0.5
+                        )
+                )
+                .shadow(
+                    color: themeManager.sidebarTint.opacity(isSearchFocused ? 0.28 : 0),
+                    radius: isSearchFocused ? 6 : 0
+                )
+                .animation(DS.snappy, value: isSearchFocused)
 
                 Button(action: { viewModel.createNote() }) {
                     Image(systemName: "square.and.pencil")
@@ -197,13 +209,13 @@ struct NoteListView: View {
                             selectedNoteIds = Set(viewModel.filteredNotes.map { $0.id })
                         }
                     }
-                    .font(.system(.caption, design: .rounded).weight(.medium))
+                    .font(.system(.caption, design: .default).weight(.medium))
                     .buttonStyle(.borderless)
 
                     Spacer()
 
                     Text("\(selectedNoteIds.count) selected")
-                        .font(.system(.caption, design: .rounded))
+                        .font(.system(.caption, design: .default))
                         .foregroundStyle(.secondary)
 
                     Spacer()
@@ -212,7 +224,7 @@ struct NoteListView: View {
                         isSelectionMode = false
                         selectedNoteIds.removeAll()
                     }
-                    .font(.system(.caption, design: .rounded).weight(.semibold))
+                    .font(.system(.caption, design: .default).weight(.semibold))
                     .buttonStyle(.borderless)
                 }
                 .padding(.horizontal, 16)
@@ -230,11 +242,11 @@ struct NoteListView: View {
                         .font(.system(size: 32, weight: .ultraLight))
                         .foregroundStyle(.tertiary)
                     Text(viewModel.searchText.isEmpty ? "No Notes" : "No Results")
-                        .font(.system(.callout, design: .rounded))
+                        .font(.system(.callout, design: .default))
                         .foregroundStyle(.secondary)
                     if viewModel.searchText.isEmpty {
                         Text("Create a note to get started")
-                            .font(.system(.caption, design: .rounded))
+                            .font(.system(.caption, design: .default))
                             .foregroundStyle(.tertiary)
                     }
                     Spacer()
@@ -274,7 +286,7 @@ struct NoteListView: View {
 
             HStack {
                 Text("\(viewModel.filteredNotes.count) notes")
-                    .font(.system(.caption2, design: .rounded))
+                    .font(.system(.caption2, design: .default))
                     .foregroundStyle(.secondary.opacity(0.7))
                 Spacer()
 
@@ -450,29 +462,41 @@ struct NoteListView: View {
         let isSelected = !isSearching && viewModel.selectedNoteId == note.id
         let isHovered = hoveredNoteId == note.id
 
+        let tint = themeManager.sidebarTint
         NoteRowView(note: note, folderName: folderName(for: note), isHovered: isHovered, onCopyPath: { copyPath(for: note) })
             .id(note.id)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isSelected 
-                          ? theme.accent.opacity(0.14) 
-                          : (isHighlighted 
-                             ? theme.accent.opacity(0.18) 
-                             : (isHovered ? theme.accent.opacity(0.06) : Color.clear)))
+                RoundedRectangle(cornerRadius: DS.cardRadius, style: .continuous)
+                    .fill(isSelected
+                          ? tint.opacity(theme.isDark ? 0.18 : 0.13)
+                          : (isHighlighted
+                             ? tint.opacity(0.18)
+                             : (isHovered ? tint.opacity(0.06) : Color.clear)))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(isSelected 
-                                  ? theme.accent.opacity(0.4) 
-                                  : (isHighlighted 
-                                     ? theme.accent.opacity(0.25) 
-                                     : (isHovered ? theme.accent.opacity(0.15) : Color.clear)), lineWidth: 0.8)
+                RoundedRectangle(cornerRadius: DS.cardRadius, style: .continuous)
+                    .strokeBorder(isSelected
+                                  ? tint.opacity(0.35)
+                                  : (isHighlighted
+                                     ? tint.opacity(0.25)
+                                     : (isHovered ? tint.opacity(0.12) : Color.clear)), lineWidth: 0.8)
             )
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(tint)
+                    .frame(width: 3, height: isSelected ? 20 : 0)
+                    .padding(.leading, 3)
+                    .opacity(isSelected ? 1 : 0)
+            }
+            .shadow(color: Color.black.opacity(isHovered && !isSelected ? (theme.isDark ? 0.22 : 0.05) : 0),
+                    radius: 5, y: 2)
+            .scaleEffect(isSelected ? 1.01 : 1.0, anchor: .center)
+            .offset(y: isHovered && !isSelected ? -1 : 0)
             .contentShape(Rectangle())
             .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.15)) {
+                withAnimation(DS.snappy) {
                     if hovering {
                         hoveredNoteId = note.id
                     } else if hoveredNoteId == note.id {
@@ -481,10 +505,13 @@ struct NoteListView: View {
                 }
             }
             .onTapGesture {
-                viewModel.selectedNoteId = note.id
+                withAnimation(DS.spring) {
+                    viewModel.selectedNoteId = note.id
+                }
                 highlightedIndex = nil
                 viewModel.searchText = ""
             }
+            .animation(DS.spring, value: isSelected)
             .contextMenu {
                 noteContextMenu(for: note)
             }
@@ -594,22 +621,41 @@ struct NoteListView: View {
     }
 }
 
+final class FocusReportingTextField: NSTextField {
+    var onFocusChange: ((Bool) -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { onFocusChange?(true) }
+        return ok
+    }
+
+    override func textDidEndEditing(_ notification: Notification) {
+        super.textDidEndEditing(notification)
+        onFocusChange?(false)
+    }
+}
+
 struct SearchField: NSViewRepresentable {
     @Binding var text: String
     @Binding var focusTrigger: Bool
+    @Binding var isFocused: Bool
     var onArrowDown: () -> Void
     var onArrowUp: () -> Void
     var onEnter: () -> Void
     var onEscape: () -> Void
 
     func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField()
+        let field = FocusReportingTextField()
         field.placeholderString = "Search"
         field.isBordered = false
         field.drawsBackground = false
         field.font = .systemFont(ofSize: NSFont.systemFontSize)
         field.focusRingType = .none
         field.delegate = context.coordinator
+        field.onFocusChange = { focused in
+            DispatchQueue.main.async { isFocused = focused }
+        }
         context.coordinator.textField = field
         return field
     }

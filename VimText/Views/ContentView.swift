@@ -8,33 +8,50 @@ struct ContentView: View {
 
     @State private var showCommandPalette = false
 
+    private var emptyDetail: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(theme.accent.opacity(theme.isDark ? 0.12 : 0.10))
+                    .frame(width: 84, height: 84)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 34, weight: .light))
+                    .foregroundStyle(theme.accent)
+            }
+
+            VStack(spacing: 6) {
+                Text("Capture ideas before they disappear.")
+                    .font(.system(.title3, weight: .semibold))
+                    .foregroundStyle(theme.text)
+                Text("Press ⌘N to start a new note, or ⌘K to search.")
+                    .font(.system(.subheadline))
+                    .foregroundStyle(theme.secondaryText)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            VisualEffectView(material: .windowBackground, blendingMode: .behindWindow)
+        )
+    }
+
     var body: some View {
         ZStack {
             NavigationSplitView {
                 NoteListView(viewModel: viewModel)
                     .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
             } detail: {
-                if let noteId = viewModel.selectedNoteId,
-                   viewModel.notes.contains(where: { $0.id == noteId }) {
-                    NoteEditorView(viewModel: viewModel, noteId: noteId)
-                        .id(noteId)
-                } else {
-                    VStack(spacing: 12) {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 48, weight: .ultraLight))
-                            .foregroundStyle(theme.secondaryText.opacity(0.6))
-                        Text("Select or create a note")
-                            .font(.system(.title3, design: .rounded))
-                            .foregroundStyle(theme.secondaryText)
-                        Text("⌘N to create a new note")
-                            .font(.system(.caption, design: .rounded))
-                            .foregroundStyle(theme.secondaryText.opacity(0.7))
+                ZStack {
+                    if let noteId = viewModel.selectedNoteId,
+                       viewModel.notes.contains(where: { $0.id == noteId }) {
+                        NoteEditorView(viewModel: viewModel, noteId: noteId)
+                            .id(noteId)
+                            .transition(.opacity)
+                    } else {
+                        emptyDetail
+                            .transition(.opacity)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(
-                        VisualEffectView(material: .windowBackground, blendingMode: .behindWindow)
-                    )
                 }
+                .animation(DS.crossfade, value: viewModel.selectedNoteId)
             }
             .ignoresSafeArea(.container, edges: .top)
             .toolbar(.hidden, for: .windowToolbar)

@@ -81,8 +81,8 @@ struct VimTextView: NSViewRepresentable {
 
     static func paragraphStyle() -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = 5
-        style.paragraphSpacing = 6
+        style.lineSpacing = 7
+        style.paragraphSpacing = 10
         return style
     }
 
