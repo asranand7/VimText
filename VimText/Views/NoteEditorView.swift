@@ -42,101 +42,111 @@ struct NoteEditorView: View {
     }
 
     private var editorHeader: some View {
-        HStack(spacing: 16) {
-            HStack(spacing: 6) {
+        HStack(spacing: 8) {
+
+            // Left: folder + timestamp
+            HStack(spacing: 4) {
                 Image(systemName: "folder")
-                    .font(.system(size: 11))
+                    .font(.system(size: 10, weight: .medium))
                 Text(folderName)
-                    .font(.system(.subheadline, design: .default).weight(.semibold))
+                    .font(.system(size: 11, weight: .semibold))
+                if let note = note {
+                    Text("·")
+                        .font(.system(size: 11))
+                    Text(relativeTimeString(for: note.modifiedAt))
+                        .font(.system(size: 11, weight: .regular))
+                }
             }
-            .foregroundStyle(theme.text.opacity(0.85))
+            .foregroundStyle(theme.text.opacity(0.65))
 
             Spacer()
 
-            if let note = note {
-                Text(relativeTimeString(for: note.modifiedAt))
+            // Right pill 1: pin · trash · theme
+            HStack(spacing: 2) {
+                Button(action: {
+                    if let note = note {
+                        withAnimation(DS.snappy) { viewModel.togglePin(note) }
+                    }
+                }) {
+                    Image(systemName: note?.isPinned == true ? "pin.fill" : "pin")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(note?.isPinned == true ? theme.accent : theme.secondaryText.opacity(0.6))
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help(note?.isPinned == true ? "Unpin Note" : "Pin Note")
+
+                Button(action: { showDeleteConfirm = true }) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(theme.secondaryText.opacity(0.6))
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Delete Note")
+
+                Menu {
+                    ForEach(AppTheme.all) { item in
+                        Button { themeManager.themeID = item.id } label: {
+                            if themeManager.themeID == item.id {
+                                Label(item.name, systemImage: "checkmark")
+                            } else { Text(item.name) }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "paintpalette")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(theme.secondaryText.opacity(0.6))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help("Theme")
+            }
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.regularMaterial)
+            .clipShape(Capsule())
+            .overlay(Capsule().strokeBorder(theme.separator.opacity(0.22), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.05), radius: 2, y: 1)
+
+            // Right pill 2: Aa
+            Menu {
+                fontSizeMenu
+                Divider()
+                Toggle("Monospaced Font", isOn: $useMonospacedFont)
+                Toggle("Line Numbers", isOn: $showLineNumbers)
+                Divider()
+                Menu("Paper Style") {
+                    Picker("Paper Style", selection: $paperStyle) {
+                        Text("Plain").tag("plain")
+                        Text("Dotted Grid").tag("dotted")
+                        Text("Lined Paper").tag("lined")
+                    }
+                    .pickerStyle(.inline)
+                }
+            } label: {
+                Image(systemName: "textformat.size")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(theme.secondaryText.opacity(0.55))
+                    .foregroundStyle(theme.secondaryText.opacity(0.6))
             }
-
-            Spacer()
-
-            HStack(spacing: 8) {
-                // Actions Pill: Pin, Delete, Theme
-                HStack(spacing: 6) {
-                    Button(action: {
-                        if let note = note {
-                            withAnimation(DS.snappy) {
-                                viewModel.togglePin(note)
-                            }
-                        }
-                    }) {
-                        Image(systemName: note?.isPinned == true ? "pin.fill" : "pin")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(note?.isPinned == true ? theme.accent : theme.secondaryText)
-                    }
-                    .buttonStyle(ToolbarButtonStyle())
-                    .help(note?.isPinned == true ? "Unpin Note" : "Pin Note")
-
-                    Button(action: {
-                        showDeleteConfirm = true
-                    }) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(theme.secondaryText)
-                    }
-                    .buttonStyle(ToolbarButtonStyle())
-                    .help("Delete Note")
-
-                    themeMenu
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.regularMaterial)
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule()
-                        .strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5)
-                )
-                .shadow(color: Color.black.opacity(theme.isDark ? 0.16 : 0.04), radius: 4, y: 1.5)
-
-                // Formatting Pill: Aa
-                HStack(spacing: 6) {
-                    Menu {
-                        fontSizeMenu
-                        Divider()
-                        Toggle("Monospaced Font", isOn: $useMonospacedFont)
-                        Toggle("Line Numbers", isOn: $showLineNumbers)
-                        Divider()
-                        Menu("Paper Style") {
-                            Picker("Paper Style", selection: $paperStyle) {
-                                Text("Plain").tag("plain")
-                                Text("Dotted Grid").tag("dotted")
-                                Text("Lined Paper").tag("lined")
-                            }
-                            .pickerStyle(.inline)
-                        }
-                    } label: {
-                        ToolbarMenuLabel(iconName: "textformat.size", theme: theme)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .help("Font Settings")
-                }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
-                .background(.regularMaterial)
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule()
-                        .strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5)
-                )
-                .shadow(color: Color.black.opacity(theme.isDark ? 0.16 : 0.04), radius: 4, y: 1.5)
-            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.regularMaterial)
+            .clipShape(Capsule())
+            .overlay(Capsule().strokeBorder(theme.separator.opacity(0.22), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.05), radius: 2, y: 1)
+            .help("Font Settings")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+
         .background(editorPaperFill)
     }
+
+
+
 
     var body: some View {
         ZStack {
@@ -602,17 +612,16 @@ struct ToolbarMenuLabel: View {
     let iconName: String
     let theme: AppTheme
     @State private var isHovered = false
-    
+
     var body: some View {
         Image(systemName: iconName)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(theme.secondaryText)
-            .padding(6)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(theme.secondaryText.opacity(0.6))
+            .frame(width: 26, height: 22)
             .background(
                 Circle()
                     .fill(Color.primary.opacity(isHovered ? 0.06 : 0.0))
             )
-            .scaleEffect(isHovered ? 1.02 : 1.0)
             .onHover { hovering in
                 withAnimation(.spring(response: 0.18, dampingFraction: 0.85)) {
                     isHovered = hovering
