@@ -15,6 +15,11 @@ A native macOS notes app with comprehensive Vim keybinding support. Think Apple 
 - **Auto-save** — notes are saved automatically as you type
 - **Local storage** — all notes stored as JSON in `~/Library/Application Support/VimText/`
 
+### Visual & Customization Options
+- **Paper Styles** — Toggle between **Plain**, **Dotted Grid**, and **Lined Paper** editor backgrounds (aligned to text baselines) via the settings menu or `⌘K` Command Palette.
+- **Modern Monochromatic Icon** — A sleek, minimalist black-and-white macOS dock icon designed for modern setups.
+- **Multiple Editor Themes** — Support for premium themes including Catppuccin, Nord, Dracula, Gruvbox, and Solarized.
+
 ### Vim Modes
 | Mode | How to Enter |
 |------|-------------|
