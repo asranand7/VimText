@@ -337,6 +337,7 @@ struct NoteListView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                 }
+                .scrollIndicators(.never)
             } else {
                 notesList
             }
@@ -508,6 +509,7 @@ struct NoteListView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
             }
+            .scrollIndicators(.never)
             .onChange(of: highlightedIndex) {
                 if let idx = highlightedIndex, idx < notes.count {
                     proxy.scrollTo(notes[idx].id, anchor: .center)

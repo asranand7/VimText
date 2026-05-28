@@ -102,6 +102,18 @@ struct VimTextView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
+        // Overlay (floating) scroller — hides when idle, overlaps content
+        scrollView.scrollerStyle = .overlay
+        // Slim, soft knob — matches Apple Notes/Finder aesthetic
+        scrollView.scrollerKnobStyle = .default
+        // Right inset so the scroller floats 12pt from the panel edge
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+        scrollView.scrollerInsets = NSEdgeInsets(top: 6, left: 0, bottom: 6, right: 4)
+        // Vertical scroller subclass for slim capsule rendering
+        scrollView.verticalScroller = PremiumScroller()
+        // Preserve native momentum / physics
+        scrollView.horizontalScrollElasticity = .none
+        scrollView.verticalScrollElasticity = .automatic
 
         let textView = VimNSTextView()
         textView.isEditable = true
@@ -2704,4 +2716,65 @@ class VimNSTextView: NSTextView {
         context.restoreGState()
     }
 
+}
+
+// MARK: - Premium Slim Overlay Scroller
+
+/// A thin, capsule-shaped overlay scrollbar that matches the Apple Notes / Finder
+/// aesthetic: ~7pt wide thumb, no visible track, soft opacity, native fade.
+final class PremiumScroller: NSScroller {
+
+    // Required so AppKit knows to use the overlay style for this instance.
+    override class var isCompatibleWithOverlayScrollers: Bool { true }
+
+    // Collapse the scroller's reserved layout width to zero so it truly overlays.
+    override var frame: NSRect {
+        get { super.frame }
+        set {
+            // Force the width to be the same as the standard overlay width (~15pt)
+            // but we paint only a narrow thumb inside it.
+            super.frame = newValue
+        }
+    }
+
+    override func drawKnob() {
+        let knobRect = rect(for: .knob)
+        guard knobRect.height > 0 else { return }
+
+        // Thumb dimensions: 6pt wide, floating 4pt from the right rail edge.
+        let thumbWidth: CGFloat = 6
+        let thumbX = knobRect.minX + (knobRect.width - thumbWidth) / 2
+        let thumbInsetY: CGFloat = 2
+        let thumbRect = CGRect(
+            x: thumbX,
+            y: knobRect.minY + thumbInsetY,
+            width: thumbWidth,
+            height: max(knobRect.height - thumbInsetY * 2, thumbWidth)
+        )
+
+        let path = NSBezierPath(roundedRect: thumbRect, xRadius: thumbWidth / 2, yRadius: thumbWidth / 2)
+
+        // Soft, semi-transparent fill — adapts to light and dark mode.
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let fillColor = isDark
+            ? NSColor.white.withAlphaComponent(0.30)
+            : NSColor.black.withAlphaComponent(0.20)
+        fillColor.setFill()
+        path.fill()
+    }
+
+    // Draw nothing for the track — keep it completely transparent.
+    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {}
+
+    // Tell AppKit we only need a narrow strip for the knob slot.
+    override func rect(for partCode: NSScroller.Part) -> NSRect {
+        let r = super.rect(for: partCode)
+        if partCode == .knobSlot || partCode == .knob {
+            // Centre a 14pt-wide column within the full scroller rect.
+            let targetWidth: CGFloat = 14
+            let x = r.maxX - targetWidth
+            return NSRect(x: x, y: r.minY, width: targetWidth, height: r.height)
+        }
+        return r
+    }
 }
