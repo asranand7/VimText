@@ -9,6 +9,7 @@ struct NoteListView: View {
     @State private var showDeleteSelectedConfirm = false
     @State private var searchFocusTrigger = false
     @State private var highlightedIndex: Int? = nil
+    @State private var hoveredNoteId: UUID? = nil
 
     private var allSelected: Bool {
         !viewModel.filteredNotes.isEmpty && selectedNoteIds.count == viewModel.filteredNotes.count
@@ -72,40 +73,59 @@ struct NoteListView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(theme.secondaryText.opacity(0.7))
-                    .font(.subheadline)
-                SearchField(
-                    text: $viewModel.searchText,
-                    focusTrigger: $searchFocusTrigger,
-                    onArrowDown: { moveHighlight(down: true) },
-                    onArrowUp: { moveHighlight(down: false) },
-                    onEnter: { selectHighlighted() },
-                    onEscape: { dismissSearch() }
-                )
-                .frame(height: 22)
-                if !viewModel.searchText.isEmpty {
-                    Button(action: {
-                        viewModel.searchText = ""
-                        highlightedIndex = nil
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(theme.secondaryText.opacity(0.5))
-                            .font(.subheadline)
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(theme.secondaryText.opacity(0.7))
+                        .font(.subheadline)
+                    SearchField(
+                        text: $viewModel.searchText,
+                        focusTrigger: $searchFocusTrigger,
+                        onArrowDown: { moveHighlight(down: true) },
+                        onArrowUp: { moveHighlight(down: false) },
+                        onEnter: { selectHighlighted() },
+                        onEscape: { dismissSearch() }
+                    )
+                    .frame(height: 22)
+                    if !viewModel.searchText.isEmpty {
+                        Button(action: {
+                            viewModel.searchText = ""
+                            highlightedIndex = nil
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(theme.secondaryText.opacity(0.5))
+                                .font(.subheadline)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.primary.opacity(theme.isDark ? 0.08 : 0.05))
+                .cornerRadius(10)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
+                )
+
+                Button(action: { viewModel.createNote() }) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.accent)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.04))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("New Note (⌘N)")
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color.primary.opacity(theme.isDark ? 0.08 : 0.05))
-            .cornerRadius(10)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
-            )
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
+            .padding(.top, 28)
             .padding(.bottom, 8)
 
             if isSelectionMode {
@@ -322,6 +342,7 @@ struct NoteListView: View {
     private func noteRow(note: Note, flatIndex: Int, isSearching: Bool) -> some View {
         let isHighlighted = isSearching && highlightedIndex == flatIndex
         let isSelected = !isSearching && viewModel.selectedNoteId == note.id
+        let isHovered = hoveredNoteId == note.id
 
         NoteRowView(note: note, folderName: folderName(for: note))
             .id(note.id)
@@ -329,13 +350,30 @@ struct NoteListView: View {
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isHighlighted || isSelected ? theme.accent.opacity(isHighlighted ? 0.16 : 0.12) : Color.clear)
+                    .fill(isSelected 
+                          ? theme.accent.opacity(0.14) 
+                          : (isHighlighted 
+                             ? theme.accent.opacity(0.18) 
+                             : (isHovered ? theme.accent.opacity(0.06) : Color.clear)))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(isSelected ? theme.accent.opacity(0.35) : (isHighlighted ? theme.accent.opacity(0.2) : Color.clear), lineWidth: 0.8)
+                    .strokeBorder(isSelected 
+                                  ? theme.accent.opacity(0.4) 
+                                  : (isHighlighted 
+                                     ? theme.accent.opacity(0.25) 
+                                     : (isHovered ? theme.accent.opacity(0.15) : Color.clear)), lineWidth: 0.8)
             )
             .contentShape(Rectangle())
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    if hovering {
+                        hoveredNoteId = note.id
+                    } else if hoveredNoteId == note.id {
+                        hoveredNoteId = nil
+                    }
+                }
+            }
             .onTapGesture {
                 viewModel.selectedNoteId = note.id
                 highlightedIndex = nil
@@ -382,9 +420,12 @@ struct NoteListView: View {
 
     @ViewBuilder
     private func selectableNoteRow(note: Note) -> some View {
+        let isSelected = selectedNoteIds.contains(note.id)
+        let isHovered = hoveredNoteId == note.id
+
         HStack(spacing: 12) {
-            Image(systemName: selectedNoteIds.contains(note.id) ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(selectedNoteIds.contains(note.id) ? Color.blue : Color.secondary.opacity(0.4))
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isSelected ? Color.blue : Color.secondary.opacity(0.4))
                 .font(.system(size: 16, weight: .medium))
 
             NoteRowView(note: note, folderName: folderName(for: note))
@@ -393,13 +434,26 @@ struct NoteListView: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(selectedNoteIds.contains(note.id) ? theme.accent.opacity(0.12) : Color.clear)
+                .fill(isSelected 
+                      ? theme.accent.opacity(0.12) 
+                      : (isHovered ? theme.accent.opacity(0.06) : Color.clear))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(selectedNoteIds.contains(note.id) ? theme.accent.opacity(0.3) : Color.clear, lineWidth: 0.8)
+                .strokeBorder(isSelected 
+                              ? theme.accent.opacity(0.3) 
+                              : (isHovered ? theme.accent.opacity(0.12) : Color.clear), lineWidth: 0.8)
         )
         .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                if hovering {
+                    hoveredNoteId = note.id
+                } else if hoveredNoteId == note.id {
+                    hoveredNoteId = nil
+                }
+            }
+        }
         .onTapGesture {
             if selectedNoteIds.contains(note.id) {
                 selectedNoteIds.remove(note.id)

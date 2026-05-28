@@ -6,8 +6,7 @@ struct VimTextApp: App {
         WindowGroup {
             ContentView()
         }
-        .windowStyle(.titleBar)
-        .windowToolbarStyle(.unified(showsTitle: false))
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1100, height: 700)
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -27,6 +26,13 @@ struct VimTextApp: App {
                     NotificationCenter.default.post(name: .focusNoteSearch, object: nil)
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+            }
+
+            CommandGroup(after: .textEditing) {
+                Button("Quick Open Note…") {
+                    NotificationCenter.default.post(name: .openCommandPalette, object: nil)
+                }
+                .keyboardShortcut("k", modifiers: .command)
             }
 
             CommandMenu("Vim") {
@@ -49,4 +55,5 @@ extension Notification.Name {
     static let createNewNote = Notification.Name("createNewNote")
     static let focusNoteSearch = Notification.Name("focusNoteSearch")
     static let findInNote = Notification.Name("findInNote")
+    static let openCommandPalette = Notification.Name("openCommandPalette")
 }

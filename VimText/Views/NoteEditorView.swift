@@ -10,6 +10,7 @@ struct NoteEditorView: View {
     @State private var rtfData: Data = Data()
     @State private var hasLoaded = false
     @State private var startInInsertMode = false
+    @State private var showDeleteConfirm = false
     @FocusState private var isFindFieldFocused: Bool
     @AppStorage("editorFontSize") private var fontSize: Double = 16
     @AppStorage("showLineNumbers") private var showLineNumbers: Bool = false
@@ -28,6 +29,78 @@ struct NoteEditorView: View {
         viewModel.notes.first { $0.id == noteId }
     }
 
+    private var folderName: String {
+        if let note = note, let id = note.folderId, let folder = viewModel.folders.first(where: { $0.id == id }) {
+            return folder.name
+        }
+        return "Notes"
+    }
+
+    private var editorHeader: some View {
+        HStack(spacing: 16) {
+            HStack(spacing: 4) {
+                Image(systemName: "folder")
+                    .font(.system(size: 11))
+                Text(folderName)
+                    .font(.system(.caption, design: .rounded).weight(.medium))
+            }
+            .foregroundStyle(theme.secondaryText.opacity(0.8))
+
+            Spacer()
+
+            if let note = note {
+                Text(formatDate(note.modifiedAt))
+                    .font(.system(.caption, design: .rounded).weight(.medium))
+                    .foregroundStyle(theme.secondaryText.opacity(0.85))
+            }
+
+            Spacer()
+
+            HStack(spacing: 14) {
+                Button(action: {
+                    if let note = note {
+                        viewModel.togglePin(note)
+                    }
+                }) {
+                    Image(systemName: note?.isPinned == true ? "pin.fill" : "pin")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(note?.isPinned == true ? theme.accent : theme.secondaryText)
+                }
+                .buttonStyle(.plain)
+                .help(note?.isPinned == true ? "Unpin Note" : "Pin Note")
+
+                Button(action: {
+                    showDeleteConfirm = true
+                }) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(theme.secondaryText)
+                }
+                .buttonStyle(.plain)
+                .help("Delete Note")
+
+                themeMenu
+
+                Menu {
+                    fontSizeMenu
+                    Divider()
+                    Toggle("Monospaced Font", isOn: $useMonospacedFont)
+                    Toggle("Line Numbers", isOn: $showLineNumbers)
+                } label: {
+                    Image(systemName: "textformat.size")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(theme.secondaryText)
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 20)
+                .help("Font Settings")
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(theme.surface.opacity(theme.isDark ? 0.2 : 0.4))
+    }
+
     var body: some View {
         ZStack {
             VisualEffectView(material: .windowBackground, blendingMode: .behindWindow)
@@ -36,17 +109,12 @@ struct NoteEditorView: View {
             VStack(spacing: 0) {
                 ZStack(alignment: .top) {
                     VStack(spacing: 0) {
-                        if let note = note {
-                            Text(formatDate(note.modifiedAt))
-                                .font(.system(.caption, design: .rounded))
-                                .foregroundStyle(theme.secondaryText.opacity(0.8))
-                                .frame(maxWidth: .infinity)
-                                .padding(.top, 14)
-                                .padding(.bottom, 8)
-                        }
+                        editorHeader
+                        
+                        Divider()
+                            .foregroundStyle(theme.separator.opacity(0.4))
                         
                         editorArea
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         
                         if vimEngine.showCommandLine {
                             Divider()
@@ -58,6 +126,7 @@ struct NoteEditorView: View {
                             .foregroundStyle(theme.separator.opacity(0.4))
                         statusBar
                     }
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .background(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .fill(theme.surface.opacity(theme.isDark ? 0.35 : 0.75))
@@ -68,7 +137,7 @@ struct NoteEditorView: View {
                     )
                     .shadow(color: Color.black.opacity(theme.isDark ? 0.28 : 0.06), radius: 16, x: 0, y: 6)
                     .padding(.horizontal, 16)
-                    .padding(.top, 4)
+                    .padding(.top, 6)
                     .padding(.bottom, 16)
                     
                     if findController.isVisible {
@@ -79,7 +148,22 @@ struct NoteEditorView: View {
                 }
             }
         }
+        .ignoresSafeArea(.container, edges: .top)
         .animation(.easeInOut(duration: 0.28), value: theme.id)
+        .confirmationDialog(
+            "Delete Note?",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let note = note {
+                    viewModel.deleteNote(note)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to permanently delete this note?")
+        }
         .onAppear {
             loadNote()
             findController.installKeyMonitor()
@@ -235,21 +319,6 @@ struct NoteEditorView: View {
             Text(cursorInfo)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(theme.secondaryText)
-
-            themeMenu
-
-            Menu {
-                fontSizeMenu
-                Divider()
-                Toggle("Monospaced Font", isOn: $useMonospacedFont)
-                Toggle("Line Numbers", isOn: $showLineNumbers)
-            } label: {
-                Image(systemName: "textformat.size")
-                    .font(.caption)
-                    .foregroundStyle(theme.secondaryText)
-            }
-            .menuStyle(.borderlessButton)
-            .frame(width: 24)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -271,11 +340,11 @@ struct NoteEditorView: View {
             }
         } label: {
             Image(systemName: "paintpalette")
-                .font(.caption)
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(theme.secondaryText)
         }
         .menuStyle(.borderlessButton)
-        .frame(width: 24)
+        .frame(width: 20)
         .help("Theme")
     }
 
