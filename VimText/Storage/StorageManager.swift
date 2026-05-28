@@ -6,9 +6,20 @@ final class StorageManager {
     private let fileManager = FileManager.default
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
-    
+
+    /// Maps each note's stable id to the file it currently lives in, so a title
+    /// change (which changes the filename) can rename rather than orphan the file.
+    private var urlsByID: [UUID: URL] = [:]
+
     private static let customPathKey = "customNotesDirectoryPath"
-    
+
+    private static let stampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "dd-MM-yyyy-HH-mm-ss"
+        return formatter
+    }()
+
     var customDirectoryPath: String? {
         get { UserDefaults.standard.string(forKey: Self.customPathKey) }
         set {
@@ -48,31 +59,87 @@ final class StorageManager {
         try? fileManager.createDirectory(at: notesURL, withIntermediateDirectories: true)
     }
 
+    // MARK: - File naming
+
+    /// Turn a note title into a filesystem-safe slug: letters/numbers kept,
+    /// everything else collapsed to single dashes, capped in length.
+    private func slug(_ title: String) -> String {
+        var out = ""
+        var pendingDash = false
+        for ch in title.trimmingCharacters(in: .whitespacesAndNewlines) {
+            if ch.isLetter || ch.isNumber {
+                if pendingDash && !out.isEmpty { out.append("-") }
+                out.append(ch)
+                pendingDash = false
+            } else {
+                pendingDash = true
+            }
+        }
+        if out.count > 50 {
+            out = String(out.prefix(50))
+        }
+        while out.hasSuffix("-") { out.removeLast() }
+        return out.isEmpty ? "untitled" : out
+    }
+
+    private func desiredBaseName(for note: Note) -> String {
+        "\(slug(note.title))-\(Self.stampFormatter.string(from: note.createdAt))"
+    }
+
+    /// A `.json` URL for `base`, suffixed with `-2`, `-3`… if another note already
+    /// owns that name (titles created in the same second can otherwise collide).
+    private func uniqueURL(base: String, for id: UUID) -> URL {
+        let ownURL = urlsByID[id]
+        var candidate = notesURL.appendingPathComponent("\(base).json")
+        var n = 2
+        while fileManager.fileExists(atPath: candidate.path) && candidate != ownURL {
+            candidate = notesURL.appendingPathComponent("\(base)-\(n).json")
+            n += 1
+        }
+        return candidate
+    }
+
+    // MARK: - Notes
+
     func loadNotes() -> [Note] {
+        urlsByID.removeAll()
         guard let files = try? fileManager.contentsOfDirectory(at: notesURL, includingPropertiesForKeys: nil) else {
             return []
         }
 
-        return files.compactMap { url -> Note? in
-            guard url.pathExtension == "json" else { return nil }
-            guard let data = try? Data(contentsOf: url) else { return nil }
-            return try? decoder.decode(Note.self, from: data)
+        var result: [Note] = []
+        for url in files where url.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: url),
+                  let note = try? decoder.decode(Note.self, from: data) else { continue }
+            urlsByID[note.id] = url
+            result.append(note)
         }
+        return result
     }
 
     func fileURL(for note: Note) -> URL {
-        notesURL.appendingPathComponent("\(note.id.uuidString).json")
+        urlsByID[note.id] ?? uniqueURL(base: desiredBaseName(for: note), for: note.id)
     }
 
     func saveNote(_ note: Note) {
-        let url = notesURL.appendingPathComponent("\(note.id.uuidString).json")
         guard let data = try? encoder.encode(note) else { return }
-        try? data.write(to: url, options: .atomic)
+        let target = uniqueURL(base: desiredBaseName(for: note), for: note.id)
+        let existing = urlsByID[note.id]
+        do {
+            try data.write(to: target, options: .atomic)
+        } catch {
+            return
+        }
+        if let existing = existing, existing != target {
+            try? fileManager.removeItem(at: existing)
+        }
+        urlsByID[note.id] = target
     }
 
     func deleteNote(_ note: Note) {
-        let url = notesURL.appendingPathComponent("\(note.id.uuidString).json")
+        let url = urlsByID[note.id] ?? notesURL.appendingPathComponent("\(desiredBaseName(for: note)).json")
         try? fileManager.removeItem(at: url)
+        urlsByID[note.id] = nil
     }
 
     func loadFolders() -> [NoteFolder] {
