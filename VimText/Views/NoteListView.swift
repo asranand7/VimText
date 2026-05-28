@@ -309,6 +309,19 @@ struct NoteListView: View {
                             isSelectionMode = true
                             selectedNoteIds.removeAll()
                         }
+                        
+                        Divider()
+                        
+                        Button("Change Notes Location…") {
+                            changeNotesDirectory()
+                        }
+                        
+                        if StorageManager.shared.customDirectoryPath != nil {
+                            Button("Use Default Location") {
+                                StorageManager.shared.customDirectoryPath = nil
+                                viewModel.load()
+                            }
+                        }
                     }
 
                     Divider()
@@ -323,6 +336,9 @@ struct NoteListView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .frame(width: 20)
+                .help(StorageManager.shared.customDirectoryPath != nil
+                      ? "Current Location: \(StorageManager.shared.customDirectoryPath!)"
+                      : "Using Default App Support Location")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -366,6 +382,20 @@ struct NoteListView: View {
             } else {
                 highlightedIndex = viewModel.filteredNotes.isEmpty ? nil : 0
             }
+        }
+    }
+
+    private func changeNotesDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.title = "Choose Notes Location"
+        panel.prompt = "Select"
+        
+        if panel.runModal() == .OK, let url = panel.url {
+            StorageManager.shared.customDirectoryPath = url.path
+            viewModel.load()
         }
     }
 

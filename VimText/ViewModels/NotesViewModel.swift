@@ -64,6 +64,13 @@ final class NotesViewModel: ObservableObject {
     func load() {
         notes = storage.loadNotes()
         folders = storage.loadFolders()
+        if notes.isEmpty {
+            createWelcomeNote()
+        } else {
+            if selectedNoteId == nil || !notes.contains(where: { $0.id == selectedNoteId }) {
+                selectedNoteId = filteredNotes.first?.id
+            }
+        }
     }
 
     private func createWelcomeNote() {

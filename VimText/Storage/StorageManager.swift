@@ -6,8 +6,25 @@ final class StorageManager {
     private let fileManager = FileManager.default
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    
+    private static let customPathKey = "customNotesDirectoryPath"
+    
+    var customDirectoryPath: String? {
+        get { UserDefaults.standard.string(forKey: Self.customPathKey) }
+        set {
+            if let path = newValue {
+                UserDefaults.standard.set(path, forKey: Self.customPathKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.customPathKey)
+            }
+            ensureDirectoriesExist()
+        }
+    }
 
     private var baseURL: URL {
+        if let customPath = customDirectoryPath {
+            return URL(fileURLWithPath: customPath)
+        }
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return appSupport.appendingPathComponent("VimText", isDirectory: true)
     }
