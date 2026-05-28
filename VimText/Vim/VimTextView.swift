@@ -386,6 +386,30 @@ struct VimTextView: NSViewRepresentable {
             return false
         }
 
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            let string = textView.string
+            let nsString = string as NSString
+            let cursorPos = textView.selectedRange().location
+            let length = nsString.length
+            
+            let lineRange = nsString.lineRange(for: NSRange(location: min(cursorPos, length), length: 0))
+            let lineText = nsString.substring(with: NSRange(location: lineRange.location, length: min(cursorPos, length) - lineRange.location))
+            let col = lineText.count + 1
+            
+            var lineNum = 1
+            var pos = 0
+            while pos < lineRange.location {
+                let r = nsString.lineRange(for: NSRange(location: pos, length: 0))
+                lineNum += 1
+                pos = r.location + r.length
+                if r.length == 0 { break }
+            }
+            
+            parent.vimEngine.cursorLine = lineNum
+            parent.vimEngine.cursorCol = col
+        }
+
         func executeActions(_ actions: [VimAction]) {
             guard let textView = textView else { return }
             let engine = parent.vimEngine
@@ -471,13 +495,13 @@ struct VimTextView: NSViewRepresentable {
 
                 if !isReplayingDot && engine.isRecordingChange {
                     let currentContent = textView.string
-                    let oldLen = insertModeStartContent.count
-                    let newLen = currentContent.count
+                    let oldLen = insertModeStartContent.utf16.count
+                    let newLen = currentContent.utf16.count
                     if newLen >= oldLen {
                         let diffLen = newLen - oldLen
-                        if diffLen > 0 && insertModeStartPos <= currentContent.count {
-                            let startIdx = currentContent.index(currentContent.startIndex, offsetBy: min(insertModeStartPos, currentContent.count))
-                            let endIdx = currentContent.index(startIdx, offsetBy: min(diffLen, currentContent.count - insertModeStartPos))
+                        if diffLen > 0 {
+                            let startIdx = String.Index(utf16Offset: insertModeStartPos, in: currentContent)
+                            let endIdx = currentContent.utf16.index(startIdx, offsetBy: diffLen, limitedBy: currentContent.utf16.endIndex) ?? currentContent.endIndex
                             let typed = String(currentContent[startIdx..<endIdx])
                             engine.finalizeChange(insertedText: typed)
                         } else {
@@ -847,13 +871,17 @@ struct VimTextView: NSViewRepresentable {
                 scheduleSearchHighlightClear(for: textView)
 
             case .goToLine(let line):
-                let lines = string.components(separatedBy: "\n")
-                let targetLine = max(0, min(line - 1, lines.count - 1))
-                var offset = 0
-                for i in 0..<targetLine {
-                    offset += lines[i].count + 1
+                let string = textView.string
+                var lineCount = 0
+                var currentIdx = string.startIndex
+                
+                while currentIdx < string.endIndex && lineCount < line - 1 {
+                    let lineRange = string.lineRange(for: currentIdx..<currentIdx)
+                    currentIdx = lineRange.upperBound
+                    lineCount += 1
                 }
-                offset = min(offset, length)
+                
+                let offset = currentIdx.utf16Offset(in: string)
                 textView.setSelectedRange(NSRange(location: offset, length: 0))
                 textView.scrollRangeToVisible(NSRange(location: offset, length: 0))
 
@@ -1074,6 +1102,63 @@ struct VimTextView: NSViewRepresentable {
                     textView.setSelectedRange(range)
                     textView.scrollRangeToVisible(range)
                 }
+
+            case .substitute(let pattern, let replacement, let isEntireDocument, let isGlobalReplace, let isCaseInsensitive):
+                let string = textView.string
+                let nsString = string as NSString
+                let length = nsString.length
+                
+                let targetRange: NSRange
+                if isEntireDocument {
+                    targetRange = NSRange(location: 0, length: length)
+                } else {
+                    targetRange = nsString.lineRange(for: NSRange(location: cursorPos, length: 0))
+                }
+                
+                let targetText = nsString.substring(with: targetRange)
+                
+                var options: NSRegularExpression.Options = []
+                if isCaseInsensitive {
+                    options.insert(.caseInsensitive)
+                }
+                
+                guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+                    parent.vimEngine.statusMessage = "Invalid regex pattern: \(pattern)"
+                    break
+                }
+                
+                let matches = regex.matches(in: targetText, options: [], range: NSRange(location: 0, length: (targetText as NSString).length))
+                guard !matches.isEmpty else {
+                    parent.vimEngine.statusMessage = "Pattern not found: \(pattern)"
+                    break
+                }
+                
+                var newText = targetText
+                var offset = 0
+                var replaceCount = 0
+                
+                for match in matches {
+                    if !isGlobalReplace && replaceCount > 0 {
+                        break
+                    }
+                    
+                    let matchRange = NSRange(location: match.range.location + offset, length: match.range.length)
+                    let matchResult = regex.replacementString(for: match, in: newText, offset: offset, template: replacement)
+                    
+                    let nsNewText = newText as NSString
+                    newText = nsNewText.replacingCharacters(in: matchRange, with: matchResult)
+                    
+                    offset += (matchResult as NSString).length - matchRange.length
+                    replaceCount += 1
+                }
+                
+                textView.setSelectedRange(targetRange)
+                textView.insertText(newText, replacementRange: targetRange)
+                textView.setSelectedRange(NSRange(location: targetRange.location, length: 0))
+                parent.vimEngine.statusMessage = "Replaced \(replaceCount) occurrence(s)"
+
+            case .centerCursor(let alignment):
+                scrollCursorToPosition(alignment: alignment, in: textView)
             }
         }
 
@@ -1119,159 +1204,165 @@ struct VimTextView: NSViewRepresentable {
         }
 
         private func findQuoteRange(quote: String, at pos: Int, in nsString: NSString, inner: Bool) -> NSRange? {
-            let lineRange = nsString.lineRange(for: NSRange(location: pos, length: 0))
-            let lineText = nsString.substring(with: lineRange)
-            let localPos = pos - lineRange.location
+            let string = nsString as String
+            guard pos < string.utf16.count else { return nil }
+            let posIdx = string.utf16.index(string.utf16.startIndex, offsetBy: pos)
+            let lineRange = string.lineRange(for: posIdx..<posIdx)
             let quoteChar = quote.first!
-
-            var quotePositions: [Int] = []
-            for (i, ch) in lineText.enumerated() {
-                if ch == quoteChar {
-                    if i > 0 && lineText[lineText.index(lineText.startIndex, offsetBy: i - 1)] == "\\" {
-                        continue
+            
+            var quoteIndices: [String.Index] = []
+            var i = lineRange.lowerBound
+            while i < lineRange.upperBound {
+                if string[i] == quoteChar {
+                    if i > lineRange.lowerBound {
+                        let prevIdx = string.index(before: i)
+                        if string[prevIdx] == "\\" {
+                            i = string.index(after: i)
+                            continue
+                        }
                     }
-                    quotePositions.append(i)
+                    quoteIndices.append(i)
                 }
+                i = string.index(after: i)
             }
-
-            guard quotePositions.count >= 2 else { return nil }
-
-            var openIdx: Int?
-            var closeIdx: Int?
-
-            for i in stride(from: 0, to: quotePositions.count - 1, by: 2) {
-                let open = quotePositions[i]
-                let close = quotePositions[i + 1]
-                if localPos >= open && localPos <= close {
+            
+            guard quoteIndices.count >= 2 else { return nil }
+            
+            var openIdx: String.Index?
+            var closeIdx: String.Index?
+            
+            for j in stride(from: 0, to: quoteIndices.count - 1, by: 2) {
+                let open = quoteIndices[j]
+                let close = quoteIndices[j + 1]
+                if posIdx >= open && posIdx <= close {
                     openIdx = open
                     closeIdx = close
                     break
                 }
             }
-
+            
             if openIdx == nil {
-                for i in stride(from: 0, to: quotePositions.count - 1, by: 2) {
-                    if quotePositions[i] > localPos {
-                        openIdx = quotePositions[i]
-                        closeIdx = quotePositions[i + 1]
+                for j in stride(from: 0, to: quoteIndices.count - 1, by: 2) {
+                    if quoteIndices[j] > posIdx {
+                        openIdx = quoteIndices[j]
+                        closeIdx = quoteIndices[j + 1]
                         break
                     }
                 }
             }
-
+            
             guard let open = openIdx, let close = closeIdx else { return nil }
-
+            
             if inner {
-                let start = lineRange.location + open + 1
-                let end = lineRange.location + close
-                return start < end ? NSRange(location: start, length: end - start) : nil
+                let start = string.index(after: open)
+                return start < close ? NSRange(start..<close, in: string) : nil
             } else {
-                let start = lineRange.location + open
-                let end = lineRange.location + close + 1
-                return NSRange(location: start, length: end - start)
+                let end = string.index(after: close)
+                return NSRange(open..<end, in: string)
             }
         }
 
         private func findPairRange(open: String, close: String, at pos: Int, in nsString: NSString, inner: Bool) -> NSRange? {
-            let length = nsString.length
-            let openChar: unichar = (open as NSString).character(at: 0)
-            let closeChar: unichar = (close as NSString).character(at: 0)
-
-            if pos < length && nsString.character(at: pos) == openChar {
-                if let closeIdx = findMatchingClose(openChar: openChar, closeChar: closeChar, from: pos, in: nsString) {
-                    return makePairResult(open: pos, close: closeIdx, inner: inner)
+            let string = nsString as String
+            let length = string.utf16.count
+            guard pos < length else { return nil }
+            
+            let openChar = open.first!
+            let closeChar = close.first!
+            let posIdx = string.utf16.index(string.utf16.startIndex, offsetBy: pos)
+            
+            if string[posIdx] == openChar {
+                if let closeIdx = findMatchingClose(openChar: openChar, closeChar: closeChar, from: posIdx, in: string) {
+                    return makePairResult(open: posIdx, close: closeIdx, inner: inner, in: string)
                 }
                 return nil
             }
-
-            if pos < length && nsString.character(at: pos) == closeChar {
-                if let openIdx = findMatchingOpen(openChar: openChar, closeChar: closeChar, from: pos, in: nsString) {
-                    return makePairResult(open: openIdx, close: pos, inner: inner)
+            
+            if string[posIdx] == closeChar {
+                if let openIdx = findMatchingOpen(openChar: openChar, closeChar: closeChar, from: posIdx, in: string) {
+                    return makePairResult(open: openIdx, close: posIdx, inner: inner, in: string)
                 }
                 return nil
             }
-
-            if let result = findEnclosingPair(openChar: openChar, closeChar: closeChar, at: pos, in: nsString, inner: inner) {
+            
+            if let result = findEnclosingPair(openChar: openChar, closeChar: closeChar, at: posIdx, in: string, inner: inner) {
                 return result
             }
-
-            let lineRange = nsString.lineRange(for: NSRange(location: pos, length: 0))
-            let lineEnd = lineRange.location + lineRange.length
-            var searchPos = pos + 1
-            while searchPos < lineEnd {
-                let ch = nsString.character(at: searchPos)
-                if ch == openChar {
-                    if let closeIdx = findMatchingClose(openChar: openChar, closeChar: closeChar, from: searchPos, in: nsString) {
-                        return makePairResult(open: searchPos, close: closeIdx, inner: inner)
+            
+            let lineRange = string.lineRange(for: posIdx..<posIdx)
+            var searchIdx = string.index(after: posIdx)
+            while searchIdx < lineRange.upperBound {
+                if string[searchIdx] == openChar {
+                    if let closeIdx = findMatchingClose(openChar: openChar, closeChar: closeChar, from: searchIdx, in: string) {
+                        return makePairResult(open: searchIdx, close: closeIdx, inner: inner, in: string)
                     }
                     return nil
                 }
-                searchPos += 1
+                searchIdx = string.index(after: searchIdx)
             }
-
+            
             return nil
         }
 
-        private func findMatchingClose(openChar: unichar, closeChar: unichar, from openPos: Int, in nsString: NSString) -> Int? {
-            let length = nsString.length
+        private func findMatchingClose(openChar: Character, closeChar: Character, from openIdx: String.Index, in string: String) -> String.Index? {
             var depth = 1
-            var searchPos = openPos + 1
-            while searchPos < length {
-                let ch = nsString.character(at: searchPos)
-                if ch == openChar { depth += 1 }
-                if ch == closeChar {
+            var i = string.index(after: openIdx)
+            while i < string.endIndex {
+                let c = string[i]
+                if c == openChar { depth += 1 }
+                if c == closeChar {
                     depth -= 1
-                    if depth == 0 { return searchPos }
+                    if depth == 0 { return i }
                 }
-                searchPos += 1
+                i = string.index(after: i)
             }
             return nil
         }
 
-        private func findMatchingOpen(openChar: unichar, closeChar: unichar, from closePos: Int, in nsString: NSString) -> Int? {
+        private func findMatchingOpen(openChar: Character, closeChar: Character, from closeIdx: String.Index, in string: String) -> String.Index? {
             var depth = 1
-            var searchPos = closePos - 1
-            while searchPos >= 0 {
-                let ch = nsString.character(at: searchPos)
-                if ch == closeChar { depth += 1 }
-                if ch == openChar {
+            var i = closeIdx
+            while i > string.startIndex {
+                i = string.index(before: i)
+                let c = string[i]
+                if c == closeChar { depth += 1 }
+                if c == openChar {
                     depth -= 1
-                    if depth == 0 { return searchPos }
+                    if depth == 0 { return i }
                 }
-                searchPos -= 1
             }
             return nil
         }
 
-        private func findEnclosingPair(openChar: unichar, closeChar: unichar, at pos: Int, in nsString: NSString, inner: Bool) -> NSRange? {
-            let length = nsString.length
+        private func findEnclosingPair(openChar: Character, closeChar: Character, at posIdx: String.Index, in string: String, inner: Bool) -> NSRange? {
             var depth = 0
-            var searchPos = pos - 1
-            while searchPos >= 0 {
-                let ch = nsString.character(at: searchPos)
-                if ch == closeChar { depth += 1 }
-                if ch == openChar {
+            var i = posIdx
+            while i > string.startIndex {
+                i = string.index(before: i)
+                let c = string[i]
+                if c == closeChar { depth += 1 }
+                if c == openChar {
                     if depth == 0 {
-                        if let closeIdx = findMatchingClose(openChar: openChar, closeChar: closeChar, from: searchPos, in: nsString) {
-                            if closeIdx >= pos {
-                                return makePairResult(open: searchPos, close: closeIdx, inner: inner)
+                        if let closeIdx = findMatchingClose(openChar: openChar, closeChar: closeChar, from: i, in: string) {
+                            if closeIdx >= posIdx {
+                                return makePairResult(open: i, close: closeIdx, inner: inner, in: string)
                             }
                         }
                         return nil
                     }
                     depth -= 1
                 }
-                searchPos -= 1
             }
             return nil
         }
 
-        private func makePairResult(open: Int, close: Int, inner: Bool) -> NSRange? {
+        private func makePairResult(open: String.Index, close: String.Index, inner: Bool, in string: String) -> NSRange? {
             if inner {
-                let start = open + 1
-                return start <= close ? NSRange(location: start, length: close - start) : nil
+                let start = string.index(after: open)
+                return start <= close ? NSRange(start..<close, in: string) : nil
             } else {
-                return NSRange(location: open, length: close - open + 1)
+                let end = string.index(after: close)
+                return NSRange(open..<end, in: string)
             }
         }
 
@@ -1282,33 +1373,46 @@ struct VimTextView: NSViewRepresentable {
         }
 
         private func findWordObject(at pos: Int, in string: String, inner: Bool, bigWord: Bool) -> NSRange? {
-            let chars = Array(string.unicodeScalars)
-            let length = chars.count
-            guard pos < length else { return nil }
-
-            let isWordChar: (Unicode.Scalar) -> Bool = bigWord
-                ? { !CharacterSet.whitespacesAndNewlines.contains($0) }
-                : { CharacterSet.alphanumerics.contains($0) || $0 == "_" }
-
-            let onWord = isWordChar(chars[pos])
-
-            if onWord {
-                var start = pos
-                while start > 0 && isWordChar(chars[start - 1]) { start -= 1 }
-                var end = pos
-                while end < length - 1 && isWordChar(chars[end + 1]) { end += 1 }
-
-                if !inner {
-                    while end < length - 1 && CharacterSet.whitespaces.contains(chars[end + 1]) { end += 1 }
+            guard pos < string.utf16.count else { return nil }
+            let startIdx = string.utf16.index(string.utf16.startIndex, offsetBy: pos)
+            
+            let isWordChar: (Character) -> Bool = bigWord
+                ? { !$0.isWhitespace && !$0.isNewline }
+                : { $0.isLetter || $0.isNumber || $0 == "_" }
+                
+            let onWord = isWordChar(string[startIdx])
+            
+            var start = startIdx
+            while start > string.startIndex {
+                let prev = string.index(before: start)
+                if isWordChar(string[prev]) == onWord {
+                    start = prev
+                } else {
+                    break
                 }
-                return NSRange(location: start, length: end - start + 1)
-            } else {
-                var start = pos
-                while start > 0 && !isWordChar(chars[start - 1]) && !CharacterSet.newlines.contains(chars[start - 1]) { start -= 1 }
-                var end = pos
-                while end < length - 1 && !isWordChar(chars[end + 1]) && !CharacterSet.newlines.contains(chars[end + 1]) { end += 1 }
-                return NSRange(location: start, length: end - start + 1)
             }
+            
+            var end = startIdx
+            while end < string.endIndex {
+                let next = string.index(after: end)
+                if next < string.endIndex && isWordChar(string[next]) == onWord {
+                    end = next
+                } else {
+                    break
+                }
+            }
+            
+            if !inner && onWord {
+                var next = string.index(after: end)
+                while next < string.endIndex && string[next].isWhitespace && !string[next].isNewline {
+                    end = next
+                    next = string.index(after: next)
+                }
+            }
+            
+            let startOffset = start.utf16Offset(in: string)
+            let endOffset = end.utf16Offset(in: string)
+            return NSRange(location: startOffset, length: endOffset - startOffset + 1)
         }
 
         private func findParagraphObject(at pos: Int, in nsString: NSString, inner: Bool) -> NSRange? {
@@ -1337,6 +1441,32 @@ struct VimTextView: NSViewRepresentable {
             if end >= length { end = length - 1 }
 
             return NSRange(location: start, length: end - start + 1)
+        }
+
+        private func scrollCursorToPosition(alignment: CenteringAlignment, in textView: NSTextView) {
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer,
+                  let scrollView = textView.enclosingScrollView else { return }
+            
+            let cursorPos = textView.selectedRange().location
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: NSRange(location: cursorPos, length: 0), actualCharacterRange: nil)
+            let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            
+            let viewHeight = scrollView.contentSize.height
+            let targetY: CGFloat
+            
+            switch alignment {
+            case .center:
+                targetY = rect.midY - (viewHeight / 2)
+            case .top:
+                targetY = rect.minY - 20
+            case .bottom:
+                targetY = rect.maxY - viewHeight + 20
+            }
+            
+            let clampedY = max(0, min(targetY, textView.bounds.height - viewHeight))
+            scrollView.contentView.bounds.origin.y = clampedY
+            scrollView.reflectScrolledClipView(scrollView.contentView)
         }
 
         private func flashYankHighlight(range: NSRange, in textView: VimNSTextView) {
@@ -1709,21 +1839,33 @@ struct VimTextView: NSViewRepresentable {
 
             case .paragraphForward:
                 var pos = cursorPos
-                while pos < length && nsString.character(at: pos) != 0x0A { pos += 1 }
-                while pos < length && nsString.character(at: pos) == 0x0A { pos += 1 }
+                let currentLineRange = nsString.lineRange(for: NSRange(location: pos, length: 0))
+                pos = currentLineRange.location + currentLineRange.length
+                
                 while pos < length {
-                    if nsString.character(at: pos) == 0x0A { break }
-                    pos += 1
+                    let lineRange = nsString.lineRange(for: NSRange(location: pos, length: 0))
+                    let lineText = nsString.substring(with: lineRange)
+                    if lineText == "\n" || lineText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        return lineRange.location
+                    }
+                    pos = lineRange.location + lineRange.length
                 }
-                return min(pos, length)
+                return length
 
             case .paragraphBackward:
-                var pos = cursorPos
-                if pos > 0 { pos -= 1 }
-                while pos > 0 && nsString.character(at: pos) == 0x0A { pos -= 1 }
-                while pos > 0 && nsString.character(at: pos) != 0x0A { pos -= 1 }
-                if pos > 0 { pos += 1 }
-                return pos
+                let currentLineRange = nsString.lineRange(for: NSRange(location: cursorPos, length: 0))
+                var pos = currentLineRange.location
+                
+                while pos > 0 {
+                    let prevPos = pos - 1
+                    let lineRange = nsString.lineRange(for: NSRange(location: prevPos, length: 0))
+                    let lineText = nsString.substring(with: lineRange)
+                    if (lineText == "\n" || lineText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) && lineRange.location < currentLineRange.location {
+                        return lineRange.location
+                    }
+                    pos = lineRange.location
+                }
+                return 0
 
             case .findChar(let ch, let forward):
                 return findCharInLine(ch, forward: forward, till: false, from: cursorPos, in: nsString)
@@ -1767,107 +1909,171 @@ struct VimTextView: NSViewRepresentable {
         }
 
         private func findWordForward(from pos: Int, in string: String) -> Int {
-            let chars = Array(string.unicodeScalars)
-            let length = chars.count
-            guard pos < length else { return pos }
-
-            var i = pos
-            let startType = charType(chars[i])
-
-            while i < length && charType(chars[i]) == startType { i += 1 }
-            while i < length && charType(chars[i]) == .whitespace { i += 1 }
-
-            return min(i, length)
+            guard pos < string.utf16.count else { return pos }
+            let startIndex = string.utf16.index(string.utf16.startIndex, offsetBy: pos)
+            var i = startIndex
+            let startType = charType(string[i])
+            
+            while i < string.endIndex && charType(string[i]) == startType {
+                i = string.index(after: i)
+            }
+            while i < string.endIndex && charType(string[i]) == .whitespace {
+                i = string.index(after: i)
+            }
+            return i.utf16Offset(in: string)
         }
 
         private func findWordBackward(from pos: Int, in string: String) -> Int {
-            let chars = Array(string.unicodeScalars)
             guard pos > 0 else { return 0 }
-
-            var i = pos - 1
-            while i > 0 && charType(chars[i]) == .whitespace { i -= 1 }
-            let targetType = charType(chars[i])
-            while i > 0 && charType(chars[i - 1]) == targetType { i -= 1 }
-
-            return i
+            let startIndex = string.utf16.index(string.utf16.startIndex, offsetBy: pos)
+            var i = startIndex
+            
+            while i > string.startIndex {
+                let prevIdx = string.index(before: i)
+                if charType(string[prevIdx]) == .whitespace {
+                    i = prevIdx
+                } else {
+                    break
+                }
+            }
+            
+            guard i > string.startIndex else { return 0 }
+            let lastIdx = string.index(before: i)
+            let targetType = charType(string[lastIdx])
+            
+            while i > string.startIndex {
+                let prevIdx = string.index(before: i)
+                if charType(string[prevIdx]) == targetType {
+                    i = prevIdx
+                } else {
+                    break
+                }
+            }
+            return i.utf16Offset(in: string)
         }
 
         private func findWordEnd(from pos: Int, in string: String) -> Int {
-            let chars = Array(string.unicodeScalars)
-            let length = chars.count
-            guard pos < length - 1 else { return pos }
-
-            var i = pos + 1
-            while i < length && charType(chars[i]) == .whitespace { i += 1 }
-            if i < length {
-                let targetType = charType(chars[i])
-                while i < length - 1 && charType(chars[i + 1]) == targetType { i += 1 }
+            guard pos < string.utf16.count else { return pos }
+            let startIndex = string.utf16.index(string.utf16.startIndex, offsetBy: pos)
+            var i = startIndex
+            
+            if i == string.endIndex || string.index(after: i) == string.endIndex {
+                return pos
             }
-
-            return min(i, length - 1)
+            
+            i = string.index(after: i)
+            
+            while i < string.endIndex && charType(string[i]) == .whitespace {
+                i = string.index(after: i)
+            }
+            
+            if i < string.endIndex {
+                let targetType = charType(string[i])
+                while i < string.endIndex {
+                    let nextIdx = string.index(after: i)
+                    if nextIdx < string.endIndex && charType(string[nextIdx]) == targetType {
+                        i = nextIdx
+                    } else {
+                        break
+                    }
+                }
+            }
+            return min(i.utf16Offset(in: string), string.utf16.count - 1)
         }
 
         private enum CharType {
             case word, punctuation, whitespace
         }
 
-        private func charType(_ scalar: Unicode.Scalar) -> CharType {
-            if CharacterSet.whitespacesAndNewlines.contains(scalar) { return .whitespace }
-            if CharacterSet.alphanumerics.contains(scalar) || scalar == "_" { return .word }
+        private func charType(_ char: Character) -> CharType {
+            if char.isNewline || char.isWhitespace { return .whitespace }
+            if char.isLetter || char.isNumber || char == "_" { return .word }
             return .punctuation
         }
 
         private func findCharInLine(_ ch: Character, forward: Bool, till: Bool, from pos: Int, in nsString: NSString) -> Int {
-            let lineRange = nsString.lineRange(for: NSRange(location: pos, length: 0))
-            let lineText = nsString.substring(with: lineRange)
-            let localPos = pos - lineRange.location
-
+            let string = nsString as String
+            guard pos < string.utf16.count else { return pos }
+            let startIdx = string.utf16.index(string.utf16.startIndex, offsetBy: pos)
+            let lineRange = string.lineRange(for: startIdx..<startIdx)
+            
             if forward {
-                if let range = lineText.dropFirst(localPos + 1).range(of: String(ch)) {
-                    let offset = lineText.distance(from: lineText.startIndex, to: range.lowerBound)
-                    let result = lineRange.location + offset
-                    return till ? result - 1 : result
+                var i = startIdx
+                if i < lineRange.upperBound {
+                    i = string.index(after: i)
+                }
+                while i < lineRange.upperBound {
+                    if string[i] == ch {
+                        if till {
+                            return string.index(before: i).utf16Offset(in: string)
+                        } else {
+                            return i.utf16Offset(in: string)
+                        }
+                    }
+                    i = string.index(after: i)
                 }
             } else {
-                let prefix = String(lineText.prefix(localPos))
-                if let range = prefix.range(of: String(ch), options: .backwards) {
-                    let offset = prefix.distance(from: prefix.startIndex, to: range.lowerBound)
-                    let result = lineRange.location + offset
-                    return till ? result + 1 : result
+                var i = startIdx
+                while i > lineRange.lowerBound {
+                    i = string.index(before: i)
+                    if string[i] == ch {
+                        if till {
+                            return string.index(after: i).utf16Offset(in: string)
+                        } else {
+                            return i.utf16Offset(in: string)
+                        }
+                    }
                 }
             }
             return pos
         }
 
         private func findMatchingBracket(from pos: Int, in nsString: NSString) -> Int {
-            let length = nsString.length
-            guard pos < length else { return pos }
-
-            let ch = Character(UnicodeScalar(nsString.character(at: pos))!)
+            let string = nsString as String
+            guard pos < string.utf16.count else { return pos }
+            
             let pairs: [Character: Character] = ["(": ")", "[": "]", "{": "}", ")": "(", "]": "[", "}": "{"]
             let opening: Set<Character> = ["(", "[", "{"]
-
+            
+            let startIdx = string.utf16.index(string.utf16.startIndex, offsetBy: pos)
+            var bracketIdx = startIdx
+            var ch = string[bracketIdx]
+            
+            if pairs[ch] == nil {
+                let lineRange = string.lineRange(for: startIdx..<startIdx)
+                var searchIdx = string.index(after: startIdx)
+                while searchIdx < lineRange.upperBound {
+                    let searchCh = string[searchIdx]
+                    if pairs[searchCh] != nil {
+                        bracketIdx = searchIdx
+                        ch = searchCh
+                        break
+                    }
+                    searchIdx = string.index(after: searchIdx)
+                }
+            }
+            
             guard let match = pairs[ch] else { return pos }
-
+            
             if opening.contains(ch) {
                 var depth = 1
-                var i = pos + 1
-                while i < length && depth > 0 {
-                    let c = Character(UnicodeScalar(nsString.character(at: i))!)
+                var i = string.index(after: bracketIdx)
+                while i < string.endIndex && depth > 0 {
+                    let c = string[i]
                     if c == ch { depth += 1 }
                     else if c == match { depth -= 1 }
-                    if depth == 0 { return i }
-                    i += 1
+                    if depth == 0 { return i.utf16Offset(in: string) }
+                    i = string.index(after: i)
                 }
             } else {
                 var depth = 1
-                var i = pos - 1
-                while i >= 0 && depth > 0 {
-                    let c = Character(UnicodeScalar(nsString.character(at: i))!)
+                var i = bracketIdx
+                while i > string.startIndex && depth > 0 {
+                    i = string.index(before: i)
+                    let c = string[i]
                     if c == ch { depth += 1 }
                     else if c == match { depth -= 1 }
-                    if depth == 0 { return i }
-                    i -= 1
+                    if depth == 0 { return i.utf16Offset(in: string) }
                 }
             }
             return pos
@@ -2180,7 +2386,6 @@ class VimNSTextView: NSTextView {
         let isEsc = event.keyCode == 53
         let isReturn = event.keyCode == 36
         let isBackspace = event.keyCode == 51
-        let isTab = event.keyCode == 48
 
         if engine.mode == .command {
             if isEsc {

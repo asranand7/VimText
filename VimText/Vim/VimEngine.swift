@@ -7,6 +7,8 @@ final class VimEngine: ObservableObject {
     @Published var statusMessage: String = ""
     @Published var showCommandLine: Bool = false
     @Published var commandLineText: String = ""
+    @Published var cursorLine: Int = 1
+    @Published var cursorCol: Int = 1
 
     var keyBuffer: String = ""
     var countBuffer: String = ""
@@ -155,6 +157,9 @@ final class VimEngine: ObservableObject {
             }
         case "g":
             keyBuffer = "g"
+            return [.none]
+        case "z":
+            keyBuffer = "z"
             return [.none]
         case "i":
             mode = .insert
@@ -362,6 +367,19 @@ final class VimEngine: ObservableObject {
 
     private func processOperatorPending(operator_: String, key: String, count: Int) -> [VimAction] {
         switch operator_ {
+        case "z":
+            resetBuffers()
+            switch key {
+            case "z":
+                return [.centerCursor(.center)]
+            case "t":
+                return [.centerCursor(.top)]
+            case "b":
+                return [.centerCursor(.bottom)]
+            default:
+                return [.none]
+            }
+
         case "g":
             resetBuffers()
             if key == "g" {
@@ -910,12 +928,46 @@ final class VimEngine: ObservableObject {
             return [.quit]
         default:
             if trimmed.hasPrefix("s/") || trimmed.hasPrefix("%s/") {
-                statusMessage = "Substitution not yet supported"
+                let isEntireDocument = trimmed.hasPrefix("%")
+                let commandBody = isEntireDocument ? String(trimmed.dropFirst()) : trimmed
+                let parts = splitCommand(commandBody)
+                if parts.count >= 3 {
+                    let pattern = parts[1]
+                    let replacement = parts[2].replacingOccurrences(of: "\\/", with: "/")
+                    let flags = parts.count > 3 ? parts[3] : ""
+                    let isGlobal = flags.contains("g")
+                    let isCaseInsensitive = flags.contains("i")
+                    return [.substitute(pattern: pattern, replacement: replacement, isEntireDocument: isEntireDocument, isGlobalReplace: isGlobal, isCaseInsensitive: isCaseInsensitive)]
+                } else {
+                    statusMessage = "Invalid substitute syntax. Expected: :[range]s/pattern/replacement/[flags]"
+                }
             } else {
                 statusMessage = "Unknown command: \(trimmed)"
             }
             return [.none]
         }
+    }
+
+    private func splitCommand(_ s: String, delimiter: Character = "/") -> [String] {
+        var parts: [String] = []
+        var current = ""
+        var escaped = false
+        for ch in s {
+            if escaped {
+                current.append(ch)
+                escaped = false
+            } else if ch == "\\" {
+                escaped = true
+                current.append(ch)
+            } else if ch == delimiter {
+                parts.append(current)
+                current = ""
+            } else {
+                current.append(ch)
+            }
+        }
+        parts.append(current)
+        return parts
     }
 
     private func processControlKey(_ key: String) -> [VimAction] {

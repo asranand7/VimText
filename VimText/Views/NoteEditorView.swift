@@ -292,9 +292,7 @@ struct NoteEditorView: View {
     }
 
     private var cursorInfo: String {
-        let lines = content.components(separatedBy: "\n")
-        let totalLines = lines.count
-        return "Ln \(totalLines) | \(content.count) chars"
+        "Ln \(vimEngine.cursorLine), Col \(vimEngine.cursorCol)"
     }
 
     private func loadNote() {

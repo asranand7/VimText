@@ -81,6 +81,15 @@ enum VimAction {
     case toggleCase
     case repeatLastChange
     case none
+    
+    case substitute(pattern: String, replacement: String, isEntireDocument: Bool, isGlobalReplace: Bool, isCaseInsensitive: Bool)
+    case centerCursor(CenteringAlignment)
+}
+
+enum CenteringAlignment {
+    case top
+    case center
+    case bottom
 }
 
 enum TextObject {
