@@ -29,17 +29,33 @@ struct NoteListView: View {
     private var glassBackground: some View {
         ZStack {
             VisualEffectView(material: .sidebar)
-            theme.surface.opacity(theme.isDark ? 0.36 : 0.52)
+                .opacity(theme.isGraphite ? 0.38 : 1)
+            theme.surface.opacity(sidebarSurfaceOpacity)
             LinearGradient(
                 colors: [
-                    themeManager.sidebarTint.opacity(theme.isDark ? 0.15 : 0.11),
-                    themeManager.sidebarTint.opacity(0.02)
+                    themeManager.sidebarTint.opacity(sidebarTintTopOpacity),
+                    themeManager.sidebarTint.opacity(sidebarTintBottomOpacity)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
         }
         .ignoresSafeArea()
+    }
+
+    private var sidebarSurfaceOpacity: Double {
+        if theme.isGraphite { return 0.74 }
+        if theme.isInk { return 0.46 }
+        return theme.isDark ? 0.36 : 0.52
+    }
+
+    private var sidebarTintTopOpacity: Double {
+        if theme.isMonochrome { return theme.isDark ? 0.06 : 0.035 }
+        return theme.isDark ? 0.15 : 0.11
+    }
+
+    private var sidebarTintBottomOpacity: Double {
+        theme.isMonochrome ? 0.0 : 0.02
     }
 
     private func folderName(for note: Note) -> String {
@@ -478,8 +494,8 @@ struct NoteListView: View {
         let tint = themeManager.sidebarTint
         let rowFill = noteRowFill(isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
         let rowStroke = noteRowStroke(isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
-        let rowShadowOpacity = (isHovered || isSelected) ? (theme.isDark ? 0.20 : 0.035) : 0
-        let rowShadowRadius: CGFloat = isSelected ? 8 : 6
+        let rowShadowOpacity = (isHovered || isSelected) ? (theme.isDark ? 0.18 : 0.028) : 0
+        let rowShadowRadius: CGFloat = isSelected ? 7 : 5
         let rowShadowY: CGFloat = isSelected ? 3 : 2
 
         NoteRowView(
@@ -570,14 +586,14 @@ struct NoteListView: View {
     }
 
     private func noteRowFill(isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
-        if isSelected { return tint.opacity(theme.isDark ? 0.13 : 0.075) }
+        if isSelected { return tint.opacity(theme.isMonochrome ? (theme.isDark ? 0.10 : 0.055) : (theme.isDark ? 0.13 : 0.075)) }
         if isHighlighted { return tint.opacity(theme.isDark ? 0.14 : 0.09) }
         if isHovered { return theme.isDark ? Color.white.opacity(0.06) : Color.white.opacity(0.46) }
         return Color.clear
     }
 
     private func noteRowStroke(isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
-        if isSelected { return tint.opacity(theme.isDark ? 0.34 : 0.24) }
+        if isSelected { return tint.opacity(theme.isMonochrome ? (theme.isDark ? 0.24 : 0.18) : (theme.isDark ? 0.34 : 0.24)) }
         if isHighlighted { return tint.opacity(0.20) }
         if isHovered { return Color.primary.opacity(0.08) }
         return Color.clear

@@ -133,11 +133,11 @@ struct NoteEditorView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .background(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(theme.isDark ? theme.surface.opacity(0.34) : Color.white.opacity(0.78))
+                            .fill(editorPanelFill)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .strokeBorder(Color.white.opacity(theme.isDark ? 0.055 : 0.55), lineWidth: 1)
+                            .strokeBorder(editorPanelStroke, lineWidth: 1)
                     )
                     .shadow(color: Color.black.opacity(theme.isDark ? 0.30 : 0.07), radius: 22, x: 0, y: 8)
                     .padding(.horizontal, 18)
@@ -203,7 +203,7 @@ struct NoteEditorView: View {
             accentColor: theme.accentNS
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(theme.editorBackground.opacity(theme.isDark ? 0.14 : 0.18))
+        .background(editorPaperFill)
         .onChange(of: content) { _, newValue in
             let newTitle = extractTitle(from: newValue)
             viewModel.updateNoteContent(id: noteId, title: newTitle.isEmpty ? "Untitled" : newTitle, content: newValue, rtfData: rtfData)
@@ -357,12 +357,33 @@ struct NoteEditorView: View {
     private var modeIndicator: some View {
         Text(vimEngine.mode.displayName)
             .font(.system(.caption, design: .default).weight(.bold))
-            .foregroundStyle(.white)
+            .foregroundStyle(modeTextColor)
             .padding(.horizontal, 10)
             .padding(.vertical, 3)
-            .background(modeColor.gradient, in: Capsule())
-            .shadow(color: modeColor.opacity(0.35), radius: 3, y: 1)
+            .background(modeFillColor, in: Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(modeStrokeColor, lineWidth: 0.6)
+            )
+            .shadow(color: modeFillColor.opacity(theme.isMonochrome ? 0.12 : 0.35), radius: 3, y: 1)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: vimEngine.mode)
+    }
+
+    private var editorPanelFill: Color {
+        if theme.isInk { return theme.surface.opacity(0.82) }
+        if theme.isGraphite { return Color.white.opacity(0.72) }
+        return theme.isDark ? theme.surface.opacity(0.34) : Color.white.opacity(0.78)
+    }
+
+    private var editorPanelStroke: Color {
+        if theme.isMonochrome { return theme.separator.opacity(theme.isDark ? 0.55 : 0.62) }
+        return Color.white.opacity(theme.isDark ? 0.055 : 0.55)
+    }
+
+    private var editorPaperFill: Color {
+        if theme.isGraphite { return Color(hex: "F7F6F3") }
+        if theme.isInk { return Color(hex: "121315") }
+        return theme.editorBackground.opacity(theme.isDark ? 0.14 : 0.18)
     }
 
     private var modeColor: Color {
@@ -373,6 +394,22 @@ struct NoteEditorView: View {
         case .command: return .orange
         case .replace: return .red
         }
+    }
+
+    private var modeFillColor: Color {
+        if theme.isGraphite { return Color(hex: "3F4146") }
+        if theme.isInk { return Color(hex: "2F3033") }
+        return modeColor
+    }
+
+    private var modeTextColor: Color {
+        if theme.isInk { return Color(hex: "F1F0EC") }
+        return .white
+    }
+
+    private var modeStrokeColor: Color {
+        if theme.isMonochrome { return theme.separator.opacity(theme.isDark ? 0.72 : 0.42) }
+        return Color.white.opacity(0)
     }
 
     @ViewBuilder

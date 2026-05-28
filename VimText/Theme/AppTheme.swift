@@ -18,6 +18,9 @@ struct AppTheme: Identifiable, Hashable {
     var secondaryText: Color { Color(hex: secondaryColor) }
     var accent: Color { Color(hex: accentColor) }
     var separator: Color { Color(hex: separatorColor) }
+    var isMonochrome: Bool { id == "graphite" || id == "ink" }
+    var isGraphite: Bool { id == "graphite" }
+    var isInk: Bool { id == "ink" }
 
     var editorBackgroundNS: NSColor { NSColor(hex: editorBg) }
     var surfaceNS: NSColor { NSColor(hex: surfaceBg) }

@@ -89,7 +89,7 @@ struct NoteRowView: View {
                 Text(folderName)
                     .font(.system(size: 10.5, weight: .medium, design: .default))
             }
-            .foregroundStyle(isSelected ? tint.opacity(theme.isDark ? 0.78 : 0.68) : theme.secondaryText.opacity(0.55))
+            .foregroundStyle(isSelected ? tint.opacity(theme.isDark ? 0.58 : 0.46) : theme.secondaryText.opacity(0.46))
             .padding(.top, 2)
         }
         .padding(.vertical, 9)
