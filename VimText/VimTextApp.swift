@@ -56,4 +56,5 @@ extension Notification.Name {
     static let focusNoteSearch = Notification.Name("focusNoteSearch")
     static let findInNote = Notification.Name("findInNote")
     static let openCommandPalette = Notification.Name("openCommandPalette")
+    static let openChangeLocationPanel = Notification.Name("openChangeLocationPanel")
 }

@@ -32,10 +32,7 @@ struct ContentView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(
-                        ZStack {
-                            VisualEffectView(material: .windowBackground, blendingMode: .behindWindow)
-                            theme.editorBackground.opacity(theme.isDark ? 0.35 : 0.6)
-                        }
+                        VisualEffectView(material: .windowBackground, blendingMode: .behindWindow)
                     )
                 }
             }

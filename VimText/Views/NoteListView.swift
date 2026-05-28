@@ -376,6 +376,9 @@ struct NoteListView: View {
         .onReceive(NotificationCenter.default.publisher(for: .focusNoteSearch)) { _ in
             searchFocusTrigger.toggle()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openChangeLocationPanel)) { _ in
+            changeNotesDirectory()
+        }
         .onChange(of: viewModel.searchText) {
             if viewModel.searchText.isEmpty {
                 highlightedIndex = nil

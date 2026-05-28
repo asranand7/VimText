@@ -1,19 +1,89 @@
 import SwiftUI
 import AppKit
 
+struct PaletteCommand: Identifiable {
+    let id: String
+    let name: String
+    let icon: String
+    let action: () -> Void
+}
+
+enum PaletteItem: Identifiable {
+    case note(Note)
+    case command(PaletteCommand)
+    
+    var id: String {
+        switch self {
+        case .note(let note): return note.id.uuidString
+        case .command(let cmd): return cmd.id
+        }
+    }
+}
+
 class CommandPaletteState: ObservableObject {
     @Published var searchText = ""
     @Published var selectedIndex = 0
     
-    func filteredNotes(from notes: [Note]) -> [Note] {
+    func getCommands(themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteCommand] {
+        return [
+            PaletteCommand(id: "new_note", name: "Create New Note", icon: "square.and.pencil") {
+                Task { @MainActor in
+                    viewModel.createNote()
+                }
+            },
+            PaletteCommand(id: "change_location", name: "Change Notes Location…", icon: "folder.badge.gearshape") {
+                NotificationCenter.default.post(name: .openChangeLocationPanel, object: nil)
+            },
+            PaletteCommand(id: "theme_light", name: "Switch to Light Theme", icon: "sun.max") {
+                themeManager.themeID = AppTheme.light.id
+            },
+            PaletteCommand(id: "theme_dark", name: "Switch to Dark Theme", icon: "moon") {
+                themeManager.themeID = AppTheme.dark.id
+            },
+            PaletteCommand(id: "theme_nord", name: "Switch to Nord Theme", icon: "desktopcomputer") {
+                themeManager.themeID = AppTheme.nord.id
+            },
+            PaletteCommand(id: "toggle_line_numbers", name: "Toggle Line Numbers", icon: "list.number") {
+                UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "showLineNumbers"), forKey: "showLineNumbers")
+            },
+            PaletteCommand(id: "toggle_monospace", name: "Toggle Monospaced Font", icon: "textformat") {
+                UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "useMonospacedFont"), forKey: "useMonospacedFont")
+            }
+        ]
+    }
+    
+    func filteredItems(from notes: [Note], themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteItem] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if query.isEmpty {
-            return notes
-        }
-        return notes.filter { note in
+        var items: [PaletteItem] = []
+        
+        let filteredNotes = notes.filter { note in
+            query.isEmpty || 
             note.title.localizedCaseInsensitiveContains(query) ||
             note.content.localizedCaseInsensitiveContains(query)
         }
+        
+        // Pinned notes first
+        let pinnedNotes = filteredNotes.filter { $0.isPinned }
+        for note in pinnedNotes {
+            items.append(.note(note))
+        }
+        
+        // Unpinned notes next
+        let unpinnedNotes = filteredNotes.filter { !$0.isPinned }
+        for note in unpinnedNotes {
+            items.append(.note(note))
+        }
+        
+        // Commands
+        let allCommands = getCommands(themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
+        let filteredCommands = allCommands.filter { cmd in
+            query.isEmpty || cmd.name.localizedCaseInsensitiveContains(query)
+        }
+        for cmd in filteredCommands {
+            items.append(.command(cmd))
+        }
+        
+        return items
     }
 }
 
@@ -34,8 +104,8 @@ struct CommandPaletteView: View {
     @EnvironmentObject private var themeManager: ThemeManager
     private var theme: AppTheme { themeManager.theme }
     
-    private var notes: [Note] {
-        state.filteredNotes(from: viewModel.notes)
+    private var items: [PaletteItem] {
+        state.filteredItems(from: viewModel.notes, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
     }
     
     private var searchFieldRow: some View {
@@ -44,13 +114,13 @@ struct CommandPaletteView: View {
                 .font(.title3)
                 .foregroundStyle(theme.secondaryText.opacity(0.8))
             
-            TextField("Search notes by title or content…", text: $state.searchText)
+            TextField("Search notes or type commands…", text: $state.searchText)
                 .textFieldStyle(.plain)
                 .font(.system(.title3, design: .rounded))
                 .focused($isFieldFocused)
                 .foregroundStyle(theme.text)
                 .onSubmit {
-                    selectCurrentNote()
+                    selectCurrentItem()
                 }
             
             if !state.searchText.isEmpty {
@@ -74,13 +144,13 @@ struct CommandPaletteView: View {
     
     private var resultsListView: some View {
         Group {
-            if notes.isEmpty {
+            if items.isEmpty {
                 VStack(spacing: 8) {
                     Spacer()
                     Image(systemName: "note.text")
                         .font(.system(size: 32, weight: .thin))
                         .foregroundStyle(theme.secondaryText.opacity(0.4))
-                    Text("No notes found")
+                    Text("No results found")
                         .font(.system(.callout, design: .rounded))
                         .foregroundStyle(theme.secondaryText)
                     Spacer()
@@ -90,19 +160,30 @@ struct CommandPaletteView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 4) {
-                           ForEach(Array(notes.enumerated()), id: \.element.id) { idx, note in
-                               paletteRow(note: note, index: idx, isSelected: state.selectedIndex == idx)
-                                   .id(note.id)
-                           }
+                            ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
+                                VStack(alignment: .leading, spacing: 0) {
+                                    if idx == 0 || isNewSection(at: idx, in: items) {
+                                        Text(sectionHeaderTitle(for: item))
+                                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                                            .foregroundStyle(theme.secondaryText.opacity(0.6))
+                                            .padding(.horizontal, 12)
+                                            .padding(.top, idx == 0 ? 6 : 14)
+                                            .padding(.bottom, 6)
+                                    }
+                                    
+                                    rowView(for: item, index: idx, isSelected: state.selectedIndex == idx)
+                                        .id(item.id)
+                                }
+                            }
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                     }
                     .frame(maxHeight: .infinity)
                     .onChange(of: state.selectedIndex) { _, newIndex in
-                        if newIndex >= 0 && newIndex < notes.count {
+                        if newIndex >= 0 && newIndex < items.count {
                             withAnimation(.easeInOut(duration: 0.1)) {
-                                proxy.scrollTo(notes[newIndex].id, anchor: .center)
+                                proxy.scrollTo(items[newIndex].id, anchor: .center)
                             }
                         }
                     }
@@ -119,10 +200,10 @@ struct CommandPaletteView: View {
             }
             HStack(spacing: 4) {
                 Image(systemName: "return")
-                Text("Open")
+                Text("Select")
             }
             Spacer()
-            Text("\(notes.count) notes")
+            Text("\(items.count) results")
             
             // Resize Handle
             Image(systemName: "line.diagonal.corner")
@@ -206,7 +287,17 @@ struct CommandPaletteView: View {
     }
     
     @ViewBuilder
-    private func paletteRow(note: Note, index: Int, isSelected: Bool) -> some View {
+    private func rowView(for item: PaletteItem, index: Int, isSelected: Bool) -> some View {
+        switch item {
+        case .note(let note):
+            paletteNoteRow(note: note, index: index, isSelected: isSelected)
+        case .command(let cmd):
+            paletteCommandRow(cmd: cmd, index: index, isSelected: isSelected)
+        }
+    }
+    
+    @ViewBuilder
+    private func paletteNoteRow(note: Note, index: Int, isSelected: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text(note.displayTitle)
@@ -241,7 +332,45 @@ struct CommandPaletteView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             state.selectedIndex = index
-            selectCurrentNote()
+            selectCurrentItem()
+        }
+    }
+    
+    @ViewBuilder
+    private func paletteCommandRow(cmd: PaletteCommand, index: Int, isSelected: Bool) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: cmd.icon)
+                .font(.subheadline)
+                .foregroundStyle(isSelected ? theme.accent : theme.secondaryText)
+                .frame(width: 20, height: 20)
+            
+            Text(cmd.name)
+                .font(.system(.body, design: .rounded).weight(.medium))
+                .foregroundStyle(theme.text)
+            
+            Spacer()
+            
+            Text("Action")
+                .font(.caption2)
+                .foregroundStyle(theme.secondaryText.opacity(0.6))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.primary.opacity(0.05), in: Capsule())
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isSelected ? theme.accent.opacity(theme.isDark ? 0.18 : 0.14) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(isSelected ? theme.accent.opacity(0.35) : Color.clear, lineWidth: 0.8)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            state.selectedIndex = index
+            selectCurrentItem()
         }
     }
     
@@ -251,13 +380,47 @@ struct CommandPaletteView: View {
         }
     }
     
-    private func selectCurrentNote() {
-        guard !notes.isEmpty else { return }
-        if state.selectedIndex >= 0 && state.selectedIndex < notes.count {
-            viewModel.selectedNoteId = notes[state.selectedIndex].id
-            viewModel.searchText = ""
+    private func selectCurrentItem() {
+        guard !items.isEmpty else { return }
+        if state.selectedIndex >= 0 && state.selectedIndex < items.count {
+            let item = items[state.selectedIndex]
+            switch item {
+            case .note(let note):
+                viewModel.selectedNoteId = note.id
+                viewModel.searchText = ""
+                dismiss()
+            case .command(let cmd):
+                dismiss()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    cmd.action()
+                }
+            }
         }
-        dismiss()
+    }
+    
+    private func isNewSection(at index: Int, in items: [PaletteItem]) -> Bool {
+        guard index > 0 else { return true }
+        let prev = items[index - 1]
+        let curr = items[index]
+        switch (prev, curr) {
+        case (.note(let p), .note(let c)):
+            return p.isPinned != c.isPinned
+        case (.note, .command):
+            return true
+        case (.command, .note):
+            return true
+        case (.command, .command):
+            return false
+        }
+    }
+    
+    private func sectionHeaderTitle(for item: PaletteItem) -> String {
+        switch item {
+        case .note(let note):
+            return note.isPinned ? "PINNED" : "NOTES"
+        case .command:
+            return "COMMANDS"
+        }
     }
     
     private func setupKeyboardMonitor() {
@@ -267,8 +430,9 @@ struct CommandPaletteView: View {
         )
         let paletteState = state
         let vm = viewModel
+        let tMgr = themeManager
         
-        keyboardMonitor.onKey = { [weak paletteState] event in
+        keyboardMonitor.onKey = { [weak paletteState] event -> NSEvent? in
             guard let paletteState = paletteState else { return event }
             let isEsc = event.keyCode == 53
             let isUp = event.keyCode == 126
@@ -281,16 +445,16 @@ struct CommandPaletteView: View {
                 return nil
             }
             if isUp {
-                let notes = paletteState.filteredNotes(from: vm.notes)
-                let count = notes.count
+                let items = paletteState.filteredItems(from: vm.notes, themeManager: tMgr, viewModel: vm, dismiss: {})
+                let count = items.count
                 if count > 0 {
                     paletteState.selectedIndex = (paletteState.selectedIndex - 1 + count) % count
                 }
                 return nil
             }
             if isDown {
-                let notes = paletteState.filteredNotes(from: vm.notes)
-                let count = notes.count
+                let items = paletteState.filteredItems(from: vm.notes, themeManager: tMgr, viewModel: vm, dismiss: {})
+                let count = items.count
                 if count > 0 {
                     paletteState.selectedIndex = (paletteState.selectedIndex + 1) % count
                 }

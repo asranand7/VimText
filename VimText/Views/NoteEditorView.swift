@@ -104,7 +104,7 @@ struct NoteEditorView: View {
     var body: some View {
         ZStack {
             VisualEffectView(material: .windowBackground, blendingMode: .behindWindow)
-            theme.editorBackground.opacity(theme.isDark ? 0.35 : 0.6)
+                .opacity(theme.isDark ? 0.75 : 0.85)
             
             VStack(spacing: 0) {
                 ZStack(alignment: .top) {

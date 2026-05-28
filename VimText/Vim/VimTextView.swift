@@ -61,6 +61,8 @@ class FindController: ObservableObject {
     }
 }
 
+// MARK: - VimTextView
+
 struct VimTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var rtfData: Data
@@ -2489,8 +2491,6 @@ class VimNSTextView: NSTextView {
     }
 
     private func drawBlockCursor() {
-        blockCursorLayer?.removeFromSuperlayer()
-
         guard let layoutManager = layoutManager, let textContainer = textContainer else { return }
 
         let nsString = string as NSString
@@ -2503,42 +2503,48 @@ class VimNSTextView: NSTextView {
         }
 
         var glyphRange = NSRange(location: pos, length: 1)
+        var rect: NSRect
+        
         if pos >= nsString.length {
             if nsString.length > 0 {
                 glyphRange = NSRange(location: nsString.length - 1, length: 1)
+                let glyphIdx = layoutManager.glyphIndexForCharacter(at: glyphRange.location)
+                rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIdx, length: 1), in: textContainer)
+                rect.origin.x += textContainerOrigin.x
+                rect.origin.y += textContainerOrigin.y
             } else {
-                let layer = CALayer()
-                layer.frame = NSRect(x: textContainerOrigin.x, y: textContainerOrigin.y, width: 8, height: font?.pointSize ?? 15)
-                layer.backgroundColor = accentColor.withAlphaComponent(0.4).cgColor
-                layer.cornerRadius = 1
-                self.wantsLayer = true
-                self.layer?.addSublayer(layer)
-                blockCursorLayer = layer
-                return
+                rect = NSRect(x: textContainerOrigin.x, y: textContainerOrigin.y, width: 8, height: font?.pointSize ?? 15)
             }
-        }
-
-        let charIndex = glyphRange.location
-        if charIndex < nsString.length {
+        } else {
+            let charIndex = glyphRange.location
             let glyphIdx = layoutManager.glyphIndexForCharacter(at: charIndex)
-            var rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIdx, length: 1), in: textContainer)
+            rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIdx, length: 1), in: textContainer)
             rect.origin.x += textContainerOrigin.x
             rect.origin.y += textContainerOrigin.y
-
             if rect.width < 2 {
                 rect.size.width = 8
             }
+        }
 
-            let cursorColor: NSColor = isVisual
-                ? accentColor.withAlphaComponent(0.7)
-                : accentColor.withAlphaComponent(0.4)
+        let cursorColor: NSColor = isVisual
+            ? accentColor.withAlphaComponent(0.75)
+            : accentColor.withAlphaComponent(0.45)
 
+        self.wantsLayer = true
+        
+        if let existingLayer = blockCursorLayer, existingLayer.superlayer == self.layer {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            existingLayer.frame = rect
+            existingLayer.backgroundColor = cursorColor.cgColor
+            CATransaction.commit()
+        } else {
+            blockCursorLayer?.removeFromSuperlayer()
+            
             let layer = CALayer()
             layer.frame = rect
             layer.backgroundColor = cursorColor.cgColor
-            layer.cornerRadius = 1
-
-            self.wantsLayer = true
+            layer.cornerRadius = 1.5
             self.layer?.addSublayer(layer)
             blockCursorLayer = layer
         }
