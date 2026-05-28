@@ -75,8 +75,8 @@ final class StorageManager {
                 pendingDash = true
             }
         }
-        if out.count > 50 {
-            out = String(out.prefix(50))
+        if out.count > 40 {
+            out = String(out.prefix(40))
         }
         while out.hasSuffix("-") { out.removeLast() }
         return out.isEmpty ? "untitled" : out
