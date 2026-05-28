@@ -34,6 +34,16 @@ extension AppTheme {
         editorBg: "FCFCFB", surfaceBg: "F4F3F0", textColor: "26262B",
         secondaryColor: "8E8D87", accentColor: "D99A0B", separatorColor: "EAE8E3"
     )
+    static let graphite = AppTheme(
+        id: "graphite", name: "Graphite", isDark: false,
+        editorBg: "FAFAF9", surfaceBg: "ECECEA", textColor: "202124",
+        secondaryColor: "85827C", accentColor: "3F4146", separatorColor: "DEDDD9"
+    )
+    static let ink = AppTheme(
+        id: "ink", name: "Ink", isDark: true,
+        editorBg: "101112", surfaceBg: "18191B", textColor: "F1F0EC",
+        secondaryColor: "9D9B95", accentColor: "D8D3C8", separatorColor: "2B2C2F"
+    )
     static let gray = AppTheme(
         id: "gray", name: "Gray", isDark: true,
         editorBg: "3A3D42", surfaceBg: "32353A", textColor: "D6D9DE",
@@ -76,7 +86,7 @@ extension AppTheme {
     )
 
     static let all: [AppTheme] = [
-        light, gray, dark,
+        light, graphite, ink, gray, dark,
         catppuccinLatte, catppuccinMocha,
         nord, dracula, gruvbox, solarizedDark
     ]
@@ -128,9 +138,9 @@ final class ThemeManager: ObservableObject {
 }
 
 let sidebarTintPresets: [String] = [
-    "E5A50A", "FF6B6B", "F06595", "CC5DE8", "845EF7",
-    "5C7CFA", "339AF0", "22B8CF", "20C997", "51CF66",
-    "94D82D", "FCC419", "FF922B", "868E96"
+    "E5A50A", "3F4146", "D8D3C8", "868E96", "FF6B6B",
+    "F06595", "CC5DE8", "845EF7", "5C7CFA", "339AF0",
+    "22B8CF", "20C997", "51CF66", "94D82D", "FCC419", "FF922B"
 ]
 
 /// Shared design tokens for a consistent, Linear-inspired motion & shape language.

@@ -478,9 +478,9 @@ struct NoteListView: View {
         let tint = themeManager.sidebarTint
         let rowFill = noteRowFill(isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
         let rowStroke = noteRowStroke(isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
-        let rowShadowOpacity = (isHovered || isSelected) ? (theme.isDark ? 0.24 : 0.055) : 0
-        let rowShadowRadius: CGFloat = isSelected ? 12 : 7
-        let rowShadowY: CGFloat = isSelected ? 5 : 3
+        let rowShadowOpacity = (isHovered || isSelected) ? (theme.isDark ? 0.20 : 0.035) : 0
+        let rowShadowRadius: CGFloat = isSelected ? 8 : 6
+        let rowShadowY: CGFloat = isSelected ? 3 : 2
 
         NoteRowView(
             note: note,
@@ -503,14 +503,14 @@ struct NoteListView: View {
             .overlay(alignment: .leading) {
                 Capsule()
                     .fill(tint)
-                    .frame(width: 3, height: isSelected ? 28 : 0)
+                    .frame(width: 3, height: isSelected ? 26 : 0)
                     .padding(.leading, 5)
-                    .opacity(isSelected ? 1 : 0)
+                    .opacity(isSelected ? 0.92 : 0)
             }
             .shadow(color: Color.black.opacity(rowShadowOpacity),
                     radius: rowShadowRadius,
                     y: rowShadowY)
-            .scaleEffect(isSelected ? 1.01 : 1.0, anchor: .center)
+            .scaleEffect(isSelected ? 1.006 : 1.0, anchor: .center)
             .offset(y: isHovered && !isSelected ? -1 : 0)
             .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             .onHover { hovering in
@@ -570,15 +570,15 @@ struct NoteListView: View {
     }
 
     private func noteRowFill(isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
-        if isSelected { return tint.opacity(theme.isDark ? 0.20 : 0.15) }
-        if isHighlighted { return tint.opacity(theme.isDark ? 0.18 : 0.14) }
+        if isSelected { return tint.opacity(theme.isDark ? 0.13 : 0.075) }
+        if isHighlighted { return tint.opacity(theme.isDark ? 0.14 : 0.09) }
         if isHovered { return theme.isDark ? Color.white.opacity(0.06) : Color.white.opacity(0.46) }
         return Color.clear
     }
 
     private func noteRowStroke(isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
-        if isSelected { return tint.opacity(theme.isDark ? 0.42 : 0.38) }
-        if isHighlighted { return tint.opacity(0.25) }
+        if isSelected { return tint.opacity(theme.isDark ? 0.34 : 0.24) }
+        if isHighlighted { return tint.opacity(0.20) }
         if isHovered { return Color.primary.opacity(0.08) }
         return Color.clear
     }
@@ -599,14 +599,14 @@ struct NoteListView: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .fill(isSelected 
-                      ? theme.accent.opacity(0.12) 
+                .fill(isSelected
+                      ? theme.accent.opacity(theme.isDark ? 0.10 : 0.07)
                       : (isHovered ? Color.white.opacity(theme.isDark ? 0.06 : 0.42) : Color.clear))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .strokeBorder(isSelected 
-                              ? theme.accent.opacity(0.3) 
+                .strokeBorder(isSelected
+                              ? theme.accent.opacity(theme.isDark ? 0.28 : 0.20)
                               : (isHovered ? theme.accent.opacity(0.12) : Color.clear), lineWidth: 0.8)
         )
         .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
