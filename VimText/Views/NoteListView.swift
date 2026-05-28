@@ -57,19 +57,24 @@ struct NoteListView: View {
     }
 
     private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.system(.subheadline, design: .rounded).weight(.bold))
-            .foregroundStyle(theme.text)
-            .textCase(nil)
-            .padding(.top, 6)
+        HStack {
+            Text(title)
+                .font(.system(.caption, design: .rounded).weight(.bold))
+                .foregroundStyle(theme.secondaryText.opacity(0.7))
+                .textCase(nil)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 2)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .foregroundStyle(theme.secondaryText)
-                    .font(.caption)
+                    .foregroundStyle(theme.secondaryText.opacity(0.7))
+                    .font(.subheadline)
                 SearchField(
                     text: $viewModel.searchText,
                     focusTrigger: $searchFocusTrigger,
@@ -85,22 +90,23 @@ struct NoteListView: View {
                         highlightedIndex = nil
                     }) {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.tertiary)
-                            .font(.caption)
+                            .foregroundStyle(theme.secondaryText.opacity(0.5))
+                            .font(.subheadline)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(theme.text.opacity(0.07), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .background(Color.primary.opacity(theme.isDark ? 0.08 : 0.05))
+            .cornerRadius(10)
             .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(theme.separator.opacity(0.5), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5)
             )
-            .padding(.horizontal, 10)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
 
             if isSelectionMode {
                 HStack(spacing: 8) {
@@ -111,12 +117,13 @@ struct NoteListView: View {
                             selectedNoteIds = Set(viewModel.filteredNotes.map { $0.id })
                         }
                     }
-                    .font(.caption)
+                    .font(.system(.caption, design: .rounded).weight(.medium))
+                    .buttonStyle(.borderless)
 
                     Spacer()
 
                     Text("\(selectedNoteIds.count) selected")
-                        .font(.caption)
+                        .font(.system(.caption, design: .rounded))
                         .foregroundStyle(.secondary)
 
                     Spacer()
@@ -125,13 +132,15 @@ struct NoteListView: View {
                         isSelectionMode = false
                         selectedNoteIds.removeAll()
                     }
-                    .font(.caption)
+                    .font(.system(.caption, design: .rounded).weight(.semibold))
+                    .buttonStyle(.borderless)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.primary.opacity(0.04))
 
                 Divider()
+                    .foregroundStyle(theme.separator.opacity(0.5))
             }
 
             if viewModel.filteredNotes.isEmpty {
@@ -141,57 +150,52 @@ struct NoteListView: View {
                         .font(.system(size: 32, weight: .ultraLight))
                         .foregroundStyle(.tertiary)
                     Text(viewModel.searchText.isEmpty ? "No Notes" : "No Results")
-                        .font(.callout)
+                        .font(.system(.callout, design: .rounded))
                         .foregroundStyle(.secondary)
                     if viewModel.searchText.isEmpty {
                         Text("Create a note to get started")
-                            .font(.caption)
+                            .font(.system(.caption, design: .rounded))
                             .foregroundStyle(.tertiary)
                     }
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
             } else if isSelectionMode {
-                List {
-                    let pinned = viewModel.filteredNotes.filter { $0.isPinned }
-                    let unpinned = viewModel.filteredNotes.filter { !$0.isPinned }
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        let pinned = viewModel.filteredNotes.filter { $0.isPinned }
+                        let unpinned = viewModel.filteredNotes.filter { !$0.isPinned }
 
-                    if !pinned.isEmpty {
-                        Section("Pinned") {
+                        if !pinned.isEmpty {
+                            sectionHeader("Pinned")
                             ForEach(pinned) { note in
                                 selectableNoteRow(note: note)
                             }
                         }
-                    }
 
-                    if !unpinned.isEmpty {
-                        if pinned.isEmpty {
+                        if !unpinned.isEmpty {
+                            if !pinned.isEmpty {
+                                sectionHeader("Notes")
+                            }
                             ForEach(unpinned) { note in
                                 selectableNoteRow(note: note)
                             }
-                        } else {
-                            Section("Notes") {
-                                ForEach(unpinned) { note in
-                                    selectableNoteRow(note: note)
-                                }
-                            }
                         }
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
                 }
-                .listStyle(.inset)
-                .scrollContentBackground(.hidden)
-                .listRowSeparator(.hidden)
-                .background(Color.clear)
             } else {
                 notesList
             }
 
             Divider()
+                .foregroundStyle(theme.separator.opacity(0.5))
 
             HStack {
                 Text("\(viewModel.filteredNotes.count) notes")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.system(.caption2, design: .rounded))
+                    .foregroundStyle(.secondary.opacity(0.7))
                 Spacer()
 
                 if isSelectionMode && !selectedNoteIds.isEmpty {
@@ -228,7 +232,7 @@ struct NoteListView: View {
                 .frame(width: 20)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.vertical, 8)
         }
         .background(glassBackground)
         .animation(.easeInOut(duration: 0.28), value: theme.id)
@@ -278,36 +282,34 @@ struct NoteListView: View {
         let isSearching = !viewModel.searchText.isEmpty
 
         ScrollViewReader { proxy in
-            List(selection: isSearching ? nil : $viewModel.selectedNoteId) {
-                if isSearching {
-                    ForEach(Array(notes.enumerated()), id: \.element.id) { idx, note in
-                        noteRow(note: note, flatIndex: idx, isSearching: true)
-                    }
-                } else {
-                    let pinned = notes.filter { $0.isPinned }
-                    let unpinned = notes.filter { !$0.isPinned }
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    if isSearching {
+                        ForEach(Array(notes.enumerated()), id: \.element.id) { idx, note in
+                            noteRow(note: note, flatIndex: idx, isSearching: true)
+                        }
+                    } else {
+                        let pinned = notes.filter { $0.isPinned }
+                        let unpinned = notes.filter { !$0.isPinned }
 
-                    if !pinned.isEmpty {
-                        Section {
+                        if !pinned.isEmpty {
+                            sectionHeader("Pinned")
                             ForEach(pinned) { note in
                                 noteRow(note: note, flatIndex: 0, isSearching: false)
                             }
-                        } header: { sectionHeader("Pinned") }
-                    }
+                        }
 
-                    ForEach(dateSections(unpinned), id: \.title) { section in
-                        Section {
+                        ForEach(dateSections(unpinned), id: \.title) { section in
+                            sectionHeader(section.title)
                             ForEach(section.notes) { note in
                                 noteRow(note: note, flatIndex: 0, isSearching: false)
                             }
-                        } header: { sectionHeader(section.title) }
+                        }
                     }
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
             }
-            .listStyle(.inset)
-            .scrollContentBackground(.hidden)
-            .listRowSeparator(.hidden)
-            .background(Color.clear)
             .onChange(of: highlightedIndex) {
                 if let idx = highlightedIndex, idx < notes.count {
                     proxy.scrollTo(notes[idx].id, anchor: .center)
@@ -319,17 +321,19 @@ struct NoteListView: View {
     @ViewBuilder
     private func noteRow(note: Note, flatIndex: Int, isSearching: Bool) -> some View {
         let isHighlighted = isSearching && highlightedIndex == flatIndex
-
         let isSelected = !isSearching && viewModel.selectedNoteId == note.id
 
         NoteRowView(note: note, folderName: folderName(for: note))
             .id(note.id)
-            .tag(note.id)
-            .listRowSeparator(.hidden)
-            .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
-            .listRowBackground(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isHighlighted || isSelected ? theme.accent.opacity(isHighlighted ? 0.30 : 0.20) : Color.clear)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isHighlighted || isSelected ? theme.accent.opacity(isHighlighted ? 0.16 : 0.12) : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(isSelected ? theme.accent.opacity(0.35) : (isHighlighted ? theme.accent.opacity(0.2) : Color.clear), lineWidth: 0.8)
             )
             .contentShape(Rectangle())
             .onTapGesture {
@@ -378,15 +382,23 @@ struct NoteListView: View {
 
     @ViewBuilder
     private func selectableNoteRow(note: Note) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Image(systemName: selectedNoteIds.contains(note.id) ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(selectedNoteIds.contains(note.id) ? Color.blue : Color.gray.opacity(0.4))
-                .font(.title3)
+                .foregroundStyle(selectedNoteIds.contains(note.id) ? Color.blue : Color.secondary.opacity(0.4))
+                .font(.system(size: 16, weight: .medium))
 
             NoteRowView(note: note, folderName: folderName(for: note))
         }
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(selectedNoteIds.contains(note.id) ? theme.accent.opacity(0.12) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(selectedNoteIds.contains(note.id) ? theme.accent.opacity(0.3) : Color.clear, lineWidth: 0.8)
+        )
         .contentShape(Rectangle())
         .onTapGesture {
             if selectedNoteIds.contains(note.id) {

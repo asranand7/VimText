@@ -200,6 +200,7 @@ struct VimTextView: NSViewRepresentable {
         if context.coordinator.lastThemeKey != themeKey {
             context.coordinator.lastThemeKey = themeKey
             textView.backgroundColor = backgroundColor
+            textView.drawsBackground = (backgroundColor != .clear)
             textView.insertionPointColor = accentColor
             textView.accentColor = accentColor
             textView.selectedTextAttributes = [

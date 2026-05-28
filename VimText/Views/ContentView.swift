@@ -21,14 +21,19 @@ struct ContentView: View {
                         .font(.system(size: 48, weight: .ultraLight))
                         .foregroundStyle(theme.secondaryText.opacity(0.6))
                     Text("Select or create a note")
-                        .font(.title3)
+                        .font(.system(.title3, design: .rounded))
                         .foregroundStyle(theme.secondaryText)
                     Text("⌘N to create a new note")
-                        .font(.caption)
+                        .font(.system(.caption, design: .rounded))
                         .foregroundStyle(theme.secondaryText.opacity(0.7))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(theme.editorBackground)
+                .background(
+                    ZStack {
+                        VisualEffectView(material: .windowBackground, blendingMode: .behindWindow)
+                        theme.editorBackground.opacity(theme.isDark ? 0.35 : 0.6)
+                    }
+                )
             }
         }
         .environmentObject(themeManager)

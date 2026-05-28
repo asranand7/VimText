@@ -29,32 +29,56 @@ struct NoteEditorView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack(alignment: .top) {
-                VStack(spacing: 0) {
-                    if let note = note {
-                        Text(formatDate(note.modifiedAt))
-                            .font(.caption)
-                            .foregroundStyle(theme.secondaryText)
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 12)
-                            .padding(.bottom, 2)
-                            .background(theme.editorBackground)
+        ZStack {
+            VisualEffectView(material: .windowBackground, blendingMode: .behindWindow)
+            theme.editorBackground.opacity(theme.isDark ? 0.35 : 0.6)
+            
+            VStack(spacing: 0) {
+                ZStack(alignment: .top) {
+                    VStack(spacing: 0) {
+                        if let note = note {
+                            Text(formatDate(note.modifiedAt))
+                                .font(.system(.caption, design: .rounded))
+                                .foregroundStyle(theme.secondaryText.opacity(0.8))
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 14)
+                                .padding(.bottom, 8)
+                        }
+                        
+                        editorArea
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        
+                        if vimEngine.showCommandLine {
+                            Divider()
+                                .foregroundStyle(theme.separator.opacity(0.4))
+                            commandLine
+                        }
+                        
+                        Divider()
+                            .foregroundStyle(theme.separator.opacity(0.4))
+                        statusBar
                     }
-                    editorArea
-                }
-                if findController.isVisible {
-                    findBar
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .zIndex(1)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(theme.surface.opacity(theme.isDark ? 0.35 : 0.75))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(Color.white.opacity(theme.isDark ? 0.05 : 0.35), lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(theme.isDark ? 0.28 : 0.06), radius: 16, x: 0, y: 6)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+                    .padding(.bottom, 16)
+                    
+                    if findController.isVisible {
+                        findBar
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .zIndex(1)
+                    }
                 }
             }
-            if vimEngine.showCommandLine {
-                commandLine
-            }
-            statusBar
         }
-        .background(theme.editorBackground)
         .animation(.easeInOut(duration: 0.28), value: theme.id)
         .onAppear {
             loadNote()
@@ -86,7 +110,7 @@ struct NoteEditorView: View {
             onSave: { saveCurrentNote() },
             font: editorFont,
             startInInsertMode: startInInsertMode,
-            backgroundColor: theme.editorBackgroundNS,
+            backgroundColor: .clear,
             textColor: theme.textNS,
             accentColor: theme.accentNS
         )
@@ -185,15 +209,15 @@ struct NoteEditorView: View {
         HStack(spacing: 4) {
             Text(vimEngine.commandLinePrefix)
                 .font(.system(.body, design: .monospaced))
-                .foregroundStyle(.primary)
+                .foregroundStyle(theme.text)
             Text(vimEngine.commandLineText)
                 .font(.system(.body, design: .monospaced))
-                .foregroundStyle(.primary)
+                .foregroundStyle(theme.text)
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(theme.surface)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.clear)
     }
 
     private var statusBar: some View {
@@ -227,15 +251,9 @@ struct NoteEditorView: View {
             .menuStyle(.borderlessButton)
             .frame(width: 24)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(theme.surface)
-        .overlay(
-            Rectangle()
-                .frame(height: 0.5)
-                .foregroundStyle(theme.separator),
-            alignment: .top
-        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.clear)
     }
 
     private var themeMenu: some View {
