@@ -16,6 +16,21 @@ rm -rf "$APP_NAME.app"
 mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"
 
+# Generate AppIcon.icns from the generated appiconset
+echo "🎨 Compiling AppIcon.icns..."
+ICONSET_DIR="VimText/Assets.xcassets/AppIcon.appiconset"
+TEMP_ICONSET="VimText/Assets.xcassets/AppIcon.iconset"
+if [ -d "$ICONSET_DIR" ]; then
+    rm -rf "$TEMP_ICONSET"
+    cp -R "$ICONSET_DIR" "$TEMP_ICONSET"
+    rm -f "$TEMP_ICONSET/Contents.json"
+    iconutil -c icns "$TEMP_ICONSET" -o "$RESOURCES_DIR/AppIcon.icns"
+    rm -rf "$TEMP_ICONSET"
+    echo "✅ Compiled AppIcon.icns successfully"
+else
+    echo "⚠️  AppIcon.appiconset not found, skipping icon compilation"
+fi
+
 cat > "$APP_DIR/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
