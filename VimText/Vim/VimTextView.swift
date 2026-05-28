@@ -180,6 +180,7 @@ struct VimTextView: NSViewRepresentable {
         }
 
         textView.applyBaseFont(font)
+        textView.restyleCodeBlocks(baseFont: font)
 
         let isInsert = vimEngine.mode.isEditing || startInInsertMode
         textView.updateCursorAppearance(isBlock: !isInsert)
@@ -206,6 +207,7 @@ struct VimTextView: NSViewRepresentable {
                 let attrStr = NSAttributedString(string: text, attributes: defaultAttrs)
                 textView.textStorage?.setAttributedString(attrStr)
             }
+            textView.restyleCodeBlocks(baseFont: font)
             let safeLocation = min(selectedRange.location, textView.string.count)
             textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
         }
@@ -215,6 +217,7 @@ struct VimTextView: NSViewRepresentable {
             context.coordinator.lastFontSize = font.pointSize
             context.coordinator.lastFontName = font.fontName
             textView.applyBaseFont(font)
+            textView.restyleCodeBlocks(baseFont: font)
             var attrs = textView.typingAttributes
             attrs[.font] = font
             textView.typingAttributes = attrs
@@ -397,6 +400,10 @@ struct VimTextView: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             isUpdatingFromTextView = true
             parent.text = textView.string
+
+            if let vimTextView = textView as? VimNSTextView {
+                vimTextView.restyleCodeBlocks(baseFont: parent.font)
+            }
 
             // Export RTF data to preserve rich text formatting
             if let textStorage = textView.textStorage, textStorage.length > 0 {
@@ -1419,9 +1426,12 @@ struct VimTextView: NSViewRepresentable {
         }
 
         private func pasteContent() -> String {
-            let reg = parent.vimEngine.register
-            if !reg.isEmpty { return reg }
-            return NSPasteboard.general.string(forType: .string) ?? ""
+            // The system clipboard is the source of truth: Vim yanks sync to it
+            // (see VimEngine.register), and so do ⌘C and the code-block copy button.
+            if let clip = NSPasteboard.general.string(forType: .string), !clip.isEmpty {
+                return clip
+            }
+            return parent.vimEngine.register
         }
 
         private func findWordObject(at pos: Int, in string: String, inner: Bool, bigWord: Bool) -> NSRange? {
@@ -2133,12 +2143,18 @@ struct VimTextView: NSViewRepresentable {
     }
 }
 
+extension NSAttributedString.Key {
+    static let codeBlock = NSAttributedString.Key("vimTextCodeBlock")
+}
+
 class VimNSTextView: NSTextView {
     var vimEngine: VimEngine?
     weak var coordinator: VimTextView.Coordinator?
     var accentColor: NSColor = .systemOrange
     var paperStyle: String = "plain"
     var smartLists: Bool = true
+    var codeBlockRanges: [NSRange] = []
+    private var copyButtons: [NSButton] = []
     private var blockCursorLayer: CALayer?
     var visualCursorOverride: Int? = nil
     private var searchHighlightLayers: [CALayer] = []
@@ -2332,6 +2348,102 @@ class VimNSTextView: NSTextView {
         textStorage.endEditing()
     }
 
+    /// Find ```-fenced regions in the plain text. Each returned range covers the
+    /// opening fence line through the closing fence line (inclusive). Only closed
+    /// blocks are styled — a lone opening fence stays plain text so it can never
+    /// trap the cursor in an unbounded block.
+    func computeCodeBlockRanges() -> [NSRange] {
+        let ns = string as NSString
+        let len = ns.length
+        var ranges: [NSRange] = []
+        var inBlock = false
+        var blockStart = 0
+        var idx = 0
+        while idx < len {
+            let lineRange = ns.lineRange(for: NSRange(location: idx, length: 0))
+            let trimmed = ns.substring(with: lineRange).trimmingCharacters(in: .whitespacesAndNewlines)
+            let isFence = trimmed.hasPrefix("```")
+            if isFence {
+                if inBlock {
+                    let end = lineRange.location + lineRange.length
+                    ranges.append(NSRange(location: blockStart, length: end - blockStart))
+                    inBlock = false
+                } else {
+                    inBlock = true
+                    blockStart = lineRange.location
+                }
+            }
+            let next = lineRange.location + lineRange.length
+            if next <= idx { break }
+            idx = next
+        }
+        return ranges
+    }
+
+    func isLocationInCodeBlock(_ loc: Int) -> Bool {
+        for r in codeBlockRanges where NSLocationInRange(loc, r) { return true }
+        return false
+    }
+
+    /// Re-derive code-block styling from the fenced plain text: monospaced font
+    /// inside fences (tagged with .codeBlock for background drawing), proportional
+    /// font with preserved bold/italic elsewhere.
+    func restyleCodeBlocks(baseFont: NSFont) {
+        guard let textStorage = textStorage else { return }
+        let len = textStorage.length
+        let ranges = computeCodeBlockRanges()
+        codeBlockRanges = ranges
+        guard len > 0 else { needsDisplay = true; return }
+
+        let fullRange = NSRange(location: 0, length: len)
+        let monoFont = NSFont.monospacedSystemFont(ofSize: baseFont.pointSize, weight: .regular)
+        let fontManager = NSFontManager.shared
+
+        let ns = string as NSString
+        let baseParagraph = VimTextView.paragraphStyle()
+        let blockGap: CGFloat = 12
+
+        textStorage.beginEditing()
+        textStorage.removeAttribute(.codeBlock, range: fullRange)
+        // Reset paragraph style + font everywhere; blocks override below.
+        textStorage.addAttribute(.paragraphStyle, value: baseParagraph, range: fullRange)
+        textStorage.enumerateAttribute(.font, in: fullRange, options: []) { value, range, _ in
+            let traits = (value as? NSFont).map { fontManager.traits(of: $0) } ?? NSFontTraitMask()
+            var f = baseFont
+            if traits.contains(.boldFontMask) { f = fontManager.convert(f, toHaveTrait: .boldFontMask) }
+            if traits.contains(.italicFontMask) { f = fontManager.convert(f, toHaveTrait: .italicFontMask) }
+            textStorage.addAttribute(.font, value: f, range: range)
+        }
+        // Overlay monospaced font + tag on fenced ranges, and add a gap above the
+        // opening fence and below the closing fence so the block stands apart.
+        for r in ranges {
+            let safe = NSIntersectionRange(r, fullRange)
+            guard safe.length > 0 else { continue }
+            textStorage.addAttribute(.font, value: monoFont, range: safe)
+            textStorage.addAttribute(.codeBlock, value: true, range: safe)
+
+            let firstLine = ns.lineRange(for: NSRange(location: safe.location, length: 0))
+            let lastLine = ns.lineRange(for: NSRange(location: min(safe.location + safe.length - 1, ns.length), length: 0))
+
+            let before = baseParagraph.mutableCopy() as! NSMutableParagraphStyle
+            before.paragraphSpacingBefore = blockGap
+            let after = baseParagraph.mutableCopy() as! NSMutableParagraphStyle
+            after.paragraphSpacing = blockGap
+
+            let firstSafe = NSIntersectionRange(firstLine, fullRange)
+            if firstSafe.length > 0 {
+                textStorage.addAttribute(.paragraphStyle, value: before, range: firstSafe)
+            }
+            let lastSafe = NSIntersectionRange(lastLine, fullRange)
+            if lastSafe.length > 0 {
+                textStorage.addAttribute(.paragraphStyle, value: after, range: lastSafe)
+            }
+        }
+        textStorage.endEditing()
+        needsDisplay = true
+        updateCopyButtons()
+    }
+
     func updateFontSize(_ newSize: CGFloat) {
         guard let textStorage = textStorage else { return }
         let fullRange = NSRange(location: 0, length: textStorage.length)
@@ -2502,6 +2614,10 @@ class VimNSTextView: NSTextView {
                 return
             }
 
+            if event.characters == "`" && !modifiers.contains(.control) && handleBacktickAutoClose() {
+                return
+            }
+
             super.keyDown(with: event)
             return
         }
@@ -2587,6 +2703,8 @@ class VimNSTextView: NSTextView {
         let sel = selectedRange()
         guard sel.length == 0 else { return false }
 
+        guard !isLocationInCodeBlock(sel.location) else { return false }
+
         let ns = string as NSString
         let pos = sel.location
         let lineRange = ns.lineRange(for: NSRange(location: min(pos, ns.length), length: 0))
@@ -2624,6 +2742,7 @@ class VimNSTextView: NSTextView {
     private func handleSmartListTab(outdent: Bool) -> Bool {
         let sel = selectedRange()
         guard sel.length == 0 else { return false }
+        guard !isLocationInCodeBlock(sel.location) else { return false }
 
         let ns = string as NSString
         let pos = sel.location
@@ -2652,6 +2771,45 @@ class VimNSTextView: NSTextView {
 
         insertText(indentUnit, replacementRange: NSRange(location: lineRange.location, length: 0))
         setSelectedRange(NSRange(location: pos + indentUnit.count, length: 0))
+        return true
+    }
+
+    /// When the third backtick completes a fence opener on its own line, auto-insert
+    /// a blank line and a closing fence, leaving the cursor on the blank line.
+    /// Returns true if handled (the typed backtick is inserted as part of this).
+    private func handleBacktickAutoClose() -> Bool {
+        let sel = selectedRange()
+        guard sel.length == 0 else { return false }
+
+        let ns = string as NSString
+        let pos = sel.location
+        let lineRange = ns.lineRange(for: NSRange(location: min(pos, ns.length), length: 0))
+        var contentLen = lineRange.length
+        if contentLen > 0,
+           ns.substring(with: NSRange(location: lineRange.location + contentLen - 1, length: 1)) == "\n" {
+            contentLen -= 1
+        }
+        let lineContent = ns.substring(with: NSRange(location: lineRange.location, length: contentLen))
+        // The user is completing "``" → "```" at the end of an otherwise-empty line.
+        guard lineContent == "``", pos == lineRange.location + contentLen else { return false }
+
+        // Count fence lines before this one; odd means an opener is already waiting,
+        // so this fence closes it — don't auto-insert another closer.
+        var fenceCount = 0
+        var idx = 0
+        while idx < lineRange.location {
+            let lr = ns.lineRange(for: NSRange(location: idx, length: 0))
+            if ns.substring(with: lr).trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("```") {
+                fenceCount += 1
+            }
+            let next = lr.location + lr.length
+            if next <= idx { break }
+            idx = next
+        }
+        guard fenceCount % 2 == 0 else { return false }
+
+        insertText("`\n\n```", replacementRange: NSRange(location: pos, length: 0))
+        setSelectedRange(NSRange(location: pos + 2, length: 0))
         return true
     }
 
@@ -2763,7 +2921,9 @@ class VimNSTextView: NSTextView {
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
-        
+
+        drawCodeBlockBackgrounds(in: rect)
+
         guard paperStyle != "plain" else { return }
         
         guard let context = NSGraphicsContext.current?.cgContext,
@@ -2844,6 +3004,134 @@ class VimNSTextView: NSTextView {
         }
         
         context.restoreGState()
+    }
+
+    private func drawCodeBlockBackgrounds(in rect: NSRect) {
+        guard !codeBlockRanges.isEmpty,
+              let layoutManager = self.layoutManager,
+              let textContainer = self.textContainer else { return }
+
+        _ = layoutManager
+        _ = textContainer
+
+        let baseColor = self.textColor ?? (typingAttributes[.foregroundColor] as? NSColor) ?? NSColor.labelColor
+        let fillColor = baseColor.withAlphaComponent(0.05)
+        let strokeColor = baseColor.withAlphaComponent(0.10)
+
+        for range in codeBlockRanges {
+            guard let blockRect = codeBlockBoxRect(for: range) else { continue }
+            let path = NSBezierPath(roundedRect: blockRect, xRadius: 6, yRadius: 6)
+            fillColor.setFill()
+            path.fill()
+            strokeColor.setStroke()
+            path.lineWidth = 0.75
+            path.stroke()
+        }
+    }
+
+    /// The drawn rounded-rect box for a code block range, in view coordinates.
+    private func codeBlockBoxRect(for range: NSRange) -> NSRect? {
+        guard let layoutManager = self.layoutManager,
+              let textContainer = self.textContainer else { return nil }
+        let ns = string as NSString
+        var safe = NSIntersectionRange(range, NSRange(location: 0, length: ns.length))
+        guard safe.length > 0 else { return nil }
+        // Exclude the closing fence's trailing newline so the box doesn't bleed
+        // into the line below.
+        if ns.substring(with: NSRange(location: safe.location + safe.length - 1, length: 1)) == "\n" {
+            safe.length -= 1
+        }
+        guard safe.length > 0 else { return nil }
+
+        let origin = self.textContainerOrigin
+        let inset = self.textContainerInset
+        let startX = inset.width - 8
+        let width = bounds.width - 2 * inset.width + 16
+
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: safe, actualCharacterRange: nil)
+        var bounding = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        bounding.origin.x += origin.x
+        bounding.origin.y += origin.y
+        return NSRect(x: startX, y: bounding.minY - 3, width: width, height: bounding.height + 6)
+    }
+
+    /// The text inside a code block, excluding the opening and closing ``` lines.
+    private func innerCodeContent(for range: NSRange) -> String {
+        let ns = string as NSString
+        let safe = NSIntersectionRange(range, NSRange(location: 0, length: ns.length))
+        guard safe.length > 0 else { return "" }
+        let openerLine = ns.lineRange(for: NSRange(location: safe.location, length: 0))
+        let closerLine = ns.lineRange(for: NSRange(location: min(safe.location + safe.length - 1, ns.length), length: 0))
+        let innerStart = openerLine.location + openerLine.length
+        let innerEnd = closerLine.location
+        guard innerEnd > innerStart else { return "" }
+        var inner = ns.substring(with: NSRange(location: innerStart, length: innerEnd - innerStart))
+        while inner.hasSuffix("\n") || inner.hasSuffix("\r") { inner.removeLast() }
+        return inner
+    }
+
+    private func makeCopyButton() -> NSButton {
+        let button = NSButton()
+        button.bezelStyle = .regularSquare
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.contentTintColor = .secondaryLabelColor
+        let cfg = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        button.image = NSImage(systemSymbolName: "square.on.square", accessibilityDescription: "Copy")?
+            .withSymbolConfiguration(cfg)
+        button.target = self
+        button.action = #selector(copyButtonClicked(_:))
+        button.toolTip = "Copy code"
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 5
+        button.layer?.backgroundColor = NSColor.textColor.withAlphaComponent(0.06).cgColor
+        return button
+    }
+
+    /// Reconcile copy buttons with the current code blocks and position each at the
+    /// top-right of its block.
+    func updateCopyButtons() {
+        while copyButtons.count > codeBlockRanges.count {
+            copyButtons.removeLast().removeFromSuperview()
+        }
+        while copyButtons.count < codeBlockRanges.count {
+            let button = makeCopyButton()
+            addSubview(button)
+            copyButtons.append(button)
+        }
+        let size: CGFloat = 22
+        let pad: CGFloat = 5
+        for (i, range) in codeBlockRanges.enumerated() {
+            let button = copyButtons[i]
+            guard let rect = codeBlockBoxRect(for: range) else { button.isHidden = true; continue }
+            button.tag = i
+            button.isHidden = false
+            button.frame = NSRect(x: rect.maxX - size - pad, y: rect.minY + pad, width: size, height: size)
+        }
+    }
+
+    @objc private func copyButtonClicked(_ sender: NSButton) {
+        let idx = sender.tag
+        guard idx >= 0, idx < codeBlockRanges.count else { return }
+        let content = innerCodeContent(for: codeBlockRanges[idx])
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(content, forType: .string)
+
+        let cfg = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        sender.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")?
+            .withSymbolConfiguration(cfg)
+        sender.contentTintColor = .systemGreen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak sender] in
+            sender?.image = NSImage(systemSymbolName: "square.on.square", accessibilityDescription: "Copy")?
+                .withSymbolConfiguration(cfg)
+            sender?.contentTintColor = .secondaryLabelColor
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        updateCopyButtons()
     }
 
 }

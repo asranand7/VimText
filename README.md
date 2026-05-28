@@ -20,6 +20,11 @@ A native macOS notes app with comprehensive Vim keybinding support. Think Apple 
 - **Modern Monochromatic Icon** — A sleek, minimalist black-and-white macOS dock icon designed for modern setups.
 - **Multiple Editor Themes** — Support for premium themes including Catppuccin, Nord, Dracula, Gruvbox, and Solarized.
 
+### Smart Editing
+
+- **Smart Lists** — Press `Return` on a bullet (`-`, `*`, `+`, `•`) or numbered (`1.`, `1)`) line to continue the list automatically; press `Return` on an empty item to end it. `Tab` / `Shift+Tab` indent and outdent the current item for nested lists. Toggle via the "Aa" format menu.
+- **Code Blocks** — Wrap text in ` ``` ` fences to render a monospaced, full-width code block. Typing ` ``` ` on an empty line auto-inserts the closing fence with your cursor placed inside. Each block has a copy button that copies the contents to the clipboard (without the backticks). Smart-list continuation is suppressed inside code blocks so `Return` and `Tab` behave literally.
+
 ### Vim Modes
 | Mode | How to Enter |
 |------|-------------|
