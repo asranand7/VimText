@@ -75,6 +75,7 @@ struct VimTextView: NSViewRepresentable {
     var textColor: NSColor = .labelColor
     var accentColor: NSColor = .systemOrange
     var paperStyle: String = "plain"
+    var smartLists: Bool = true
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -157,6 +158,7 @@ struct VimTextView: NSViewRepresentable {
         textView.vimEngine = vimEngine
         textView.coordinator = context.coordinator
         textView.paperStyle = paperStyle
+        textView.smartLists = smartLists
 
         scrollView.documentView = textView
 
@@ -239,6 +241,8 @@ struct VimTextView: NSViewRepresentable {
             textView.paperStyle = paperStyle
             textView.needsDisplay = true
         }
+
+        textView.smartLists = smartLists
 
         textView.updateCursorAppearance(isBlock: !vimEngine.mode.isEditing)
     }
@@ -2134,6 +2138,7 @@ class VimNSTextView: NSTextView {
     weak var coordinator: VimTextView.Coordinator?
     var accentColor: NSColor = .systemOrange
     var paperStyle: String = "plain"
+    var smartLists: Bool = true
     private var blockCursorLayer: CALayer?
     var visualCursorOverride: Int? = nil
     private var searchHighlightLayers: [CALayer] = []
@@ -2444,6 +2449,7 @@ class VimNSTextView: NSTextView {
         let isEsc = event.keyCode == 53
         let isReturn = event.keyCode == 36
         let isBackspace = event.keyCode == 51
+        let isTab = event.keyCode == 48
 
         if engine.mode == .command {
             if isEsc {
@@ -2488,6 +2494,14 @@ class VimNSTextView: NSTextView {
                 return
             }
 
+            if isReturn && !modifiers.contains(.shift) && handleSmartListReturn() {
+                return
+            }
+
+            if isTab && smartLists && handleSmartListTab(outdent: modifiers.contains(.shift)) {
+                return
+            }
+
             super.keyDown(with: event)
             return
         }
@@ -2523,6 +2537,122 @@ class VimNSTextView: NSTextView {
 
         let actions = engine.processKey(key, modifiers: modifiers)
         coordinator.executeActions(actions)
+    }
+
+    private struct ListMarker {
+        let indent: String       // leading whitespace of the line
+        let body: String         // text after the marker
+        let existingPrefix: String  // marker text already on the line (incl. trailing space)
+        let nextPrefix: String   // marker to start the following line (incl. trailing space)
+    }
+
+    private func parseListMarker(_ line: String) -> ListMarker? {
+        var s = Substring(line)
+        if s.hasSuffix("\n") { s = s.dropLast() }
+        let indent = s.prefix { $0 == " " || $0 == "\t" }
+        let rest = s.dropFirst(indent.count)
+        guard let first = rest.first else { return nil }
+
+        // Unordered: - * + •
+        if "-*+•".contains(first) {
+            let afterMarker = rest.dropFirst()
+            guard afterMarker.first == " " else { return nil }
+            let prefix = "\(first) "
+            return ListMarker(indent: String(indent),
+                              body: String(afterMarker.dropFirst()),
+                              existingPrefix: prefix,
+                              nextPrefix: prefix)
+        }
+
+        // Ordered: digits followed by . or )
+        let digits = rest.prefix { $0.isNumber }
+        if !digits.isEmpty {
+            let afterDigits = rest.dropFirst(digits.count)
+            guard let sep = afterDigits.first, sep == "." || sep == ")" else { return nil }
+            let afterSep = afterDigits.dropFirst()
+            guard afterSep.first == " " else { return nil }
+            let next = (Int(digits) ?? 0) + 1
+            return ListMarker(indent: String(indent),
+                              body: String(afterSep.dropFirst()),
+                              existingPrefix: "\(digits)\(sep) ",
+                              nextPrefix: "\(next)\(sep) ")
+        }
+
+        return nil
+    }
+
+    /// On Return in insert mode, continue or terminate a list item. Returns true if handled.
+    private func handleSmartListReturn() -> Bool {
+        guard smartLists else { return false }
+        let sel = selectedRange()
+        guard sel.length == 0 else { return false }
+
+        let ns = string as NSString
+        let pos = sel.location
+        let lineRange = ns.lineRange(for: NSRange(location: min(pos, ns.length), length: 0))
+        let line = ns.substring(with: lineRange)
+        guard let marker = parseListMarker(line) else { return false }
+
+        // Only act when the cursor sits at the end of the line's content.
+        var contentEnd = lineRange.location + lineRange.length
+        if contentEnd > lineRange.location,
+           ns.substring(with: NSRange(location: contentEnd - 1, length: 1)) == "\n" {
+            contentEnd -= 1
+        }
+        guard pos == contentEnd else { return false }
+
+        // Empty item → terminate the list by clearing the marker.
+        if marker.body.trimmingCharacters(in: .whitespaces).isEmpty {
+            let clearRange = NSRange(location: lineRange.location,
+                                     length: contentEnd - lineRange.location)
+            if shouldChangeText(in: clearRange, replacementString: "") {
+                textStorage?.replaceCharacters(in: clearRange, with: "")
+                didChangeText()
+            }
+            setSelectedRange(NSRange(location: lineRange.location, length: 0))
+            return true
+        }
+
+        // Non-empty item → start the next item.
+        insertText("\n" + marker.indent + marker.nextPrefix,
+                   replacementRange: NSRange(location: pos, length: 0))
+        return true
+    }
+
+    /// On Tab / Shift-Tab in insert mode, indent or outdent the current list item
+    /// by one level (4 spaces). Returns true if handled.
+    private func handleSmartListTab(outdent: Bool) -> Bool {
+        let sel = selectedRange()
+        guard sel.length == 0 else { return false }
+
+        let ns = string as NSString
+        let pos = sel.location
+        let lineRange = ns.lineRange(for: NSRange(location: min(pos, ns.length), length: 0))
+        let line = ns.substring(with: lineRange)
+        guard parseListMarker(line) != nil else { return false }
+
+        let indentUnit = "    "
+
+        if outdent {
+            var removeLen = 0
+            if line.hasPrefix("\t") {
+                removeLen = 1
+            } else {
+                removeLen = min(indentUnit.count, line.prefix { $0 == " " }.count)
+            }
+            guard removeLen > 0 else { return true }
+            let removeRange = NSRange(location: lineRange.location, length: removeLen)
+            if shouldChangeText(in: removeRange, replacementString: "") {
+                textStorage?.replaceCharacters(in: removeRange, with: "")
+                didChangeText()
+            }
+            setSelectedRange(NSRange(location: max(lineRange.location, pos - removeLen), length: 0))
+            return true
+        }
+
+        insertText(indentUnit, replacementRange: NSRange(location: lineRange.location, length: 0))
+        setSelectedRange(NSRange(location: pos + indentUnit.count, length: 0))
+        return true
     }
 
     override func mouseDown(with event: NSEvent) {

@@ -16,6 +16,7 @@ struct NoteEditorView: View {
     @AppStorage("showLineNumbers") private var showLineNumbers: Bool = false
     @AppStorage("useMonospacedFont") private var useMonospacedFont: Bool = false
     @AppStorage("editorPaperStyle") private var paperStyle: String = "plain"
+    @AppStorage("smartLists") private var smartLists: Bool = true
     @EnvironmentObject private var themeManager: ThemeManager
 
     private var theme: AppTheme { themeManager.theme }
@@ -114,6 +115,7 @@ struct NoteEditorView: View {
                 Divider()
                 Toggle("Monospaced Font", isOn: $useMonospacedFont)
                 Toggle("Line Numbers", isOn: $showLineNumbers)
+                Toggle("Smart Lists", isOn: $smartLists)
                 Divider()
                 Menu("Paper Style") {
                     Picker("Paper Style", selection: $paperStyle) {
@@ -244,7 +246,8 @@ struct NoteEditorView: View {
             backgroundColor: .clear,
             textColor: theme.textNS,
             accentColor: theme.accentNS,
-            paperStyle: paperStyle
+            paperStyle: paperStyle,
+            smartLists: smartLists
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(editorPaperFill)
