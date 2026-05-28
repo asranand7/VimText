@@ -11,11 +11,17 @@ struct NoteEditorView: View {
     @State private var hasLoaded = false
     @State private var startInInsertMode = false
     @FocusState private var isFindFieldFocused: Bool
-    @AppStorage("editorFontSize") private var fontSize: Double = 15
+    @AppStorage("editorFontSize") private var fontSize: Double = 16
     @AppStorage("showLineNumbers") private var showLineNumbers: Bool = false
+    @AppStorage("useMonospacedFont") private var useMonospacedFont: Bool = false
+    @EnvironmentObject private var themeManager: ThemeManager
+
+    private var theme: AppTheme { themeManager.theme }
 
     private var editorFont: NSFont {
-        NSFont.monospacedSystemFont(ofSize: CGFloat(fontSize), weight: .regular)
+        useMonospacedFont
+            ? NSFont.monospacedSystemFont(ofSize: CGFloat(fontSize), weight: .regular)
+            : NSFont.systemFont(ofSize: CGFloat(fontSize))
     }
 
     private var note: Note? {
@@ -25,7 +31,18 @@ struct NoteEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .top) {
-                editorArea
+                VStack(spacing: 0) {
+                    if let note = note {
+                        Text(formatDate(note.modifiedAt))
+                            .font(.caption)
+                            .foregroundStyle(theme.secondaryText)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 12)
+                            .padding(.bottom, 2)
+                            .background(theme.editorBackground)
+                    }
+                    editorArea
+                }
                 if findController.isVisible {
                     findBar
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -37,6 +54,8 @@ struct NoteEditorView: View {
             }
             statusBar
         }
+        .background(theme.editorBackground)
+        .animation(.easeInOut(duration: 0.28), value: theme.id)
         .onAppear {
             loadNote()
             findController.installKeyMonitor()
@@ -66,7 +85,10 @@ struct NoteEditorView: View {
             findController: findController,
             onSave: { saveCurrentNote() },
             font: editorFont,
-            startInInsertMode: startInInsertMode
+            startInInsertMode: startInInsertMode,
+            backgroundColor: theme.editorBackgroundNS,
+            textColor: theme.textNS,
+            accentColor: theme.accentNS
         )
         .onChange(of: content) { _, newValue in
             let newTitle = extractTitle(from: newValue)
@@ -87,6 +109,7 @@ struct NoteEditorView: View {
             TextField("Find in note…", text: $findController.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
+                .frame(width: 190)
                 .focused($isFindFieldFocused)
                 .onSubmit {
                     findController.findNext?()
@@ -136,13 +159,15 @@ struct NoteEditorView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.regularMaterial)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            Rectangle()
-                .frame(height: 0.5)
-                .foregroundStyle(Color(nsColor: .separatorColor)),
-            alignment: .bottom
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(theme.separator.opacity(0.6), lineWidth: 0.5)
         )
+        .shadow(color: .black.opacity(0.18), radius: 14, y: 5)
+        .padding(.top, 10)
+        .padding(.trailing, 14)
+        .frame(maxWidth: .infinity, alignment: .trailing)
     }
 
     private func closeFindBar() {
@@ -168,7 +193,7 @@ struct NoteEditorView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(theme.surface)
     }
 
     private var statusBar: some View {
@@ -178,45 +203,73 @@ struct NoteEditorView: View {
             if !vimEngine.statusMessage.isEmpty {
                 Text(vimEngine.statusMessage)
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.secondaryText)
             }
 
             Spacer()
 
-            if let note = note {
-                Text(formatDate(note.modifiedAt))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-
             Text(cursorInfo)
                 .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.secondaryText)
+
+            themeMenu
 
             Menu {
                 fontSizeMenu
                 Divider()
+                Toggle("Monospaced Font", isOn: $useMonospacedFont)
                 Toggle("Line Numbers", isOn: $showLineNumbers)
             } label: {
                 Image(systemName: "textformat.size")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(theme.secondaryText)
             }
             .menuStyle(.borderlessButton)
             .frame(width: 24)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.8))
+        .background(theme.surface)
+        .overlay(
+            Rectangle()
+                .frame(height: 0.5)
+                .foregroundStyle(theme.separator),
+            alignment: .top
+        )
+    }
+
+    private var themeMenu: some View {
+        Menu {
+            ForEach(AppTheme.all) { item in
+                Button {
+                    themeManager.themeID = item.id
+                } label: {
+                    if themeManager.themeID == item.id {
+                        Label(item.name, systemImage: "checkmark")
+                    } else {
+                        Text(item.name)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "paintpalette")
+                .font(.caption)
+                .foregroundStyle(theme.secondaryText)
+        }
+        .menuStyle(.borderlessButton)
+        .frame(width: 24)
+        .help("Theme")
     }
 
     private var modeIndicator: some View {
         Text(vimEngine.mode.displayName)
-            .font(.system(.caption, design: .monospaced).bold())
+            .font(.system(.caption, design: .rounded).weight(.bold))
             .foregroundStyle(.white)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .background(modeColor, in: RoundedRectangle(cornerRadius: 4))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background(modeColor.gradient, in: Capsule())
+            .shadow(color: modeColor.opacity(0.35), radius: 3, y: 1)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: vimEngine.mode)
     }
 
     private var modeColor: Color {

@@ -2,6 +2,9 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var viewModel = NotesViewModel()
+    @StateObject private var themeManager = ThemeManager()
+
+    private var theme: AppTheme { themeManager.theme }
 
     var body: some View {
         NavigationSplitView {
@@ -16,17 +19,21 @@ struct ContentView: View {
                 VStack(spacing: 12) {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 48, weight: .ultraLight))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(theme.secondaryText.opacity(0.6))
                     Text("Select or create a note")
                         .font(.title3)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(theme.secondaryText)
                     Text("⌘N to create a new note")
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(theme.secondaryText.opacity(0.7))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(theme.editorBackground)
             }
         }
+        .environmentObject(themeManager)
+        .preferredColorScheme(theme.colorScheme)
+        .tint(theme.accent)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button(action: { viewModel.createNote() }) {

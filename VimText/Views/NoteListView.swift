@@ -2,6 +2,7 @@ import SwiftUI
 
 struct NoteListView: View {
     @ObservedObject var viewModel: NotesViewModel
+    @EnvironmentObject private var themeManager: ThemeManager
     @State private var selectedNoteIds: Set<UUID> = []
     @State private var isSelectionMode = false
     @State private var showDeleteAllConfirm = false
@@ -13,11 +14,61 @@ struct NoteListView: View {
         !viewModel.filteredNotes.isEmpty && selectedNoteIds.count == viewModel.filteredNotes.count
     }
 
+    private var theme: AppTheme { themeManager.theme }
+
+    private var glassBackground: some View {
+        ZStack {
+            VisualEffectView(material: .sidebar)
+            theme.surface.opacity(0.45)
+        }
+        .ignoresSafeArea()
+    }
+
+    private func folderName(for note: Note) -> String {
+        if let id = note.folderId, let folder = viewModel.folders.first(where: { $0.id == id }) {
+            return folder.name
+        }
+        return "Notes"
+    }
+
+    private func dateGroup(_ date: Date) -> (order: Int, title: String) {
+        let cal = Calendar.current
+        let now = Date()
+        if cal.isDateInToday(date) { return (0, "Today") }
+        if cal.isDateInYesterday(date) { return (1, "Yesterday") }
+        if let d7 = cal.date(byAdding: .day, value: -7, to: now), date > d7 { return (2, "Previous 7 Days") }
+        if let d30 = cal.date(byAdding: .day, value: -30, to: now), date > d30 { return (3, "Previous 30 Days") }
+        let comps = cal.dateComponents([.year, .month], from: date)
+        let df = DateFormatter()
+        df.dateFormat = comps.year == cal.component(.year, from: now) ? "MMMM" : "MMMM yyyy"
+        let ym = (comps.year ?? 0) * 12 + (comps.month ?? 0)
+        return (10_000_000 - ym, df.string(from: date))
+    }
+
+    private func dateSections(_ notes: [Note]) -> [(title: String, notes: [Note])] {
+        var groups: [Int: (String, [Note])] = [:]
+        var orderSeen: [Int] = []
+        for note in notes {
+            let key = dateGroup(note.modifiedAt)
+            if groups[key.order] == nil { groups[key.order] = (key.title, []); orderSeen.append(key.order) }
+            groups[key.order]?.1.append(note)
+        }
+        return orderSeen.sorted().map { (groups[$0]!.0, groups[$0]!.1) }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(.subheadline, design: .rounded).weight(.bold))
+            .foregroundStyle(theme.text)
+            .textCase(nil)
+            .padding(.top, 6)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(theme.secondaryText)
                     .font(.caption)
                 SearchField(
                     text: $viewModel.searchText,
@@ -40,11 +91,16 @@ struct NoteListView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial)
-
-            Divider()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(theme.text.opacity(0.07), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(theme.separator.opacity(0.5), lineWidth: 0.5)
+            )
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
 
             if isSelectionMode {
                 HStack(spacing: 8) {
@@ -109,14 +165,23 @@ struct NoteListView: View {
                     }
 
                     if !unpinned.isEmpty {
-                        Section(pinned.isEmpty ? "" : "Notes") {
+                        if pinned.isEmpty {
                             ForEach(unpinned) { note in
                                 selectableNoteRow(note: note)
+                            }
+                        } else {
+                            Section("Notes") {
+                                ForEach(unpinned) { note in
+                                    selectableNoteRow(note: note)
+                                }
                             }
                         }
                     }
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .listRowSeparator(.hidden)
+                .background(Color.clear)
             } else {
                 notesList
             }
@@ -165,6 +230,8 @@ struct NoteListView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
+        .background(glassBackground)
+        .animation(.easeInOut(duration: 0.28), value: theme.id)
         .confirmationDialog(
             "Delete All Notes?",
             isPresented: $showDeleteAllConfirm,
@@ -212,28 +279,35 @@ struct NoteListView: View {
 
         ScrollViewReader { proxy in
             List(selection: isSearching ? nil : $viewModel.selectedNoteId) {
-                let pinned = notes.filter { $0.isPinned }
-                let unpinned = notes.filter { !$0.isPinned }
-
-                if !pinned.isEmpty {
-                    Section("Pinned") {
-                        ForEach(Array(pinned.enumerated()), id: \.element.id) { idx, note in
-                            let flatIdx = idx
-                            noteRow(note: note, flatIndex: flatIdx, isSearching: isSearching)
-                        }
+                if isSearching {
+                    ForEach(Array(notes.enumerated()), id: \.element.id) { idx, note in
+                        noteRow(note: note, flatIndex: idx, isSearching: true)
                     }
-                }
+                } else {
+                    let pinned = notes.filter { $0.isPinned }
+                    let unpinned = notes.filter { !$0.isPinned }
 
-                if !unpinned.isEmpty {
-                    Section(pinned.isEmpty ? "" : "Notes") {
-                        ForEach(Array(unpinned.enumerated()), id: \.element.id) { idx, note in
-                            let flatIdx = pinned.count + idx
-                            noteRow(note: note, flatIndex: flatIdx, isSearching: isSearching)
-                        }
+                    if !pinned.isEmpty {
+                        Section {
+                            ForEach(pinned) { note in
+                                noteRow(note: note, flatIndex: 0, isSearching: false)
+                            }
+                        } header: { sectionHeader("Pinned") }
+                    }
+
+                    ForEach(dateSections(unpinned), id: \.title) { section in
+                        Section {
+                            ForEach(section.notes) { note in
+                                noteRow(note: note, flatIndex: 0, isSearching: false)
+                            }
+                        } header: { sectionHeader(section.title) }
                     }
                 }
             }
             .listStyle(.inset)
+            .scrollContentBackground(.hidden)
+            .listRowSeparator(.hidden)
+            .background(Color.clear)
             .onChange(of: highlightedIndex) {
                 if let idx = highlightedIndex, idx < notes.count {
                     proxy.scrollTo(notes[idx].id, anchor: .center)
@@ -246,13 +320,16 @@ struct NoteListView: View {
     private func noteRow(note: Note, flatIndex: Int, isSearching: Bool) -> some View {
         let isHighlighted = isSearching && highlightedIndex == flatIndex
 
-        NoteRowView(note: note)
+        let isSelected = !isSearching && viewModel.selectedNoteId == note.id
+
+        NoteRowView(note: note, folderName: folderName(for: note))
             .id(note.id)
             .tag(note.id)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
             .listRowBackground(
-                isHighlighted
-                    ? Color.accentColor.opacity(0.2)
-                    : (viewModel.selectedNoteId == note.id ? Color.accentColor.opacity(0.1) : Color.clear)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isHighlighted || isSelected ? theme.accent.opacity(isHighlighted ? 0.30 : 0.20) : Color.clear)
             )
             .contentShape(Rectangle())
             .onTapGesture {
@@ -306,8 +383,10 @@ struct NoteListView: View {
                 .foregroundStyle(selectedNoteIds.contains(note.id) ? Color.blue : Color.gray.opacity(0.4))
                 .font(.title3)
 
-            NoteRowView(note: note)
+            NoteRowView(note: note, folderName: folderName(for: note))
         }
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
         .contentShape(Rectangle())
         .onTapGesture {
             if selectedNoteIds.contains(note.id) {

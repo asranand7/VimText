@@ -69,9 +69,27 @@ struct VimTextView: NSViewRepresentable {
     var onSave: (() -> Void)?
     var font: NSFont
     var startInInsertMode: Bool = false
+    var backgroundColor: NSColor = .textBackgroundColor
+    var textColor: NSColor = .labelColor
+    var accentColor: NSColor = .systemOrange
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
+    }
+
+    static func paragraphStyle() -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 5
+        style.paragraphSpacing = 6
+        return style
+    }
+
+    var themeKey: String {
+        func component(_ color: NSColor) -> String {
+            let c = color.usingColorSpace(.sRGB) ?? color
+            return String(format: "%.3f,%.3f,%.3f", c.redComponent, c.greenComponent, c.blueComponent)
+        }
+        return [backgroundColor, textColor, accentColor].map(component).joined(separator: "|")
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -87,7 +105,7 @@ struct VimTextView: NSViewRepresentable {
         textView.isSelectable = true
         textView.allowsUndo = true
         textView.isRichText = true
-        textView.backgroundColor = NSColor.textBackgroundColor
+        textView.backgroundColor = backgroundColor
         textView.drawsBackground = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -96,7 +114,10 @@ struct VimTextView: NSViewRepresentable {
         textView.isContinuousSpellCheckingEnabled = false
         textView.isAutomaticTextCompletionEnabled = false
         textView.isAutomaticLinkDetectionEnabled = false
-        textView.textContainerInset = NSSize(width: 16, height: 16)
+        textView.textContainerInset = NSSize(width: 28, height: 24)
+        textView.selectedTextAttributes = [
+            .backgroundColor: accentColor.withAlphaComponent(0.28)
+        ]
 
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -106,12 +127,14 @@ struct VimTextView: NSViewRepresentable {
         textView.textContainer?.containerSize = NSSize(width: scrollView.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
 
-        textView.insertionPointColor = NSColor.systemOrange
+        textView.insertionPointColor = accentColor
+        textView.accentColor = accentColor
 
         // Set default typing attributes for rich text
         let defaultAttrs: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: NSColor.labelColor
+            .foregroundColor: textColor,
+            .paragraphStyle: Self.paragraphStyle()
         ]
         textView.typingAttributes = defaultAttrs
 
@@ -124,6 +147,8 @@ struct VimTextView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.scrollView = scrollView
         context.coordinator.lastFontSize = font.pointSize
+        context.coordinator.lastFontName = font.fontName
+        context.coordinator.lastThemeKey = themeKey
         context.coordinator.setupFindController()
 
         // Load rich text content or fall back to plain text
@@ -133,6 +158,8 @@ struct VimTextView: NSViewRepresentable {
             let attrStr = NSAttributedString(string: text, attributes: defaultAttrs)
             textView.textStorage?.setAttributedString(attrStr)
         }
+
+        textView.applyBaseFont(font)
 
         let isInsert = vimEngine.mode.isEditing || startInInsertMode
         textView.updateCursorAppearance(isBlock: !isInsert)
@@ -160,10 +187,32 @@ struct VimTextView: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
         }
 
-        // Update font size across the document when it changes (preserving bold/italic)
-        if context.coordinator.lastFontSize != font.pointSize {
+        // Re-apply base font/size across the document when it changes (preserving bold/italic)
+        if context.coordinator.lastFontSize != font.pointSize || context.coordinator.lastFontName != font.fontName {
             context.coordinator.lastFontSize = font.pointSize
-            textView.updateFontSize(font.pointSize)
+            context.coordinator.lastFontName = font.fontName
+            textView.applyBaseFont(font)
+            var attrs = textView.typingAttributes
+            attrs[.font] = font
+            textView.typingAttributes = attrs
+        }
+
+        if context.coordinator.lastThemeKey != themeKey {
+            context.coordinator.lastThemeKey = themeKey
+            textView.backgroundColor = backgroundColor
+            textView.insertionPointColor = accentColor
+            textView.accentColor = accentColor
+            textView.selectedTextAttributes = [
+                .backgroundColor: accentColor.withAlphaComponent(0.28)
+            ]
+            if let textStorage = textView.textStorage, textStorage.length > 0 {
+                textStorage.addAttribute(.foregroundColor, value: textColor,
+                                         range: NSRange(location: 0, length: textStorage.length))
+            }
+            var attrs = textView.typingAttributes
+            attrs[.foregroundColor] = textColor
+            textView.typingAttributes = attrs
+            textView.needsDisplay = true
         }
 
         textView.updateCursorAppearance(isBlock: !vimEngine.mode.isEditing)
@@ -192,6 +241,8 @@ struct VimTextView: NSViewRepresentable {
         var insertModeStartPos: Int = 0
         var isReplayingDot: Bool = false
         var lastFontSize: CGFloat = 0
+        var lastFontName: String = ""
+        var lastThemeKey: String = ""
         private var findMatchRanges: [NSRange] = []
         private var currentFindIndex: Int = -1
 
@@ -1827,6 +1878,7 @@ struct VimTextView: NSViewRepresentable {
 class VimNSTextView: NSTextView {
     var vimEngine: VimEngine?
     weak var coordinator: VimTextView.Coordinator?
+    var accentColor: NSColor = .systemOrange
     private var blockCursorLayer: CALayer?
     var visualCursorOverride: Int? = nil
     private var searchHighlightLayers: [CALayer] = []
@@ -1988,6 +2040,27 @@ class VimNSTextView: NSTextView {
         }
         coordinator?.formattingDidChange()
         vimEngine?.statusMessage = range.length > 0 ? "Underline toggled" : "Underline mode toggled"
+    }
+
+    func applyBaseFont(_ baseFont: NSFont) {
+        guard let textStorage = textStorage else { return }
+        let fullRange = NSRange(location: 0, length: textStorage.length)
+        guard fullRange.length > 0 else { return }
+        let fontManager = NSFontManager.shared
+        textStorage.beginEditing()
+        textStorage.addAttribute(.paragraphStyle, value: VimTextView.paragraphStyle(), range: fullRange)
+        textStorage.enumerateAttribute(.font, in: fullRange, options: []) { value, range, _ in
+            let existingTraits = (value as? NSFont).map { fontManager.traits(of: $0) } ?? NSFontTraitMask()
+            var newFont = baseFont
+            if existingTraits.contains(.boldFontMask) {
+                newFont = fontManager.convert(newFont, toHaveTrait: .boldFontMask)
+            }
+            if existingTraits.contains(.italicFontMask) {
+                newFont = fontManager.convert(newFont, toHaveTrait: .italicFontMask)
+            }
+            textStorage.addAttribute(.font, value: newFont, range: range)
+        }
+        textStorage.endEditing()
     }
 
     func updateFontSize(_ newSize: CGFloat) {
@@ -2204,7 +2277,7 @@ class VimNSTextView: NSTextView {
         } else {
             blockCursorLayer?.removeFromSuperlayer()
             blockCursorLayer = nil
-            insertionPointColor = .systemOrange
+            insertionPointColor = accentColor
             setNeedsDisplay(bounds)
         }
     }
@@ -2230,7 +2303,7 @@ class VimNSTextView: NSTextView {
             } else {
                 let layer = CALayer()
                 layer.frame = NSRect(x: textContainerOrigin.x, y: textContainerOrigin.y, width: 8, height: font?.pointSize ?? 15)
-                layer.backgroundColor = NSColor.systemOrange.withAlphaComponent(0.4).cgColor
+                layer.backgroundColor = accentColor.withAlphaComponent(0.4).cgColor
                 layer.cornerRadius = 1
                 self.wantsLayer = true
                 self.layer?.addSublayer(layer)
@@ -2251,8 +2324,8 @@ class VimNSTextView: NSTextView {
             }
 
             let cursorColor: NSColor = isVisual
-                ? NSColor.systemOrange.withAlphaComponent(0.7)
-                : NSColor.systemOrange.withAlphaComponent(0.4)
+                ? accentColor.withAlphaComponent(0.7)
+                : accentColor.withAlphaComponent(0.4)
 
             let layer = CALayer()
             layer.frame = rect
@@ -2279,6 +2352,19 @@ class VimNSTextView: NSTextView {
         if let engine = vimEngine, !engine.mode.isEditing {
             DispatchQueue.main.async { [weak self] in
                 self?.drawBlockCursor()
+            }
+        }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        let maxContentWidth: CGFloat = 720
+        let minInset: CGFloat = 28
+        let horizontal = max(minInset, (newSize.width - maxContentWidth) / 2)
+        if abs(textContainerInset.width - horizontal) > 0.5 {
+            textContainerInset = NSSize(width: horizontal, height: textContainerInset.height)
+            if let engine = vimEngine, !engine.mode.isEditing {
+                DispatchQueue.main.async { [weak self] in self?.updateCursorAppearance(isBlock: true) }
             }
         }
     }
