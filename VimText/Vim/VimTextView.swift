@@ -117,7 +117,7 @@ struct VimTextView: NSViewRepresentable {
         textView.isContinuousSpellCheckingEnabled = false
         textView.isAutomaticTextCompletionEnabled = false
         textView.isAutomaticLinkDetectionEnabled = false
-        textView.textContainerInset = NSSize(width: 34, height: 30)
+        textView.textContainerInset = NSSize(width: 34, height: 20)
         textView.selectedTextAttributes = [
             .backgroundColor: accentColor.withAlphaComponent(0.28)
         ]

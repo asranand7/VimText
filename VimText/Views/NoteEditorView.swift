@@ -55,71 +55,86 @@ struct NoteEditorView: View {
 
             if let note = note {
                 Text(relativeTimeString(for: note.modifiedAt))
-                    .font(.system(.subheadline, design: .default).weight(.medium))
-                    .foregroundStyle(theme.secondaryText.opacity(0.8))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.secondaryText.opacity(0.55))
             }
 
             Spacer()
 
-            HStack(spacing: 12) {
-                Button(action: {
-                    if let note = note {
-                        withAnimation(DS.snappy) {
-                            viewModel.togglePin(note)
+            HStack(spacing: 8) {
+                // Actions Pill: Pin, Delete, Theme
+                HStack(spacing: 6) {
+                    Button(action: {
+                        if let note = note {
+                            withAnimation(DS.snappy) {
+                                viewModel.togglePin(note)
+                            }
                         }
+                    }) {
+                        Image(systemName: note?.isPinned == true ? "pin.fill" : "pin")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(note?.isPinned == true ? theme.accent : theme.secondaryText)
                     }
-                }) {
-                    Image(systemName: note?.isPinned == true ? "pin.fill" : "pin")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(note?.isPinned == true ? theme.accent : theme.secondaryText)
+                    .buttonStyle(ToolbarButtonStyle())
+                    .help(note?.isPinned == true ? "Unpin Note" : "Pin Note")
+
+                    Button(action: {
+                        showDeleteConfirm = true
+                    }) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(theme.secondaryText)
+                    }
+                    .buttonStyle(ToolbarButtonStyle())
+                    .help("Delete Note")
+
+                    themeMenu
                 }
-                .buttonStyle(ToolbarButtonStyle())
-                .help(note?.isPinned == true ? "Unpin Note" : "Pin Note")
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.regularMaterial)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5)
+                )
+                .shadow(color: Color.black.opacity(theme.isDark ? 0.16 : 0.04), radius: 4, y: 1.5)
 
-                Button(action: {
-                    showDeleteConfirm = true
-                }) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(theme.secondaryText)
-                }
-                .buttonStyle(ToolbarButtonStyle())
-                .help("Delete Note")
-
-                themeMenu
-
-                Menu {
-                    fontSizeMenu
-                    Divider()
-                    Toggle("Monospaced Font", isOn: $useMonospacedFont)
-                    Toggle("Line Numbers", isOn: $showLineNumbers)
-                    Divider()
-                    Menu("Paper Style") {
-                        Picker("Paper Style", selection: $paperStyle) {
-                            Text("Plain").tag("plain")
-                            Text("Dotted Grid").tag("dotted")
-                            Text("Lined Paper").tag("lined")
+                // Formatting Pill: Aa
+                HStack(spacing: 6) {
+                    Menu {
+                        fontSizeMenu
+                        Divider()
+                        Toggle("Monospaced Font", isOn: $useMonospacedFont)
+                        Toggle("Line Numbers", isOn: $showLineNumbers)
+                        Divider()
+                        Menu("Paper Style") {
+                            Picker("Paper Style", selection: $paperStyle) {
+                                Text("Plain").tag("plain")
+                                Text("Dotted Grid").tag("dotted")
+                                Text("Lined Paper").tag("lined")
+                            }
+                            .pickerStyle(.inline)
                         }
-                        .pickerStyle(.inline)
+                    } label: {
+                        ToolbarMenuLabel(iconName: "textformat.size", theme: theme)
                     }
-                } label: {
-                    ToolbarMenuLabel(iconName: "textformat.size", theme: theme)
+                    .menuStyle(.borderlessButton)
+                    .help("Font Settings")
                 }
-                .menuStyle(.borderlessButton)
-                .help("Font Settings")
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(.regularMaterial)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5)
+                )
+                .shadow(color: Color.black.opacity(theme.isDark ? 0.16 : 0.04), radius: 4, y: 1.5)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(.regularMaterial)
-            .clipShape(Capsule())
-            .overlay(
-                Capsule()
-                    .strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5)
-            )
-            .shadow(color: Color.black.opacity(theme.isDark ? 0.16 : 0.04), radius: 4, y: 1.5)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 8)
         .background(editorPaperFill)
     }
 
@@ -221,7 +236,8 @@ struct NoteEditorView: View {
             accentColor: theme.accentNS,
             paperStyle: paperStyle
         )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: 920, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(editorPaperFill)
         .onChange(of: content) { _, newValue in
             let newTitle = extractTitle(from: newValue)

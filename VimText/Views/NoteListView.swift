@@ -26,6 +26,24 @@ struct NoteListView: View {
         !viewModel.filteredNotes.isEmpty && selectedNoteIds.count == viewModel.filteredNotes.count
     }
 
+    private var searchBarFill: Color {
+        if theme.isDark {
+            return isSearchHovered ? Color.white.opacity(0.09) : Color.white.opacity(0.06)
+        } else {
+            return isSearchHovered ? Color.white.opacity(0.48) : Color.white.opacity(0.38)
+        }
+    }
+
+    private var searchBarStroke: Color {
+        if isSearchFocused {
+            return themeManager.sidebarTint.opacity(0.50)
+        } else if isSearchHovered {
+            return Color.primary.opacity(0.14)
+        } else {
+            return Color.primary.opacity(0.08)
+        }
+    }
+
     private var theme: AppTheme { themeManager.theme }
 
     private var glassBackground: some View {
@@ -177,15 +195,24 @@ struct NoteListView: View {
                         }
                         .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
                     } else {
-                        Text("⌘K")
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .foregroundStyle(theme.secondaryText.opacity(0.62))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(theme.text.opacity(theme.isDark ? 0.10 : 0.055))
-                            )
+                        HStack(spacing: 1.5) {
+                            Text("⌘")
+                                .font(.system(size: 9, weight: .medium))
+                            Text("K")
+                                .font(.system(size: 9.5, weight: .semibold))
+                        }
+                        .foregroundStyle(theme.secondaryText.opacity(0.75))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+                                .fill(theme.isDark ? Color.white.opacity(0.08) : Color.white.opacity(0.68))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(theme.isDark ? 0.15 : 0.08), lineWidth: 0.5)
+                        )
+                        .shadow(color: Color.black.opacity(theme.isDark ? 0.22 : 0.06), radius: 0.5, y: 0.8)
                     }
                 }
                 .padding(.horizontal, 12)
@@ -193,23 +220,18 @@ struct NoteListView: View {
                 .frame(minHeight: 36)
                 .background(
                     Capsule()
-                        .fill(theme.isDark
-                              ? (isSearchHovered ? Color.white.opacity(0.09) : Color.white.opacity(0.06))
-                              : (isSearchHovered ? Color.white.opacity(0.48) : Color.white.opacity(0.38)))
+                        .fill(searchBarFill)
                 )
                 .overlay(
                     Capsule()
-                        .strokeBorder(
-                            isSearchFocused ? themeManager.sidebarTint.opacity(0.58) : Color.primary.opacity(0.06),
-                            lineWidth: isSearchFocused ? 1.2 : 0.5
-                        )
+                        .strokeBorder(searchBarStroke, lineWidth: isSearchFocused ? 1.0 : 0.5)
                 )
                 .shadow(
-                    color: themeManager.sidebarTint.opacity(isSearchFocused ? 0.16 : 0),
-                    radius: isSearchFocused ? 10 : 0,
-                    y: isSearchFocused ? 3 : 0
+                    color: themeManager.sidebarTint.opacity(isSearchFocused ? 0.10 : 0),
+                    radius: isSearchFocused ? 6 : 0,
+                    y: isSearchFocused ? 1.5 : 0
                 )
-                .scaleEffect(isSearchFocused ? 1.012 : 1, anchor: .center)
+                .scaleEffect(isSearchFocused ? 1.01 : 1, anchor: .center)
                 .animation(DS.snappy, value: isSearchFocused)
                 .onHover { hovering in
                     withAnimation(DS.snappy) {
@@ -505,10 +527,10 @@ struct NoteListView: View {
         let rowStroke = noteRowStroke(isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
         
         let rowShadowOpacity = isSelected
-            ? (theme.isDark ? 0.28 : 0.08)
-            : (isHovered ? (theme.isDark ? 0.20 : 0.05) : 0)
-        let rowShadowRadius: CGFloat = isSelected ? 8 : (isHovered ? 6 : 0)
-        let rowShadowY: CGFloat = isSelected ? 4 : (isHovered ? 2.5 : 0)
+            ? (theme.isDark ? 0.18 : 0.05)
+            : (isHovered ? (theme.isDark ? 0.12 : 0.03) : 0)
+        let rowShadowRadius: CGFloat = isSelected ? 6 : (isHovered ? 4 : 0)
+        let rowShadowY: CGFloat = isSelected ? 2 : (isHovered ? 1.5 : 0)
         let rowScale: CGFloat = isSelected ? 1.01 : (isHovered ? 1.005 : 1.0)
         let rowOffset: CGFloat = isHovered && !isSelected ? -1.0 : 0
 
@@ -529,6 +551,10 @@ struct NoteListView: View {
                             .fill(rowFill)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .fill(theme.isDark ? Color.white.opacity(0.03) : Color.clear)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
                                     .strokeBorder(rowStroke, lineWidth: 0.5)
                             )
                             .matchedGeometryEffect(id: "selectedCard", in: sidebarNamespace)
@@ -546,7 +572,7 @@ struct NoteListView: View {
                 if isSelected {
                     Capsule()
                         .fill(tint)
-                        .frame(width: 3.5, height: 24)
+                        .frame(width: 3.0, height: 32)
                         .matchedGeometryEffect(id: "selectedIndicator", in: sidebarNamespace)
                         .padding(.leading, 5.5)
                 }
@@ -614,14 +640,18 @@ struct NoteListView: View {
     }
 
     private func noteRowFill(isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
-        if isSelected { return tint.opacity(theme.isMonochrome ? (theme.isDark ? 0.08 : 0.045) : (theme.isDark ? 0.12 : 0.06)) }
+        if isSelected {
+            return theme.isDark
+                ? tint.opacity(theme.isMonochrome ? 0.11 : 0.15)
+                : tint.opacity(theme.isMonochrome ? 0.05 : 0.08)
+        }
         if isHighlighted { return tint.opacity(theme.isDark ? 0.10 : 0.07) }
-        if isHovered { return theme.isDark ? Color.white.opacity(0.06) : Color.white.opacity(0.46) }
+        if isHovered { return theme.isDark ? Color.white.opacity(0.07) : Color.white.opacity(0.52) }
         return Color.clear
     }
 
     private func noteRowStroke(isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
-        if isSelected { return tint.opacity(theme.isMonochrome ? (theme.isDark ? 0.16 : 0.10) : (theme.isDark ? 0.22 : 0.12)) }
+        if isSelected { return tint.opacity(theme.isMonochrome ? (theme.isDark ? 0.20 : 0.12) : (theme.isDark ? 0.26 : 0.14)) }
         if isHighlighted { return tint.opacity(0.14) }
         if isHovered { return Color.primary.opacity(0.06) }
         return Color.clear

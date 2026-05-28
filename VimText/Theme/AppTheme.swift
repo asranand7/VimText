@@ -176,7 +176,7 @@ enum DS {
     /// Primary spring for selection, panel and content transitions. Fast, settled, understated.
     static let spring = Animation.spring(response: 0.22, dampingFraction: 0.82)
     /// Snappier spring for hover / press microinteractions.
-    static let snappy = Animation.spring(response: 0.24, dampingFraction: 0.8)
+    static let snappy = Animation.spring(response: 0.15, dampingFraction: 0.85)
     /// Crossfade used for content / page-state changes.
     static let crossfade = Animation.easeInOut(duration: 0.22)
 
