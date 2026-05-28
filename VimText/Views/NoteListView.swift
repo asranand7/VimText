@@ -3,6 +3,7 @@ import SwiftUI
 struct NoteListView: View {
     @ObservedObject var viewModel: NotesViewModel
     @EnvironmentObject private var themeManager: ThemeManager
+    @Namespace private var sidebarNamespace
     @State private var selectedNoteIds: Set<UUID> = []
     @State private var isSelectionMode = false
     @State private var showDeleteAllConfirm = false
@@ -12,6 +13,7 @@ struct NoteListView: View {
     @State private var hoveredNoteId: UUID? = nil
     @State private var showSidebarColorPicker = false
     @State private var isSearchFocused = false
+    @State private var isSearchHovered = false
 
     private var sidebarTintBinding: Binding<Color> {
         Binding(
@@ -191,7 +193,9 @@ struct NoteListView: View {
                 .frame(minHeight: 36)
                 .background(
                     Capsule()
-                        .fill(theme.isDark ? Color.white.opacity(0.06) : Color.white.opacity(0.38))
+                        .fill(theme.isDark
+                              ? (isSearchHovered ? Color.white.opacity(0.09) : Color.white.opacity(0.06))
+                              : (isSearchHovered ? Color.white.opacity(0.48) : Color.white.opacity(0.38)))
                 )
                 .overlay(
                     Capsule()
@@ -207,6 +211,11 @@ struct NoteListView: View {
                 )
                 .scaleEffect(isSearchFocused ? 1.012 : 1, anchor: .center)
                 .animation(DS.snappy, value: isSearchFocused)
+                .onHover { hovering in
+                    withAnimation(DS.snappy) {
+                        isSearchHovered = hovering
+                    }
+                }
 
                 Button(action: { viewModel.createNote() }) {
                     Image(systemName: "square.and.pencil")
@@ -501,7 +510,7 @@ struct NoteListView: View {
         let rowShadowRadius: CGFloat = isSelected ? 8 : (isHovered ? 6 : 0)
         let rowShadowY: CGFloat = isSelected ? 4 : (isHovered ? 2.5 : 0)
         let rowScale: CGFloat = isSelected ? 1.01 : (isHovered ? 1.005 : 1.0)
-        let rowOffset: CGFloat = isHovered && !isSelected ? -2 : 0
+        let rowOffset: CGFloat = isHovered && !isSelected ? -1.0 : 0
 
         NoteRowView(
             note: note,
@@ -514,20 +523,33 @@ struct NoteListView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 3)
             .background(
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .fill(rowFill)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .strokeBorder(rowStroke, lineWidth: 0.5)
+                Group {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .fill(rowFill)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .strokeBorder(rowStroke, lineWidth: 0.5)
+                            )
+                            .matchedGeometryEffect(id: "selectedCard", in: sidebarNamespace)
+                    } else {
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .fill(rowFill)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .strokeBorder(rowStroke, lineWidth: 0.5)
+                            )
+                    }
+                }
             )
             .overlay(alignment: .leading) {
-                Capsule()
-                    .fill(tint)
-                    .frame(width: 3.5, height: 24)
-                    .scaleEffect(y: isSelected ? 1.0 : 0.01, anchor: .center)
-                    .opacity(isSelected ? 1.0 : 0.0)
-                    .padding(.leading, 5.5)
+                if isSelected {
+                    Capsule()
+                        .fill(tint)
+                        .frame(width: 3.5, height: 24)
+                        .matchedGeometryEffect(id: "selectedIndicator", in: sidebarNamespace)
+                        .padding(.leading, 5.5)
+                }
             }
             .shadow(color: Color.black.opacity(rowShadowOpacity),
                     radius: rowShadowRadius,

@@ -54,7 +54,7 @@ struct NoteEditorView: View {
             Spacer()
 
             if let note = note {
-                Text(formatDate(note.modifiedAt))
+                Text(relativeTimeString(for: note.modifiedAt))
                     .font(.system(.subheadline, design: .default).weight(.medium))
                     .foregroundStyle(theme.secondaryText.opacity(0.8))
             }
@@ -73,7 +73,7 @@ struct NoteEditorView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(note?.isPinned == true ? theme.accent : theme.secondaryText)
                 }
-                .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
+                .buttonStyle(ToolbarButtonStyle())
                 .help(note?.isPinned == true ? "Unpin Note" : "Pin Note")
 
                 Button(action: {
@@ -83,7 +83,7 @@ struct NoteEditorView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(theme.secondaryText)
                 }
-                .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
+                .buttonStyle(ToolbarButtonStyle())
                 .help("Delete Note")
 
                 themeMenu
@@ -103,23 +103,20 @@ struct NoteEditorView: View {
                         .pickerStyle(.inline)
                     }
                 } label: {
-                    Image(systemName: "textformat.size")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(theme.secondaryText)
+                    ToolbarMenuLabel(iconName: "textformat.size", theme: theme)
                 }
                 .menuStyle(.borderlessButton)
-                .frame(width: 20)
                 .help("Font Settings")
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.ultraThinMaterial)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(.regularMaterial)
             .clipShape(Capsule())
             .overlay(
                 Capsule()
-                    .strokeBorder(theme.separator.opacity(0.4), lineWidth: 0.5)
+                    .strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5)
             )
-            .shadow(color: Color.black.opacity(theme.isDark ? 0.12 : 0.03), radius: 5, y: 2)
+            .shadow(color: Color.black.opacity(theme.isDark ? 0.16 : 0.04), radius: 4, y: 1.5)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
@@ -435,12 +432,9 @@ struct NoteEditorView: View {
                 }
             }
         } label: {
-            Image(systemName: "paintpalette")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(theme.secondaryText)
+            ToolbarMenuLabel(iconName: "paintpalette", theme: theme)
         }
         .menuStyle(.borderlessButton)
-        .frame(width: 20)
         .help("Theme")
     }
 
@@ -547,5 +541,67 @@ struct NoteEditorView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return formatter.string(from: date)
+    }
+
+    private func relativeTimeString(for date: Date) -> String {
+        let elapsed = Date().timeIntervalSince(date)
+        if elapsed < 60 {
+            return "Saved just now"
+        } else if elapsed < 3600 {
+            let minutes = Int(elapsed / 60)
+            return "Edited \(minutes) min ago"
+        } else {
+            return "Edited " + formatDate(date)
+        }
+    }
+}
+
+struct ToolbarButton: View {
+    let configuration: ButtonStyleConfiguration
+    @State private var isHovered = false
+    
+    var body: some View {
+        configuration.label
+            .padding(6)
+            .background(
+                Circle()
+                    .fill(Color.primary.opacity(configuration.isPressed ? 0.12 : (isHovered ? 0.06 : 0.0)))
+            )
+            .scaleEffect(configuration.isPressed ? 0.96 : (isHovered ? 1.02 : 1.0))
+            .onHover { hovering in
+                withAnimation(.spring(response: 0.18, dampingFraction: 0.85)) {
+                    isHovered = hovering
+                }
+            }
+            .animation(.spring(response: 0.18, dampingFraction: 0.85), value: configuration.isPressed)
+    }
+}
+
+struct ToolbarButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        ToolbarButton(configuration: configuration)
+    }
+}
+
+struct ToolbarMenuLabel: View {
+    let iconName: String
+    let theme: AppTheme
+    @State private var isHovered = false
+    
+    var body: some View {
+        Image(systemName: iconName)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(theme.secondaryText)
+            .padding(6)
+            .background(
+                Circle()
+                    .fill(Color.primary.opacity(isHovered ? 0.06 : 0.0))
+            )
+            .scaleEffect(isHovered ? 1.02 : 1.0)
+            .onHover { hovering in
+                withAnimation(.spring(response: 0.18, dampingFraction: 0.85)) {
+                    isHovered = hovering
+                }
+            }
     }
 }

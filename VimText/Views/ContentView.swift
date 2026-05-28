@@ -45,13 +45,13 @@ struct ContentView: View {
                        viewModel.notes.contains(where: { $0.id == noteId }) {
                         NoteEditorView(viewModel: viewModel, noteId: noteId)
                             .id(noteId)
-                            .transition(.opacity)
+                            .transition(.smoothContent)
                     } else {
                         emptyDetail
-                            .transition(.opacity)
+                            .transition(.smoothContent)
                     }
                 }
-                .animation(DS.crossfade, value: viewModel.selectedNoteId)
+                .animation(.spring(response: 0.22, dampingFraction: 0.85), value: viewModel.selectedNoteId)
             }
             .ignoresSafeArea(.container, edges: .top)
             .toolbar(.hidden, for: .windowToolbar)
@@ -99,4 +99,27 @@ struct WindowAccessor: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+struct ContentTransitionModifier: ViewModifier {
+    var offset: CGFloat
+    var opacity: Double
+    
+    func body(content: Content) -> some View {
+        content
+            .opacity(opacity)
+            .offset(y: offset)
+    }
+}
+
+extension AnyTransition {
+    static var smoothContent: AnyTransition {
+        .asymmetric(
+            insertion: .modifier(
+                active: ContentTransitionModifier(offset: 6, opacity: 0),
+                identity: ContentTransitionModifier(offset: 0, opacity: 1)
+            ),
+            removal: .opacity
+        )
+    }
 }

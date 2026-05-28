@@ -174,7 +174,7 @@ let sidebarTintPresets: [String] = [
 /// Shared design tokens for a consistent, Linear-inspired motion & shape language.
 enum DS {
     /// Primary spring for selection, panel and content transitions. Fast, settled, understated.
-    static let spring = Animation.spring(response: 0.32, dampingFraction: 0.82)
+    static let spring = Animation.spring(response: 0.22, dampingFraction: 0.82)
     /// Snappier spring for hover / press microinteractions.
     static let snappy = Animation.spring(response: 0.24, dampingFraction: 0.8)
     /// Crossfade used for content / page-state changes.
