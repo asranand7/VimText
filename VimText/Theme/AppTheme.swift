@@ -147,6 +147,17 @@ enum DS {
     static let controlRadius: CGFloat = 10
 }
 
+struct PressableIconButtonStyle: ButtonStyle {
+    var radius: CGFloat = DS.controlRadius
+    var pressedScale: CGFloat = 0.97
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? pressedScale : 1)
+            .animation(DS.snappy, value: configuration.isPressed)
+    }
+}
+
 extension Color {
     init(hex: String) {
         let scanner = Scanner(string: hex)

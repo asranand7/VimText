@@ -29,10 +29,10 @@ struct NoteListView: View {
     private var glassBackground: some View {
         ZStack {
             VisualEffectView(material: .sidebar)
-            theme.surface.opacity(0.4)
+            theme.surface.opacity(theme.isDark ? 0.36 : 0.52)
             LinearGradient(
                 colors: [
-                    themeManager.sidebarTint.opacity(theme.isDark ? 0.20 : 0.16),
+                    themeManager.sidebarTint.opacity(theme.isDark ? 0.15 : 0.11),
                     themeManager.sidebarTint.opacity(0.02)
                 ],
                 startPoint: .top,
@@ -157,48 +157,61 @@ struct NoteListView: View {
                                 .foregroundStyle(theme.secondaryText.opacity(0.5))
                                 .font(.subheadline)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
+                    } else {
+                        Text("⌘K")
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(theme.secondaryText.opacity(0.62))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(theme.text.opacity(theme.isDark ? 0.10 : 0.055))
+                            )
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.vertical, isSearchFocused ? 8 : 7)
+                .frame(minHeight: 38)
                 .background(
-                    RoundedRectangle(cornerRadius: DS.controlRadius, style: .continuous)
-                        .fill(Color.primary.opacity(theme.isDark ? 0.08 : 0.05))
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .fill(theme.isDark ? Color.white.opacity(0.07) : Color.white.opacity(0.48))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: DS.controlRadius, style: .continuous)
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
                         .strokeBorder(
-                            isSearchFocused ? themeManager.sidebarTint.opacity(0.55) : Color.primary.opacity(0.1),
+                            isSearchFocused ? themeManager.sidebarTint.opacity(0.58) : Color.primary.opacity(0.08),
                             lineWidth: isSearchFocused ? 1.5 : 0.5
                         )
                 )
                 .shadow(
-                    color: themeManager.sidebarTint.opacity(isSearchFocused ? 0.28 : 0),
-                    radius: isSearchFocused ? 6 : 0
+                    color: themeManager.sidebarTint.opacity(isSearchFocused ? 0.22 : 0),
+                    radius: isSearchFocused ? 14 : 0,
+                    y: isSearchFocused ? 4 : 0
                 )
+                .scaleEffect(isSearchFocused ? 1.015 : 1, anchor: .center)
                 .animation(DS.snappy, value: isSearchFocused)
 
                 Button(action: { viewModel.createNote() }) {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(theme.accent)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 38, height: 38)
                         .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(theme.isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.04))
+                            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                .fill(theme.isDark ? Color.white.opacity(0.08) : Color.white.opacity(0.52))
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            RoundedRectangle(cornerRadius: 13, style: .continuous)
                                 .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
                         )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableIconButtonStyle())
                 .help("New Note (⌘N)")
             }
             .padding(.horizontal, 12)
-            .padding(.top, 28)
-            .padding(.bottom, 8)
+            .padding(.top, 30)
+            .padding(.bottom, 10)
 
             if isSelectionMode {
                 HStack(spacing: 8) {
@@ -254,7 +267,7 @@ struct NoteListView: View {
                 .frame(maxWidth: .infinity)
             } else if isSelectionMode {
                 ScrollView {
-                    LazyVStack(spacing: 4) {
+                    LazyVStack(spacing: 8) {
                         let pinned = viewModel.filteredNotes.filter { $0.isPinned }
                         let unpinned = viewModel.filteredNotes.filter { !$0.isPinned }
 
@@ -274,8 +287,8 @@ struct NoteListView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
                 }
             } else {
                 notesList
@@ -298,7 +311,7 @@ struct NoteListView: View {
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
                     .help("Delete selected notes")
                 }
 
@@ -309,7 +322,7 @@ struct NoteListView: View {
                         .font(.caption)
                         .foregroundStyle(themeManager.sidebarTint)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
                 .help("Sidebar Color")
                 .popover(isPresented: $showSidebarColorPicker, arrowEdge: .bottom) {
                     sidebarColorPicker
@@ -421,7 +434,7 @@ struct NoteListView: View {
 
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 4) {
+                LazyVStack(spacing: 8) {
                     if isSearching {
                         ForEach(Array(notes.enumerated()), id: \.element.id) { idx, note in
                             noteRow(note: note, flatIndex: idx, isSearching: true)
@@ -445,8 +458,8 @@ struct NoteListView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             }
             .onChange(of: highlightedIndex) {
                 if let idx = highlightedIndex, idx < notes.count {
@@ -463,38 +476,43 @@ struct NoteListView: View {
         let isHovered = hoveredNoteId == note.id
 
         let tint = themeManager.sidebarTint
-        NoteRowView(note: note, folderName: folderName(for: note), isHovered: isHovered, onCopyPath: { copyPath(for: note) })
+        let rowFill = noteRowFill(isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
+        let rowStroke = noteRowStroke(isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
+        let rowShadowOpacity = (isHovered || isSelected) ? (theme.isDark ? 0.24 : 0.055) : 0
+        let rowShadowRadius: CGFloat = isSelected ? 12 : 7
+        let rowShadowY: CGFloat = isSelected ? 5 : 3
+
+        NoteRowView(
+            note: note,
+            folderName: folderName(for: note),
+            isHovered: isHovered,
+            isSelected: isSelected || isHighlighted,
+            onCopyPath: { copyPath(for: note) }
+        )
             .id(note.id)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 2)
             .background(
-                RoundedRectangle(cornerRadius: DS.cardRadius, style: .continuous)
-                    .fill(isSelected
-                          ? tint.opacity(theme.isDark ? 0.18 : 0.13)
-                          : (isHighlighted
-                             ? tint.opacity(0.18)
-                             : (isHovered ? tint.opacity(0.06) : Color.clear)))
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(rowFill)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: DS.cardRadius, style: .continuous)
-                    .strokeBorder(isSelected
-                                  ? tint.opacity(0.35)
-                                  : (isHighlighted
-                                     ? tint.opacity(0.25)
-                                     : (isHovered ? tint.opacity(0.12) : Color.clear)), lineWidth: 0.8)
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .strokeBorder(rowStroke, lineWidth: 0.8)
             )
             .overlay(alignment: .leading) {
                 Capsule()
                     .fill(tint)
-                    .frame(width: 3, height: isSelected ? 20 : 0)
-                    .padding(.leading, 3)
+                    .frame(width: 3, height: isSelected ? 28 : 0)
+                    .padding(.leading, 5)
                     .opacity(isSelected ? 1 : 0)
             }
-            .shadow(color: Color.black.opacity(isHovered && !isSelected ? (theme.isDark ? 0.22 : 0.05) : 0),
-                    radius: 5, y: 2)
+            .shadow(color: Color.black.opacity(rowShadowOpacity),
+                    radius: rowShadowRadius,
+                    y: rowShadowY)
             .scaleEffect(isSelected ? 1.01 : 1.0, anchor: .center)
             .offset(y: isHovered && !isSelected ? -1 : 0)
-            .contentShape(Rectangle())
+            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             .onHover { hovering in
                 withAnimation(DS.snappy) {
                     if hovering {
@@ -551,6 +569,20 @@ struct NoteListView: View {
         viewModel.searchText = ""
     }
 
+    private func noteRowFill(isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
+        if isSelected { return tint.opacity(theme.isDark ? 0.20 : 0.15) }
+        if isHighlighted { return tint.opacity(theme.isDark ? 0.18 : 0.14) }
+        if isHovered { return theme.isDark ? Color.white.opacity(0.06) : Color.white.opacity(0.46) }
+        return Color.clear
+    }
+
+    private func noteRowStroke(isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
+        if isSelected { return tint.opacity(theme.isDark ? 0.42 : 0.38) }
+        if isHighlighted { return tint.opacity(0.25) }
+        if isHovered { return Color.primary.opacity(0.08) }
+        return Color.clear
+    }
+
     @ViewBuilder
     private func selectableNoteRow(note: Note) -> some View {
         let isSelected = selectedNoteIds.contains(note.id)
@@ -561,25 +593,25 @@ struct NoteListView: View {
                 .foregroundStyle(isSelected ? Color.blue : Color.secondary.opacity(0.4))
                 .font(.system(size: 16, weight: .medium))
 
-            NoteRowView(note: note, folderName: folderName(for: note))
+            NoteRowView(note: note, folderName: folderName(for: note), isHovered: isHovered, isSelected: isSelected)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
                 .fill(isSelected 
                       ? theme.accent.opacity(0.12) 
-                      : (isHovered ? theme.accent.opacity(0.06) : Color.clear))
+                      : (isHovered ? Color.white.opacity(theme.isDark ? 0.06 : 0.42) : Color.clear))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
                 .strokeBorder(isSelected 
                               ? theme.accent.opacity(0.3) 
                               : (isHovered ? theme.accent.opacity(0.12) : Color.clear), lineWidth: 0.8)
         )
-        .contentShape(Rectangle())
+        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(DS.snappy) {
                 if hovering {
                     hoveredNoteId = note.id
                 } else if hoveredNoteId == note.id {

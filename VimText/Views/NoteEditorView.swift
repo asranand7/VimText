@@ -20,9 +20,13 @@ struct NoteEditorView: View {
     private var theme: AppTheme { themeManager.theme }
 
     private var editorFont: NSFont {
-        useMonospacedFont
-            ? NSFont.monospacedSystemFont(ofSize: CGFloat(fontSize), weight: .regular)
-            : NSFont.systemFont(ofSize: CGFloat(fontSize))
+        if useMonospacedFont {
+            return NSFont.monospacedSystemFont(ofSize: CGFloat(fontSize), weight: .regular)
+        }
+
+        return NSFont(name: "Inter-Regular", size: CGFloat(fontSize))
+            ?? NSFont(name: "Inter", size: CGFloat(fontSize))
+            ?? NSFont.systemFont(ofSize: CGFloat(fontSize))
     }
 
     private var note: Note? {
@@ -66,7 +70,7 @@ struct NoteEditorView: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(note?.isPinned == true ? theme.accent : theme.secondaryText)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
                 .help(note?.isPinned == true ? "Unpin Note" : "Pin Note")
 
                 Button(action: {
@@ -76,7 +80,7 @@ struct NoteEditorView: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(theme.secondaryText)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
                 .help("Delete Note")
 
                 themeMenu
@@ -96,15 +100,15 @@ struct NoteEditorView: View {
                 .help("Font Settings")
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .background(theme.surface.opacity(theme.isDark ? 0.2 : 0.4))
+        .padding(.horizontal, 20)
+        .padding(.vertical, 11)
+        .background(theme.surface.opacity(theme.isDark ? 0.18 : 0.34))
     }
 
     var body: some View {
         ZStack {
             VisualEffectView(material: .windowBackground, blendingMode: .behindWindow)
-                .opacity(theme.isDark ? 0.75 : 0.85)
+                .opacity(theme.isDark ? 0.76 : 0.90)
             
             VStack(spacing: 0) {
                 ZStack(alignment: .top) {
@@ -126,19 +130,19 @@ struct NoteEditorView: View {
                             .foregroundStyle(theme.separator.opacity(0.4))
                         statusBar
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(theme.surface.opacity(theme.isDark ? 0.35 : 0.75))
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(theme.isDark ? theme.surface.opacity(0.34) : Color.white.opacity(0.78))
                     )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .strokeBorder(Color.white.opacity(theme.isDark ? 0.05 : 0.35), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Color.white.opacity(theme.isDark ? 0.055 : 0.55), lineWidth: 1)
                     )
-                    .shadow(color: Color.black.opacity(theme.isDark ? 0.28 : 0.06), radius: 16, x: 0, y: 6)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 6)
-                    .padding(.bottom, 16)
+                    .shadow(color: Color.black.opacity(theme.isDark ? 0.30 : 0.07), radius: 22, x: 0, y: 8)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 8)
+                    .padding(.bottom, 18)
                     
                     if findController.isVisible {
                         findBar
@@ -198,6 +202,8 @@ struct NoteEditorView: View {
             textColor: theme.textNS,
             accentColor: theme.accentNS
         )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(theme.editorBackground.opacity(theme.isDark ? 0.14 : 0.18))
         .onChange(of: content) { _, newValue in
             let newTitle = extractTitle(from: newValue)
             viewModel.updateNoteContent(id: noteId, title: newTitle.isEmpty ? "Untitled" : newTitle, content: newValue, rtfData: rtfData)

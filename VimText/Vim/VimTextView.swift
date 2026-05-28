@@ -81,8 +81,8 @@ struct VimTextView: NSViewRepresentable {
 
     static func paragraphStyle() -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = 7
-        style.paragraphSpacing = 10
+        style.lineSpacing = 8
+        style.paragraphSpacing = 12
         return style
     }
 
@@ -116,7 +116,7 @@ struct VimTextView: NSViewRepresentable {
         textView.isContinuousSpellCheckingEnabled = false
         textView.isAutomaticTextCompletionEnabled = false
         textView.isAutomaticLinkDetectionEnabled = false
-        textView.textContainerInset = NSSize(width: 28, height: 14)
+        textView.textContainerInset = NSSize(width: 34, height: 30)
         textView.selectedTextAttributes = [
             .backgroundColor: accentColor.withAlphaComponent(0.28)
         ]
@@ -177,7 +177,8 @@ struct VimTextView: NSViewRepresentable {
             let selectedRange = textView.selectedRange()
             let defaultAttrs: [NSAttributedString.Key: Any] = [
                 .font: font,
-                .foregroundColor: NSColor.labelColor
+                .foregroundColor: textColor,
+                .paragraphStyle: Self.paragraphStyle()
             ]
             if !rtfData.isEmpty, let attrStr = NSAttributedString(rtf: rtfData, documentAttributes: nil) {
                 textView.textStorage?.setAttributedString(attrStr)

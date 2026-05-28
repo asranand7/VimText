@@ -4,11 +4,13 @@ struct NoteRowView: View {
     let note: Note
     var folderName: String = "Notes"
     var isHovered: Bool = false
+    var isSelected: Bool = false
     var onCopyPath: (() -> Void)? = nil
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var didCopy = false
 
     private var theme: AppTheme { themeManager.theme }
+    private var tint: Color { themeManager.sidebarTint }
 
     private var formattedDate: String {
         let calendar = Calendar.current
@@ -33,14 +35,19 @@ struct NoteRowView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(note.displayTitle)
-                    .font(.system(size: 14, weight: .semibold, design: .default))
+                    .font(.system(size: 14.5, weight: .semibold, design: .default))
                     .foregroundStyle(theme.text)
                     .lineLimit(1)
 
                 Spacer(minLength: 4)
+
+                Text(formattedDate)
+                    .font(.system(size: 10.5, weight: .medium, design: .default))
+                    .foregroundStyle(theme.secondaryText.opacity(isSelected ? 0.86 : 0.66))
+                    .fixedSize()
 
                 if note.isPinned {
                     Image(systemName: "pin.fill")
@@ -64,34 +71,29 @@ struct NoteRowView: View {
                                 Circle().fill(theme.text.opacity(didCopy ? 0 : 0.06))
                             )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
                     .help("Copy note file path")
                     .transition(.opacity)
                 }
             }
 
-            HStack(spacing: 5) {
-                Text(formattedDate)
-                    .font(.system(size: 11, weight: .medium, design: .default))
-                    .foregroundStyle(theme.secondaryText)
-                    .fixedSize()
-
-                Text(note.preview)
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.secondaryText.opacity(0.6))
-                    .lineLimit(1)
-            }
+            Text(note.preview.isEmpty ? "No additional text" : note.preview)
+                .font(.system(size: 12, weight: .regular, design: .default))
+                .foregroundStyle(theme.secondaryText.opacity(isSelected ? 0.82 : 0.62))
+                .lineLimit(2)
+                .frame(minHeight: 16, alignment: .topLeading)
 
             HStack(spacing: 4) {
                 Image(systemName: "folder")
                     .font(.system(size: 9))
                 Text(folderName)
-                    .font(.system(size: 10, weight: .medium, design: .default))
+                    .font(.system(size: 10.5, weight: .medium, design: .default))
             }
-            .foregroundStyle(theme.secondaryText.opacity(0.55))
+            .foregroundStyle(isSelected ? tint.opacity(0.82) : theme.secondaryText.opacity(0.55))
             .padding(.top, 2)
         }
-        .padding(.vertical, 7)
-        .animation(.easeInOut(duration: 0.12), value: isHovered)
+        .padding(.vertical, 9)
+        .animation(DS.snappy, value: isHovered)
+        .animation(DS.snappy, value: isSelected)
     }
 }
