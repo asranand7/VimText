@@ -2356,16 +2356,4 @@ class VimNSTextView: NSTextView {
         }
     }
 
-    override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
-        let maxContentWidth: CGFloat = 720
-        let minInset: CGFloat = 28
-        let horizontal = max(minInset, (newSize.width - maxContentWidth) / 2)
-        if abs(textContainerInset.width - horizontal) > 0.5 {
-            textContainerInset = NSSize(width: horizontal, height: textContainerInset.height)
-            if let engine = vimEngine, !engine.mode.isEditing {
-                DispatchQueue.main.async { [weak self] in self?.updateCursorAppearance(isBlock: true) }
-            }
-        }
-    }
 }
