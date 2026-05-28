@@ -15,6 +15,7 @@ struct NoteEditorView: View {
     @AppStorage("editorFontSize") private var fontSize: Double = 16
     @AppStorage("showLineNumbers") private var showLineNumbers: Bool = false
     @AppStorage("useMonospacedFont") private var useMonospacedFont: Bool = false
+    @AppStorage("editorPaperStyle") private var paperStyle: String = "plain"
     @EnvironmentObject private var themeManager: ThemeManager
 
     private var theme: AppTheme { themeManager.theme }
@@ -90,6 +91,15 @@ struct NoteEditorView: View {
                     Divider()
                     Toggle("Monospaced Font", isOn: $useMonospacedFont)
                     Toggle("Line Numbers", isOn: $showLineNumbers)
+                    Divider()
+                    Menu("Paper Style") {
+                        Picker("Paper Style", selection: $paperStyle) {
+                            Text("Plain").tag("plain")
+                            Text("Dotted Grid").tag("dotted")
+                            Text("Lined Paper").tag("lined")
+                        }
+                        .pickerStyle(.inline)
+                    }
                 } label: {
                     Image(systemName: "textformat.size")
                         .font(.system(size: 13, weight: .medium))
@@ -200,7 +210,8 @@ struct NoteEditorView: View {
             startInInsertMode: startInInsertMode,
             backgroundColor: .clear,
             textColor: theme.textNS,
-            accentColor: theme.accentNS
+            accentColor: theme.accentNS,
+            paperStyle: paperStyle
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(editorPaperFill)

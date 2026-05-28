@@ -57,4 +57,5 @@ extension Notification.Name {
     static let findInNote = Notification.Name("findInNote")
     static let openCommandPalette = Notification.Name("openCommandPalette")
     static let openChangeLocationPanel = Notification.Name("openChangeLocationPanel")
+    static let refocusEditor = Notification.Name("refocusEditor")
 }

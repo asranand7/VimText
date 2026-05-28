@@ -74,6 +74,7 @@ struct VimTextView: NSViewRepresentable {
     var backgroundColor: NSColor = .textBackgroundColor
     var textColor: NSColor = .labelColor
     var accentColor: NSColor = .systemOrange
+    var paperStyle: String = "plain"
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -81,8 +82,8 @@ struct VimTextView: NSViewRepresentable {
 
     static func paragraphStyle() -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = 8
-        style.paragraphSpacing = 12
+        style.lineSpacing = 5
+        style.paragraphSpacing = 0
         return style
     }
 
@@ -143,6 +144,7 @@ struct VimTextView: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.vimEngine = vimEngine
         textView.coordinator = context.coordinator
+        textView.paperStyle = paperStyle
 
         scrollView.documentView = textView
 
@@ -152,10 +154,12 @@ struct VimTextView: NSViewRepresentable {
         context.coordinator.lastFontName = font.fontName
         context.coordinator.lastThemeKey = themeKey
         context.coordinator.setupFindController()
+        context.coordinator.setupRefocusObserver(for: textView)
 
         // Load rich text content or fall back to plain text
         if !rtfData.isEmpty, let attrStr = NSAttributedString(rtf: rtfData, documentAttributes: nil) {
             textView.textStorage?.setAttributedString(attrStr)
+            textView.applyTextColor(textColor)
         } else {
             let attrStr = NSAttributedString(string: text, attributes: defaultAttrs)
             textView.textStorage?.setAttributedString(attrStr)
@@ -182,6 +186,8 @@ struct VimTextView: NSViewRepresentable {
             ]
             if !rtfData.isEmpty, let attrStr = NSAttributedString(rtf: rtfData, documentAttributes: nil) {
                 textView.textStorage?.setAttributedString(attrStr)
+                textView.applyBaseFont(font)
+                textView.applyTextColor(textColor)
             } else {
                 let attrStr = NSAttributedString(string: text, attributes: defaultAttrs)
                 textView.textStorage?.setAttributedString(attrStr)
@@ -209,13 +215,16 @@ struct VimTextView: NSViewRepresentable {
             textView.selectedTextAttributes = [
                 .backgroundColor: accentColor.withAlphaComponent(0.28)
             ]
-            if let textStorage = textView.textStorage, textStorage.length > 0 {
-                textStorage.addAttribute(.foregroundColor, value: textColor,
-                                         range: NSRange(location: 0, length: textStorage.length))
-            }
+            textView.applyTextColor(textColor)
             var attrs = textView.typingAttributes
             attrs[.foregroundColor] = textColor
             textView.typingAttributes = attrs
+            textView.needsDisplay = true
+        }
+
+        if context.coordinator.lastPaperStyle != paperStyle {
+            context.coordinator.lastPaperStyle = paperStyle
+            textView.paperStyle = paperStyle
             textView.needsDisplay = true
         }
 
@@ -247,11 +256,34 @@ struct VimTextView: NSViewRepresentable {
         var lastFontSize: CGFloat = 0
         var lastFontName: String = ""
         var lastThemeKey: String = ""
+        var lastPaperStyle: String = "plain"
+        var refocusObserver: Any?
         private var findMatchRanges: [NSRange] = []
         private var currentFindIndex: Int = -1
 
         init(_ parent: VimTextView) {
             self.parent = parent
+        }
+
+        func setupRefocusObserver(for textView: VimNSTextView) {
+            if let observer = refocusObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            refocusObserver = NotificationCenter.default.addObserver(
+                forName: .refocusEditor,
+                object: nil,
+                queue: .main
+            ) { [weak textView] _ in
+                if let tv = textView {
+                    tv.window?.makeFirstResponder(tv)
+                }
+            }
+        }
+
+        deinit {
+            if let observer = refocusObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
         }
 
         func setupFindController() {
@@ -2089,6 +2121,7 @@ class VimNSTextView: NSTextView {
     var vimEngine: VimEngine?
     weak var coordinator: VimTextView.Coordinator?
     var accentColor: NSColor = .systemOrange
+    var paperStyle: String = "plain"
     private var blockCursorLayer: CALayer?
     var visualCursorOverride: Int? = nil
     private var searchHighlightLayers: [CALayer] = []
@@ -2270,6 +2303,15 @@ class VimNSTextView: NSTextView {
             }
             textStorage.addAttribute(.font, value: newFont, range: range)
         }
+        textStorage.endEditing()
+    }
+
+    func applyTextColor(_ color: NSColor) {
+        guard let textStorage = textStorage else { return }
+        let fullRange = NSRange(location: 0, length: textStorage.length)
+        guard fullRange.length > 0 else { return }
+        textStorage.beginEditing()
+        textStorage.addAttribute(.foregroundColor, value: color, range: fullRange)
         textStorage.endEditing()
     }
 
@@ -2567,6 +2609,99 @@ class VimNSTextView: NSTextView {
                 self?.drawBlockCursor()
             }
         }
+    }
+
+    override func paste(_ sender: Any?) {
+        super.paste(sender)
+        if let font = self.font {
+            applyBaseFont(font)
+        }
+        coordinator?.formattingDidChange()
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        
+        guard paperStyle != "plain" else { return }
+        
+        guard let context = NSGraphicsContext.current?.cgContext,
+              let layoutManager = self.layoutManager,
+              let textContainer = self.textContainer else { return }
+        
+        context.saveGState()
+        
+        let font = self.font ?? NSFont.systemFont(ofSize: 16)
+        let fontHeight = layoutManager.defaultLineHeight(for: font)
+        
+        var lineSpacing: CGFloat = 8
+        if let paragraphStyle = typingAttributes[.paragraphStyle] as? NSParagraphStyle {
+            lineSpacing = paragraphStyle.lineSpacing
+        }
+        
+        let bounds = self.bounds
+        let textInset = self.textContainerInset
+        let startX = textInset.width
+        let endX = bounds.width - textInset.width
+        
+        let baseColor = self.textColor ?? (self.typingAttributes[.foregroundColor] as? NSColor) ?? NSColor.labelColor
+        let strokeColor = baseColor.withAlphaComponent(paperStyle == "dotted" ? 0.24 : 0.15).cgColor
+        
+        context.setStrokeColor(strokeColor)
+        context.setFillColor(strokeColor)
+        
+        var lastLineY: CGFloat = textInset.height + font.ascender + 2.0 - (fontHeight + lineSpacing)
+        var estimatedRowHeight = fontHeight + lineSpacing
+        
+        // 1. Draw lines/dots for existing lines using Layout Manager
+        let glyphRange = layoutManager.glyphRange(for: textContainer)
+        if glyphRange.length > 0 {
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { rect, usedRect, container, range, stop in
+                let lineRectY = rect.origin.y + textInset.height
+                let y = lineRectY + font.ascender + 2.0
+                
+                if self.paperStyle == "dotted" {
+                    let dotRadius: CGFloat = 0.8
+                    let spacingX: CGFloat = 20
+                    var x = startX
+                    while x <= endX {
+                        context.addArc(center: CGPoint(x: x, y: y), radius: dotRadius, startAngle: 0, endAngle: 2 * .pi, clockwise: true)
+                        context.fillPath()
+                        x += spacingX
+                    }
+                } else if self.paperStyle == "lined" {
+                    context.setLineWidth(0.8)
+                    context.move(to: CGPoint(x: startX, y: y))
+                    context.addLine(to: CGPoint(x: endX, y: y))
+                    context.strokePath()
+                }
+                
+                lastLineY = y
+                estimatedRowHeight = rect.height
+            }
+        }
+        
+        // 2. Draw lines/dots for the empty area below the text
+        var y = lastLineY + estimatedRowHeight
+        while y < bounds.height {
+            if paperStyle == "dotted" {
+                let dotRadius: CGFloat = 0.8
+                let spacingX: CGFloat = 20
+                var x = startX
+                while x <= endX {
+                    context.addArc(center: CGPoint(x: x, y: y), radius: dotRadius, startAngle: 0, endAngle: 2 * .pi, clockwise: true)
+                    context.fillPath()
+                    x += spacingX
+                }
+            } else if paperStyle == "lined" {
+                context.setLineWidth(0.8)
+                context.move(to: CGPoint(x: startX, y: y))
+                context.addLine(to: CGPoint(x: endX, y: y))
+                context.strokePath()
+            }
+            y += estimatedRowHeight
+        }
+        
+        context.restoreGState()
     }
 
 }

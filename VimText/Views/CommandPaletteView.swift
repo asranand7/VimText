@@ -48,6 +48,15 @@ class CommandPaletteState: ObservableObject {
             },
             PaletteCommand(id: "toggle_monospace", name: "Toggle Monospaced Font", icon: "textformat") {
                 UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "useMonospacedFont"), forKey: "useMonospacedFont")
+            },
+            PaletteCommand(id: "paper_plain", name: "Paper: Plain", icon: "doc") {
+                UserDefaults.standard.set("plain", forKey: "editorPaperStyle")
+            },
+            PaletteCommand(id: "paper_dotted", name: "Paper: Dotted Grid", icon: "ellipsis") {
+                UserDefaults.standard.set("dotted", forKey: "editorPaperStyle")
+            },
+            PaletteCommand(id: "paper_lined", name: "Paper: Lined", icon: "line.horizontal.3") {
+                UserDefaults.standard.set("lined", forKey: "editorPaperStyle")
             }
         ]
     }
@@ -275,6 +284,9 @@ struct CommandPaletteView: View {
             )
             .shadow(color: Color.black.opacity(theme.isDark ? 0.45 : 0.15), radius: 24, x: 0, y: 12)
         }
+        .onExitCommand {
+            dismiss()
+        }
         .onAppear {
             isFieldFocused = true
             startWidth = width
@@ -378,6 +390,7 @@ struct CommandPaletteView: View {
         withAnimation(.easeInOut(duration: 0.15)) {
             isPresented = false
         }
+        NotificationCenter.default.post(name: .refocusEditor, object: nil)
     }
     
     private func selectCurrentItem() {
@@ -442,6 +455,7 @@ struct CommandPaletteView: View {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     isPres.wrappedValue = false
                 }
+                NotificationCenter.default.post(name: .refocusEditor, object: nil)
                 return nil
             }
             if isUp {
