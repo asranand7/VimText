@@ -51,7 +51,7 @@ struct ContentView: View {
                             .transition(.smoothContent)
                     }
                 }
-                .animation(.spring(response: 0.22, dampingFraction: 0.85), value: viewModel.selectedNoteId)
+                .animation(.spring(response: 0.12, dampingFraction: 0.88), value: viewModel.selectedNoteId)
             }
             .ignoresSafeArea(.container, edges: .top)
             .toolbar(.hidden, for: .windowToolbar)
