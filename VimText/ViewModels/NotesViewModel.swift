@@ -59,10 +59,15 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func loadAsync() async {
-        let (loadedNotes, loadedFolders) = await Task.detached(priority: .userInitiated) {
-            (StorageManager.shared.loadNotes(), StorageManager.shared.loadFolders())
+        // Read from disk on a background thread, but do NOT touch
+        // StorageManager.urlsByID there — that map is also written by
+        // saveNote/deleteNote on the main thread, and a concurrent write
+        // can corrupt the dictionary (manifesting as lost row clicks).
+        let (snapshot, loadedFolders) = await Task.detached(priority: .userInitiated) {
+            (StorageManager.shared.readNotesSnapshot(), StorageManager.shared.loadFolders())
         }.value
-        notes = loadedNotes
+        storage.apply(snapshot)
+        notes = snapshot.notes
         folders = loadedFolders
         if notes.isEmpty {
             createWelcomeNote()

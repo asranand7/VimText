@@ -101,20 +101,43 @@ final class StorageManager {
 
     // MARK: - Notes
 
-    func loadNotes() -> [Note] {
-        urlsByID.removeAll()
+    /// A point-in-time read of all notes plus their on-disk locations.
+    /// Returned by `readNotesSnapshot()` so the caller can apply the result
+    /// on the main thread instead of having a background load mutate
+    /// `urlsByID` concurrently with main-thread save/delete calls.
+    struct NotesSnapshot {
+        let notes: [Note]
+        let urlsByID: [UUID: URL]
+    }
+
+    /// Reads notes from disk **without** mutating `urlsByID`. Safe to call
+    /// off the main thread; pair with `apply(_:)` on the main thread.
+    func readNotesSnapshot() -> NotesSnapshot {
         guard let files = try? fileManager.contentsOfDirectory(at: notesURL, includingPropertiesForKeys: nil) else {
-            return []
+            return NotesSnapshot(notes: [], urlsByID: [:])
         }
 
-        var result: [Note] = []
+        var notes: [Note] = []
+        var urlMap: [UUID: URL] = [:]
         for url in files where url.pathExtension == "json" {
             guard let data = try? Data(contentsOf: url),
                   let note = try? decoder.decode(Note.self, from: data) else { continue }
-            urlsByID[note.id] = url
-            result.append(note)
+            urlMap[note.id] = url
+            notes.append(note)
         }
-        return result
+        return NotesSnapshot(notes: notes, urlsByID: urlMap)
+    }
+
+    /// Applies a previously-read snapshot's url map. Must be called from the
+    /// main thread (same isolation as all other `urlsByID` mutators).
+    func apply(_ snapshot: NotesSnapshot) {
+        urlsByID = snapshot.urlsByID
+    }
+
+    func loadNotes() -> [Note] {
+        let snapshot = readNotesSnapshot()
+        urlsByID = snapshot.urlsByID
+        return snapshot.notes
     }
 
     func fileURL(for note: Note) -> URL {

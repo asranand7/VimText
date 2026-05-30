@@ -3,7 +3,6 @@ import SwiftUI
 struct NoteListView: View {
     @ObservedObject var viewModel: NotesViewModel
     @EnvironmentObject private var themeManager: ThemeManager
-    @Namespace private var sidebarNamespace
     @State private var selectedNoteIds: Set<UUID> = []
     @State private var isSelectionMode = false
     @State private var showDeleteAllConfirm = false
@@ -547,35 +546,22 @@ struct NoteListView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 3)
             .background(
-                Group {
-                    if isSelected {
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(rowFill)
+                    .overlay(
                         RoundedRectangle(cornerRadius: 15, style: .continuous)
-                            .fill(rowFill)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                    .fill(theme.isDark ? Color.white.opacity(0.03) : Color.clear)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                    .strokeBorder(rowStroke, lineWidth: 0.5)
-                            )
-                            .matchedGeometryEffect(id: "selectedCard", in: sidebarNamespace)
-                    } else {
+                            .fill(isSelected && theme.isDark ? Color.white.opacity(0.03) : Color.clear)
+                    )
+                    .overlay(
                         RoundedRectangle(cornerRadius: 15, style: .continuous)
-                            .fill(rowFill)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                    .strokeBorder(rowStroke, lineWidth: 0.5)
-                            )
-                    }
-                }
+                            .strokeBorder(rowStroke, lineWidth: 0.5)
+                    )
             )
             .overlay(alignment: .leading) {
                 if isSelected {
                     Capsule()
                         .fill(tint)
                         .frame(width: 3.0, height: 32)
-                        .matchedGeometryEffect(id: "selectedIndicator", in: sidebarNamespace)
                         .padding(.leading, 5.5)
                 }
             }
