@@ -319,7 +319,14 @@ struct CommandPaletteView: View {
             dismiss()
         }
         .onAppear {
-            isFieldFocused = true
+            // Resign the editor's first responder status so key events can route to SwiftUI
+            NSApp.keyWindow?.makeFirstResponder(nil)
+            
+            // Focus the search field in the next run loop pass after the window responder chain clears
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                isFieldFocused = true
+            }
+            
             startWidth = width
             startHeight = height
             setupKeyboardMonitor()
