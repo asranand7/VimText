@@ -486,10 +486,7 @@ struct CommandPaletteView: View {
     }
     
     private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
+        AppDateFormatters.shortDateTime.string(from: date)
     }
 }
 

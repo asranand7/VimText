@@ -17,20 +17,14 @@ struct NoteRowView: View {
         let now = Date()
 
         if calendar.isDateInToday(note.modifiedAt) {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "h:mm a"
-            return formatter.string(from: note.modifiedAt)
+            return AppDateFormatters.timeOnly.string(from: note.modifiedAt)
         } else if calendar.isDateInYesterday(note.modifiedAt) {
             return "Yesterday"
         } else if let weekAgo = calendar.date(byAdding: .day, value: -7, to: now),
                   note.modifiedAt > weekAgo {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "EEEE"
-            return formatter.string(from: note.modifiedAt)
+            return AppDateFormatters.weekday.string(from: note.modifiedAt)
         } else {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "M/d/yy"
-            return formatter.string(from: note.modifiedAt)
+            return AppDateFormatters.shortDate.string(from: note.modifiedAt)
         }
     }
 

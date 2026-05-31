@@ -9,7 +9,6 @@ struct NoteListView: View {
     @State private var showDeleteSelectedConfirm = false
     @State private var searchFocusTrigger = false
     @State private var highlightedIndex: Int? = nil
-    @State private var hoveredNoteId: UUID? = nil
     @State private var showSidebarColorPicker = false
     @State private var isSearchFocused = false
     @State private var isSearchHovered = false
@@ -92,8 +91,9 @@ struct NoteListView: View {
         if let d7 = cal.date(byAdding: .day, value: -7, to: now), date > d7 { return (2, "Previous 7 Days") }
         if let d30 = cal.date(byAdding: .day, value: -30, to: now), date > d30 { return (3, "Previous 30 Days") }
         let comps = cal.dateComponents([.year, .month], from: date)
-        let df = DateFormatter()
-        df.dateFormat = comps.year == cal.component(.year, from: now) ? "MMMM" : "MMMM yyyy"
+        let df = comps.year == cal.component(.year, from: now)
+            ? AppDateFormatters.month
+            : AppDateFormatters.monthYear
         let ym = (comps.year ?? 0) * 12 + (comps.month ?? 0)
         return (10_000_000 - ym, df.string(from: date))
     }
@@ -538,77 +538,27 @@ struct NoteListView: View {
     private func noteRow(note: Note, flatIndex: Int, isSearching: Bool) -> some View {
         let isHighlighted = isSearching && highlightedIndex == flatIndex
         let isSelected = !isSearching && viewModel.selectedNoteId == note.id
-        let isHovered = hoveredNoteId == note.id
 
-        let tint = themeManager.sidebarTint
-        let rowFill = noteRowFill(isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
-        let rowStroke = noteRowStroke(isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
-        
-        let rowShadowOpacity = isSelected
-            ? (theme.isDark ? 0.18 : 0.05)
-            : (isHovered ? (theme.isDark ? 0.12 : 0.03) : 0)
-        let rowShadowRadius: CGFloat = isSelected ? 6 : (isHovered ? 4 : 0)
-        let rowShadowY: CGFloat = isSelected ? 2 : (isHovered ? 1.5 : 0)
-        // Note: don't scale or offset on hover. Even a 1pt vertical shift
-        // can race with `.onHover`'s tracking install on the top row of
-        // the list, leaving it visually unresponsive to the cursor.
-        let rowScale: CGFloat = isSelected ? 1.01 : 1.0
-
-        NoteRowView(
+        // Hover state lives inside NoteRowListItem so moving the mouse only
+        // re-renders the row entered/left — not the whole list.
+        NoteRowListItem(
             note: note,
             folderName: folderName(for: note),
-            isHovered: isHovered,
-            isSelected: isSelected || isHighlighted,
-            onCopyPath: { copyPath(for: note) }
-        )
-            .id(note.id)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                    .fill(rowFill)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 15, style: .continuous)
-                            .fill(isSelected && theme.isDark ? Color.white.opacity(0.03) : Color.clear)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 15, style: .continuous)
-                            .strokeBorder(rowStroke, lineWidth: 0.5)
-                    )
-            )
-            .overlay(alignment: .leading) {
-                if isSelected {
-                    Capsule()
-                        .fill(tint)
-                        .frame(width: 3.0, height: 32)
-                        .padding(.leading, 5.5)
-                }
-            }
-            .shadow(color: Color.black.opacity(rowShadowOpacity),
-                    radius: rowShadowRadius,
-                    y: rowShadowY)
-            .scaleEffect(rowScale, anchor: .center)
-            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-            .onHover { hovering in
-                withAnimation(DS.snappy) {
-                    if hovering {
-                        hoveredNoteId = note.id
-                    } else if hoveredNoteId == note.id {
-                        hoveredNoteId = nil
-                    }
-                }
-            }
-            .onTapGesture {
+            isSelected: isSelected,
+            isHighlighted: isHighlighted,
+            onCopyPath: { copyPath(for: note) },
+            onTap: {
                 withAnimation(DS.spring) {
                     viewModel.selectedNoteId = note.id
                 }
                 highlightedIndex = nil
                 viewModel.searchText = ""
             }
-            .animation(DS.spring, value: isSelected)
-            .contextMenu {
-                noteContextMenu(for: note)
-            }
+        )
+        .id(note.id)
+        .contextMenu {
+            noteContextMenu(for: note)
+        }
     }
 
     private func moveHighlight(down: Bool) {
@@ -645,67 +595,20 @@ struct NoteListView: View {
         viewModel.searchText = ""
     }
 
-    private func noteRowFill(isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
-        if isSelected {
-            return theme.isDark
-                ? tint.opacity(theme.isMonochrome ? 0.11 : 0.15)
-                : tint.opacity(theme.isMonochrome ? 0.05 : 0.08)
-        }
-        if isHighlighted { return tint.opacity(theme.isDark ? 0.10 : 0.07) }
-        if isHovered { return theme.isDark ? Color.white.opacity(0.07) : Color.white.opacity(0.52) }
-        return Color.clear
-    }
-
-    private func noteRowStroke(isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
-        if isSelected { return tint.opacity(theme.isMonochrome ? (theme.isDark ? 0.20 : 0.12) : (theme.isDark ? 0.26 : 0.14)) }
-        if isHighlighted { return tint.opacity(0.14) }
-        if isHovered { return Color.primary.opacity(0.06) }
-        return Color.clear
-    }
-
     @ViewBuilder
     private func selectableNoteRow(note: Note) -> some View {
-        let isSelected = selectedNoteIds.contains(note.id)
-        let isHovered = hoveredNoteId == note.id
-
-        HStack(spacing: 12) {
-            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(isSelected ? Color.blue : Color.secondary.opacity(0.4))
-                .font(.system(size: 16, weight: .medium))
-
-            NoteRowView(note: note, folderName: folderName(for: note), isHovered: isHovered, isSelected: isSelected)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .fill(isSelected
-                      ? theme.accent.opacity(theme.isDark ? 0.10 : 0.07)
-                      : (isHovered ? Color.white.opacity(theme.isDark ? 0.06 : 0.42) : Color.clear))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .strokeBorder(isSelected
-                              ? theme.accent.opacity(theme.isDark ? 0.28 : 0.20)
-                              : (isHovered ? theme.accent.opacity(0.12) : Color.clear), lineWidth: 0.8)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-        .onHover { hovering in
-            withAnimation(DS.snappy) {
-                if hovering {
-                    hoveredNoteId = note.id
-                } else if hoveredNoteId == note.id {
-                    hoveredNoteId = nil
+        SelectableNoteRowItem(
+            note: note,
+            folderName: folderName(for: note),
+            isChecked: selectedNoteIds.contains(note.id),
+            onToggle: {
+                if selectedNoteIds.contains(note.id) {
+                    selectedNoteIds.remove(note.id)
+                } else {
+                    selectedNoteIds.insert(note.id)
                 }
             }
-        }
-        .onTapGesture {
-            if selectedNoteIds.contains(note.id) {
-                selectedNoteIds.remove(note.id)
-            } else {
-                selectedNoteIds.insert(note.id)
-            }
-        }
+        )
     }
 
     @ViewBuilder
@@ -730,6 +633,141 @@ struct NoteListView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(path, forType: .string)
+    }
+}
+
+/// A single sidebar note row. Owns its own hover state so that moving the
+/// mouse only invalidates the row being entered/left, instead of the parent
+/// list (which would re-run folder lookups, fills, and date formatting for
+/// every row on every mouse move).
+private struct NoteRowListItem: View {
+    let note: Note
+    let folderName: String
+    let isSelected: Bool
+    let isHighlighted: Bool
+    let onCopyPath: () -> Void
+    let onTap: () -> Void
+
+    @EnvironmentObject private var themeManager: ThemeManager
+    @State private var isHovered = false
+
+    private var theme: AppTheme { themeManager.theme }
+
+    var body: some View {
+        let tint = themeManager.sidebarTint
+        let rowFill = Self.fill(theme: theme, isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
+        let rowStroke = Self.stroke(theme: theme, isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
+
+        let rowShadowOpacity = isSelected
+            ? (theme.isDark ? 0.18 : 0.05)
+            : (isHovered ? (theme.isDark ? 0.12 : 0.03) : 0)
+        let rowShadowRadius: CGFloat = isSelected ? 6 : (isHovered ? 4 : 0)
+        let rowShadowY: CGFloat = isSelected ? 2 : (isHovered ? 1.5 : 0)
+        // Note: don't scale or offset on hover. Even a 1pt vertical shift can
+        // race with `.onHover`'s tracking install on the top row of the list,
+        // leaving it visually unresponsive to the cursor.
+        let rowScale: CGFloat = isSelected ? 1.01 : 1.0
+
+        return NoteRowView(
+            note: note,
+            folderName: folderName,
+            isHovered: isHovered,
+            isSelected: isSelected || isHighlighted,
+            onCopyPath: onCopyPath
+        )
+            .padding(.horizontal, 14)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(rowFill)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .fill(isSelected && theme.isDark ? Color.white.opacity(0.03) : Color.clear)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .strokeBorder(rowStroke, lineWidth: 0.5)
+                    )
+            )
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    Capsule()
+                        .fill(tint)
+                        .frame(width: 3.0, height: 32)
+                        .padding(.leading, 5.5)
+                }
+            }
+            .shadow(color: Color.black.opacity(rowShadowOpacity),
+                    radius: rowShadowRadius,
+                    y: rowShadowY)
+            .scaleEffect(rowScale, anchor: .center)
+            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .onHover { hovering in
+                withAnimation(DS.snappy) { isHovered = hovering }
+            }
+            .onTapGesture(perform: onTap)
+            .animation(DS.spring, value: isSelected)
+    }
+
+    private static func fill(theme: AppTheme, isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
+        if isSelected {
+            return theme.isDark
+                ? tint.opacity(theme.isMonochrome ? 0.11 : 0.15)
+                : tint.opacity(theme.isMonochrome ? 0.05 : 0.08)
+        }
+        if isHighlighted { return tint.opacity(theme.isDark ? 0.10 : 0.07) }
+        if isHovered { return theme.isDark ? Color.white.opacity(0.07) : Color.white.opacity(0.52) }
+        return Color.clear
+    }
+
+    private static func stroke(theme: AppTheme, isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
+        if isSelected { return tint.opacity(theme.isMonochrome ? (theme.isDark ? 0.20 : 0.12) : (theme.isDark ? 0.26 : 0.14)) }
+        if isHighlighted { return tint.opacity(0.14) }
+        if isHovered { return Color.primary.opacity(0.06) }
+        return Color.clear
+    }
+}
+
+/// A note row in multi-select mode. Owns its own hover state for the same
+/// reason as `NoteRowListItem`.
+private struct SelectableNoteRowItem: View {
+    let note: Note
+    let folderName: String
+    let isChecked: Bool
+    let onToggle: () -> Void
+
+    @EnvironmentObject private var themeManager: ThemeManager
+    @State private var isHovered = false
+
+    private var theme: AppTheme { themeManager.theme }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isChecked ? Color.blue : Color.secondary.opacity(0.4))
+                .font(.system(size: 16, weight: .medium))
+
+            NoteRowView(note: note, folderName: folderName, isHovered: isHovered, isSelected: isChecked)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .fill(isChecked
+                      ? theme.accent.opacity(theme.isDark ? 0.10 : 0.07)
+                      : (isHovered ? Color.white.opacity(theme.isDark ? 0.06 : 0.42) : Color.clear))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .strokeBorder(isChecked
+                              ? theme.accent.opacity(theme.isDark ? 0.28 : 0.20)
+                              : (isHovered ? theme.accent.opacity(0.12) : Color.clear), lineWidth: 0.8)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .onHover { hovering in
+            withAnimation(DS.snappy) { isHovered = hovering }
+        }
+        .onTapGesture(perform: onToggle)
     }
 }
 
