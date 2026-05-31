@@ -61,6 +61,8 @@ struct NoteEditorView: View {
                     }
                     .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
                     .help(isSidebarVisible ? "Hide Sidebar (⌘⌥B)" : "Show Sidebar (⌘⌥B)")
+                    .accessibilityLabel(isSidebarVisible ? "Hide sidebar" : "Show sidebar")
+                    .accessibilityHint("Toggles the notes sidebar. Shortcut: Command Option B.")
                 }
 
                 Image(systemName: "folder")

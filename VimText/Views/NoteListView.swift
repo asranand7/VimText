@@ -183,6 +183,8 @@ struct NoteListView: View {
                     }
                     .buttonStyle(PressableIconButtonStyle())
                     .help("Collapse Sidebar (⌘⌥B)")
+                    .accessibilityLabel("Collapse sidebar")
+                    .accessibilityHint("Hides the notes sidebar. Shortcut: Command Option B.")
                 }
 
                 HStack(spacing: 8) {
