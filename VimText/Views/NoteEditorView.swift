@@ -3,6 +3,8 @@ import SwiftUI
 struct NoteEditorView: View {
     @ObservedObject var viewModel: NotesViewModel
     let noteId: UUID
+    var isSidebarVisible = true
+    var onToggleSidebar: (() -> Void)? = nil
 
     @StateObject private var vimEngine = VimEngine()
     @StateObject private var findController = FindController()
@@ -50,6 +52,19 @@ struct NoteEditorView: View {
 
             // Left: folder + timestamp
             HStack(spacing: 4) {
+                if let onToggleSidebar {
+                    Button(action: onToggleSidebar) {
+                        Image(systemName: "sidebar.leading")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(isSidebarVisible ? theme.secondaryText.opacity(0.62) : theme.accent)
+                            .frame(width: 18, height: 18)
+                    }
+                    .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
+                    .help(isSidebarVisible ? "Hide Sidebar (⌘⌥B)" : "Show Sidebar (⌘⌥B)")
+                    .accessibilityLabel(isSidebarVisible ? "Hide sidebar" : "Show sidebar")
+                    .accessibilityHint("Toggles the notes sidebar. Shortcut: Command Option B.")
+                }
+
                 Image(systemName: "folder")
                     .font(.system(size: 10, weight: .medium))
                 Text(folderName)
@@ -188,7 +203,8 @@ struct NoteEditorView: View {
                             .strokeBorder(editorPanelStroke, lineWidth: 1)
                     )
                     .shadow(color: Color.black.opacity(theme.isDark ? 0.30 : 0.07), radius: 22, x: 0, y: 8)
-                    .padding(.horizontal, 18)
+                    .padding(.leading, 4)
+                    .padding(.trailing, 18)
                     .padding(.top, 8)
                     .padding(.bottom, 18)
                     

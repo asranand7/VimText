@@ -5,6 +5,7 @@ public extension Notification.Name {
     static let focusNoteSearch = Notification.Name("focusNoteSearch")
     static let findInNote = Notification.Name("findInNote")
     static let openCommandPalette = Notification.Name("openCommandPalette")
+    static let toggleSidebar = Notification.Name("toggleSidebar")
     static let openChangeLocationPanel = Notification.Name("openChangeLocationPanel")
     static let refocusEditor = Notification.Name("refocusEditor")
     /// Posted when a note is opened from somewhere other than the sidebar

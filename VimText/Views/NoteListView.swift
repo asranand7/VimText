@@ -2,6 +2,7 @@ import SwiftUI
 
 struct NoteListView: View {
     @ObservedObject var viewModel: NotesViewModel
+    var onToggleSidebar: (() -> Void)? = nil
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var selectedNoteIds: Set<UUID> = []
     @State private var isSelectionMode = false
@@ -165,6 +166,27 @@ struct NoteListView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
+                if let onToggleSidebar {
+                    Button(action: onToggleSidebar) {
+                        Image(systemName: "sidebar.leading")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(theme.secondaryText.opacity(0.72))
+                            .frame(width: 36, height: 36)
+                            .background(
+                                Circle()
+                                    .fill(theme.isDark ? Color.white.opacity(0.06) : Color.white.opacity(0.42))
+                            )
+                            .overlay(
+                                Circle()
+                                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+                            )
+                    }
+                    .buttonStyle(PressableIconButtonStyle())
+                    .help("Collapse Sidebar (⌘⌥B)")
+                    .accessibilityLabel("Collapse sidebar")
+                    .accessibilityHint("Hides the notes sidebar. Shortcut: Command Option B.")
+                }
+
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(theme.secondaryText.opacity(0.7))
@@ -233,6 +255,7 @@ struct NoteListView: View {
                         isSearchHovered = hovering
                     }
                 }
+                .layoutPriority(1)
 
                 Button(action: { viewModel.createNote() }) {
                     Image(systemName: "square.and.pencil")

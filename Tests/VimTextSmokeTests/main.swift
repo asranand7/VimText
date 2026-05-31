@@ -90,6 +90,12 @@ func testEditorPreferencesFontSizing() throws {
     try expectEqual(EditorPreferences.resetFontSize(defaults: defaults), EditorPreferences.defaultFontSize, "reset should restore default")
 }
 
+func testSidebarWidthClamping() throws {
+    try expectEqual(SidebarLayout.clampedWidth(10), SidebarLayout.minimumWidth, "sidebar width should clamp to minimum")
+    try expectEqual(SidebarLayout.clampedWidth(300), 300, "sidebar width should preserve valid values")
+    try expectEqual(SidebarLayout.clampedWidth(999), SidebarLayout.maximumWidth, "sidebar width should clamp to maximum")
+}
+
 func testGraphiteEditorContrast() throws {
     let contrast = ThemeContrastChecks.graphiteEditorTextContrastRatio()
     try expect(
@@ -357,6 +363,7 @@ func testStorageMalformedFilesAndWriteErrors() throws {
 let tests: [(String, () throws -> Void)] = [
     ("Note model derived text", testNoteModelDerivedText),
     ("Editor preferences font sizing", testEditorPreferencesFontSizing),
+    ("Sidebar width clamping", testSidebarWidthClamping),
     ("Graphite editor contrast", testGraphiteEditorContrast),
     ("Vim normal motions and counts", testVimNormalModeMotionsAndCounts),
     ("Vim insert, replace, and command modes", testVimInsertReplaceAndCommandModes),

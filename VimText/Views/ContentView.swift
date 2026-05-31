@@ -3,10 +3,16 @@ import SwiftUI
 public struct ContentView: View {
     @StateObject private var viewModel = NotesViewModel()
     @StateObject private var themeManager = ThemeManager()
+    @SceneStorage("isSidebarVisible") private var isSidebarVisible = true
+    @AppStorage("sidebarWidth") private var sidebarWidth = SidebarLayout.defaultWidth
 
     private var theme: AppTheme { themeManager.theme }
 
     @State private var showCommandPalette = false
+
+    private var clampedSidebarWidth: CGFloat {
+        CGFloat(SidebarLayout.clampedWidth(sidebarWidth))
+    }
 
     private var emptyDetail: some View {
         VStack(spacing: 14) {
@@ -38,19 +44,23 @@ public struct ContentView: View {
 
     public var body: some View {
         ZStack {
-            NavigationSplitView {
-                NoteListView(viewModel: viewModel)
-                    .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
-            } detail: {
-                ZStack {
-                    if let noteId = viewModel.selectedNoteId,
-                       viewModel.notes.contains(where: { $0.id == noteId }) {
-                        NoteEditorView(viewModel: viewModel, noteId: noteId)
-                            .id(noteId)
-                    } else {
-                        emptyDetail
-                    }
+            HStack(spacing: 0) {
+                if isSidebarVisible {
+                    NoteListView(viewModel: viewModel, onToggleSidebar: collapseSidebar)
+                        .frame(width: clampedSidebarWidth)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+
+                    SidebarResizeHandle(
+                        width: $sidebarWidth,
+                        isSidebarVisible: $isSidebarVisible
+                    )
+                    .environmentObject(themeManager)
+                    .transition(.opacity)
                 }
+
+                detailContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
             }
             .ignoresSafeArea(.container, edges: .top)
             .toolbar(.hidden, for: .windowToolbar)
@@ -80,6 +90,17 @@ public struct ContentView: View {
                 showCommandPalette.toggle()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in
+            toggleSidebar()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .focusNoteSearch)) { _ in
+            guard !isSidebarVisible else { return }
+            showSidebarAndReplay(.focusNoteSearch)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .revealNoteInSidebar)) { notification in
+            guard !isSidebarVisible else { return }
+            showSidebarAndReplay(.revealNoteInSidebar, object: notification.object)
+        }
         .background(
             WindowAccessor { window in
                 window.titlebarAppearsTransparent = true
@@ -87,6 +108,141 @@ public struct ContentView: View {
                 window.styleMask.insert(.fullSizeContentView)
             }
         )
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        ZStack {
+            if let noteId = viewModel.selectedNoteId,
+               viewModel.notes.contains(where: { $0.id == noteId }) {
+                NoteEditorView(
+                    viewModel: viewModel,
+                    noteId: noteId,
+                    isSidebarVisible: isSidebarVisible,
+                    onToggleSidebar: toggleSidebar
+                )
+                .id(noteId)
+            } else {
+                emptyDetail
+                    .overlay(alignment: .topLeading) {
+                        sidebarToggleButton
+                            .padding(.leading, 30)
+                            .padding(.top, 20)
+                    }
+            }
+        }
+    }
+
+    private var sidebarToggleButton: some View {
+        Button(action: toggleSidebar) {
+            Image(systemName: "sidebar.leading")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(isSidebarVisible ? theme.secondaryText.opacity(0.65) : theme.accent)
+                .frame(width: 28, height: 24)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(theme.separator.opacity(0.22), lineWidth: 0.5))
+        }
+        .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
+        .help(isSidebarVisible ? "Hide Sidebar (⌘⌥B)" : "Show Sidebar (⌘⌥B)")
+        .accessibilityLabel(isSidebarVisible ? "Hide sidebar" : "Show sidebar")
+        .accessibilityHint("Toggles the notes sidebar. Shortcut: Command Option B.")
+    }
+
+    private func toggleSidebar() {
+        withAnimation(DS.spring) {
+            isSidebarVisible.toggle()
+        }
+        if isSidebarVisible {
+            revealSelectedNoteAfterSidebarAppears()
+        }
+    }
+
+    private func collapseSidebar() {
+        withAnimation(DS.spring) {
+            isSidebarVisible = false
+        }
+    }
+
+    private func showSidebarAndReplay(_ name: Notification.Name, object: Any? = nil) {
+        withAnimation(DS.spring) {
+            isSidebarVisible = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            NotificationCenter.default.post(name: name, object: object)
+        }
+    }
+
+    private func revealSelectedNoteAfterSidebarAppears() {
+        guard let selectedNoteId = viewModel.selectedNoteId else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            NotificationCenter.default.post(name: .revealNoteInSidebar, object: selectedNoteId)
+        }
+    }
+}
+
+private struct SidebarResizeHandle: View {
+    @Binding var width: Double
+    @Binding var isSidebarVisible: Bool
+    @EnvironmentObject private var themeManager: ThemeManager
+    @State private var dragStartWidth: Double?
+    @State private var isHovered = false
+
+    private var theme: AppTheme { themeManager.theme }
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(theme.separator.opacity(isHovered ? 0.88 : 0.46))
+                .frame(width: 1)
+
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(theme.secondaryText.opacity(isHovered ? 0.42 : 0.16))
+                .frame(width: 2, height: 34)
+        }
+        .frame(width: 8)
+        .frame(maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .background {
+            ResizeCursorZone()
+            theme.surface.opacity(isHovered ? 0.05 : 0.001)
+        }
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                .onChanged { value in
+                    if dragStartWidth == nil {
+                        dragStartWidth = SidebarLayout.clampedWidth(width)
+                    }
+                    let startWidth = dragStartWidth ?? width
+                    width = SidebarLayout.clampedWidth(startWidth + value.translation.width)
+                }
+                .onEnded { _ in
+                    dragStartWidth = nil
+                    width = SidebarLayout.clampedWidth(width)
+                }
+        )
+        .onTapGesture(count: 2) {
+            withAnimation(DS.spring) {
+                isSidebarVisible = false
+            }
+        }
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .help("Drag to resize sidebar. Double-click to hide.")
+    }
+}
+
+private struct ResizeCursorZone: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        ResizeCursorNSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class ResizeCursorNSView: NSView {
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
     }
 }
 
