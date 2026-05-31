@@ -23,7 +23,10 @@ enum PaletteItem: Identifiable {
 class CommandPaletteState: ObservableObject {
     @Published var searchText = ""
     @Published var selectedIndex = 0
-    
+    @Published var results: [PaletteItem] = []
+    private var searchGeneration = 0
+    private var debounceItem: DispatchWorkItem?
+
     func getCommands(themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteCommand] {
         return [
             PaletteCommand(id: "new_note", name: "Create New Note", icon: "square.and.pencil") {
@@ -61,37 +64,65 @@ class CommandPaletteState: ObservableObject {
         ]
     }
     
-    func filteredItems(from notes: [Note], themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteItem] {
+    func scheduleSearch(notes: [Note], themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) {
+        debounceItem?.cancel()
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        searchGeneration &+= 1
+        let gen = searchGeneration
+
+        if query.isEmpty {
+            results = buildItems(matched: notes, query: "", themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
+            return
+        }
+
+        let work = DispatchWorkItem { [weak self] in
+            let matched = CommandPaletteState.matchingNotes(notes, query: query)
+            DispatchQueue.main.async {
+                guard let self, gen == self.searchGeneration else { return }
+                self.results = self.buildItems(matched: matched, query: query, themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
+            }
+        }
+        debounceItem = work
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    static func matchingNotes(_ notes: [Note], query: String) -> [Note] {
+        if query.isEmpty { return notes }
+        let count = notes.count
+        if count < 200 {
+            return notes.filter {
+                $0.title.localizedCaseInsensitiveContains(query) || $0.content.localizedCaseInsensitiveContains(query)
+            }
+        }
+        let cores = min(ProcessInfo.processInfo.activeProcessorCount, count)
+        let chunk = (count + cores - 1) / cores
+        var buckets = [[Note]](repeating: [], count: cores)
+        buckets.withUnsafeMutableBufferPointer { buf in
+            DispatchQueue.concurrentPerform(iterations: cores) { k in
+                let lo = k * chunk
+                let hi = min(lo + chunk, count)
+                guard lo < hi else { return }
+                var local: [Note] = []
+                for i in lo..<hi {
+                    let n = notes[i]
+                    if n.title.localizedCaseInsensitiveContains(query) || n.content.localizedCaseInsensitiveContains(query) {
+                        local.append(n)
+                    }
+                }
+                buf[k] = local
+            }
+        }
+        return buckets.flatMap { $0 }
+    }
+
+    func buildItems(matched: [Note], query: String, themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteItem] {
         var items: [PaletteItem] = []
-        
-        let filteredNotes = notes.filter { note in
-            query.isEmpty || 
-            note.title.localizedCaseInsensitiveContains(query) ||
-            note.content.localizedCaseInsensitiveContains(query)
-        }
-        
-        // Pinned notes first
-        let pinnedNotes = filteredNotes.filter { $0.isPinned }
-        for note in pinnedNotes {
-            items.append(.note(note))
-        }
-        
-        // Unpinned notes next
-        let unpinnedNotes = filteredNotes.filter { !$0.isPinned }
-        for note in unpinnedNotes {
-            items.append(.note(note))
-        }
-        
-        // Commands
-        let allCommands = getCommands(themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
-        let filteredCommands = allCommands.filter { cmd in
+        for note in matched where note.isPinned { items.append(.note(note)) }
+        for note in matched where !note.isPinned { items.append(.note(note)) }
+        let filteredCommands = getCommands(themeManager: themeManager, viewModel: viewModel, dismiss: dismiss).filter { cmd in
             query.isEmpty || cmd.name.localizedCaseInsensitiveContains(query)
         }
-        for cmd in filteredCommands {
-            items.append(.command(cmd))
-        }
-        
+        for cmd in filteredCommands { items.append(.command(cmd)) }
         return items
     }
 }
@@ -114,7 +145,7 @@ struct CommandPaletteView: View {
     private var theme: AppTheme { themeManager.theme }
     
     private var items: [PaletteItem] {
-        state.filteredItems(from: viewModel.notes, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
+        state.results
     }
     
     private var searchFieldRow: some View {
@@ -292,9 +323,11 @@ struct CommandPaletteView: View {
             startWidth = width
             startHeight = height
             setupKeyboardMonitor()
+            state.scheduleSearch(notes: viewModel.notes, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
         }
         .onChange(of: state.searchText) {
             state.selectedIndex = 0
+            state.scheduleSearch(notes: viewModel.notes, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
         }
     }
     
@@ -312,7 +345,7 @@ struct CommandPaletteView: View {
     private func paletteNoteRow(note: Note, index: Int, isSelected: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Text(note.displayTitle)
+                Text(highlightedText(note.displayTitle, query: state.searchText))
                     .font(.system(.body, design: .default).weight(.semibold))
                     .foregroundStyle(theme.text)
                 Spacer()
@@ -326,7 +359,7 @@ struct CommandPaletteView: View {
                     .foregroundStyle(theme.secondaryText.opacity(0.8))
             }
             
-            Text(note.preview.isEmpty ? "No additional text" : note.preview)
+            Text(highlightedText(note.preview.isEmpty ? "No additional text" : note.preview, query: state.searchText))
                 .font(.caption)
                 .foregroundStyle(theme.secondaryText.opacity(0.8))
                 .lineLimit(1)
@@ -399,6 +432,8 @@ struct CommandPaletteView: View {
             let item = items[state.selectedIndex]
             switch item {
             case .note(let note):
+                let q = state.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                viewModel.pendingSearchHighlight = q.isEmpty ? nil : q
                 viewModel.selectedNoteId = note.id
                 viewModel.searchText = ""
                 // Ask the sidebar to scroll to and reveal this note —
@@ -449,9 +484,7 @@ struct CommandPaletteView: View {
             set: { self.isPresented = $0 }
         )
         let paletteState = state
-        let vm = viewModel
-        let tMgr = themeManager
-        
+
         keyboardMonitor.onKey = { [weak paletteState] event -> NSEvent? in
             guard let paletteState = paletteState else { return event }
             let isEsc = event.keyCode == 53
@@ -466,16 +499,14 @@ struct CommandPaletteView: View {
                 return nil
             }
             if isUp {
-                let items = paletteState.filteredItems(from: vm.notes, themeManager: tMgr, viewModel: vm, dismiss: {})
-                let count = items.count
+                let count = paletteState.results.count
                 if count > 0 {
                     paletteState.selectedIndex = (paletteState.selectedIndex - 1 + count) % count
                 }
                 return nil
             }
             if isDown {
-                let items = paletteState.filteredItems(from: vm.notes, themeManager: tMgr, viewModel: vm, dismiss: {})
-                let count = items.count
+                let count = paletteState.results.count
                 if count > 0 {
                     paletteState.selectedIndex = (paletteState.selectedIndex + 1) % count
                 }
@@ -485,6 +516,24 @@ struct CommandPaletteView: View {
         }
     }
     
+    private func highlightedText(_ text: String, query: String) -> AttributedString {
+        var attr = AttributedString(text)
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return attr }
+        var searchStart = text.startIndex
+        while let r = text.range(of: q, options: .caseInsensitive, range: searchStart..<text.endIndex) {
+            if let lo = AttributedString.Index(r.lowerBound, within: attr),
+               let hi = AttributedString.Index(r.upperBound, within: attr) {
+                attr[lo..<hi].backgroundColor = theme.accent.opacity(0.3)
+                attr[lo..<hi].foregroundColor = theme.text
+                attr[lo..<hi].inlinePresentationIntent = .stronglyEmphasized
+            }
+            if r.upperBound >= text.endIndex { break }
+            searchStart = r.upperBound
+        }
+        return attr
+    }
+
     private func formatDate(_ date: Date) -> String {
         AppDateFormatters.shortDateTime.string(from: date)
     }

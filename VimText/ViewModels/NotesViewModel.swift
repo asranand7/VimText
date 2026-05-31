@@ -9,6 +9,7 @@ final class NotesViewModel: ObservableObject {
     @Published var folders: [NoteFolder] = []
     @Published var selectedNoteId: UUID?
     @Published var selectedFolderId: UUID?
+    @Published var pendingSearchHighlight: String?
     @Published var searchText: String = ""
     @Published var showAllNotes: Bool = true
 
@@ -116,6 +117,7 @@ final class NotesViewModel: ObservableObject {
         storage.apply(snapshot)
         notes = snapshot.notes
         folders = loadedFolders
+        storage.makeLaunchBackup()
         if notes.isEmpty {
             createWelcomeNote()
         } else if selectedNoteId == nil || !notes.contains(where: { $0.id == selectedNoteId }) {

@@ -220,6 +220,9 @@ struct NoteEditorView: View {
             loadNote()
             findController.installKeyMonitor()
         }
+        .onChange(of: viewModel.pendingSearchHighlight) { _, newValue in
+            if newValue != nil { applyPendingSearchHighlight() }
+        }
         .onDisappear {
             // Flush the editor's debounced restyle/RTF first (synchronous), so
             // saveCurrentNote() persists content and rich text consistently.
@@ -621,6 +624,17 @@ struct NoteEditorView: View {
             if findController.isVisible {
                 closeFindBar()
             }
+            applyPendingSearchHighlight()
+        }
+    }
+
+    private func applyPendingSearchHighlight() {
+        guard let highlight = viewModel.pendingSearchHighlight, !highlight.isEmpty else { return }
+        viewModel.pendingSearchHighlight = nil
+        findController.isVisible = true
+        findController.query = highlight
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            findController.performFind?(highlight)
         }
     }
 

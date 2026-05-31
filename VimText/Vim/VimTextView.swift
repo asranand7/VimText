@@ -489,7 +489,7 @@ struct VimTextView: NSViewRepresentable {
         }
 
         private func executeDeferredWork() {
-            guard let textView = textView else { return }
+            guard let textView = textView, hasUnsyncedEdits else { return }
 
             // Sync text binding — now that typing has paused, push the
             // current text to SwiftUI so onChange/save handlers see it.
