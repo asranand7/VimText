@@ -26,3 +26,11 @@ targets:
       CODE_SIGN_IDENTITY: "-"
       CODE_SIGN_STYLE: Automatic
       SWIFT_EMIT_LOC_STRINGS: true
+
+  VimTextUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - Tests/VimTextUITests
+    dependencies:
+      - target: VimText
