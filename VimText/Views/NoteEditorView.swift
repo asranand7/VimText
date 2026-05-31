@@ -398,6 +398,7 @@ struct NoteEditorView: View {
     }
 
     private func queueViewModelUpdate(content: String, rtfData: Data) {
+        guard hasLoaded else { return }
         updateViewModelTask?.cancel()
         updateViewModelTask = Task {
             try? await Task.sleep(nanoseconds: 500_000_000) // 500ms debounce
@@ -414,6 +415,7 @@ struct NoteEditorView: View {
     }
 
     private func commitPendingWorkEagerly() {
+        guard hasLoaded else { return }
         NotificationCenter.default.post(name: .commitEditorPendingWork, object: nil)
         updateViewModelTask?.cancel()
         updateViewModelTask = nil
@@ -623,6 +625,7 @@ struct NoteEditorView: View {
     }
 
     private func saveCurrentNote() {
+        guard hasLoaded else { return }
         let title = extractTitle(from: content)
         viewModel.updateNoteContent(id: noteId, title: title.isEmpty ? "Untitled" : title, content: content, rtfData: rtfData)
         // Explicit save (⌘S / :w) and closing the editor should hit disk now,
