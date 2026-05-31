@@ -54,10 +54,14 @@ struct NoteEditorView: View {
             HStack(spacing: 4) {
                 if let onToggleSidebar {
                     Button(action: onToggleSidebar) {
-                        Image(systemName: "sidebar.leading")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(isSidebarVisible ? theme.secondaryText.opacity(0.62) : theme.accent)
-                            .frame(width: 18, height: 18)
+                        HStack(spacing: 4) {
+                            Image(systemName: "sidebar.leading")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("⌘⌥B")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(theme.secondaryText.opacity(0.76))
+                        }
+                        .foregroundStyle(isSidebarVisible ? theme.secondaryText.opacity(0.62) : theme.accent)
                     }
                     .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
                     .help(isSidebarVisible ? "Hide Sidebar (⌘⌥B)" : "Show Sidebar (⌘⌥B)")

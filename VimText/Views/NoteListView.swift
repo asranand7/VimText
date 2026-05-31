@@ -171,8 +171,9 @@ struct NoteListView: View {
                         HStack(spacing: 5) {
                             Image(systemName: "sidebar.leading")
                                 .font(.system(size: 13, weight: .semibold))
-                            Text("Hide")
-                                .font(.system(size: 12, weight: .semibold))
+                            Text("⌘⌥B")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(theme.secondaryText.opacity(0.78))
                         }
                         .foregroundStyle(theme.secondaryText.opacity(0.74))
                         .padding(.horizontal, 10)
