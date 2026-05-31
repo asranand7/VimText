@@ -626,6 +626,7 @@ struct NoteEditorView: View {
 
     private func saveCurrentNote() {
         guard hasLoaded else { return }
+        NotificationCenter.default.post(name: .commitEditorPendingWork, object: nil)
         let title = extractTitle(from: content)
         viewModel.updateNoteContent(id: noteId, title: title.isEmpty ? "Untitled" : title, content: content, rtfData: rtfData)
         // Explicit save (⌘S / :w) and closing the editor should hit disk now,
