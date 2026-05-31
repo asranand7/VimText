@@ -45,13 +45,10 @@ struct ContentView: View {
                        viewModel.notes.contains(where: { $0.id == noteId }) {
                         NoteEditorView(viewModel: viewModel, noteId: noteId)
                             .id(noteId)
-                            .transition(.smoothContent)
                     } else {
                         emptyDetail
-                            .transition(.smoothContent)
                     }
                 }
-                .animation(.spring(response: 0.12, dampingFraction: 0.88), value: viewModel.selectedNoteId)
             }
             .ignoresSafeArea(.container, edges: .top)
             .toolbar(.hidden, for: .windowToolbar)
