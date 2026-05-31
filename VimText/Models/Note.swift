@@ -1,16 +1,16 @@
 import Foundation
 
-struct Note: Identifiable, Codable, Hashable {
-    let id: UUID
-    var title: String
-    var content: String
-    var rtfData: Data?
-    var folderId: UUID?
-    var createdAt: Date
-    var modifiedAt: Date
-    var isPinned: Bool
+public struct Note: Identifiable, Codable, Hashable {
+    public let id: UUID
+    public var title: String
+    public var content: String
+    public var rtfData: Data?
+    public var folderId: UUID?
+    public var createdAt: Date
+    public var modifiedAt: Date
+    public var isPinned: Bool
 
-    init(
+    public init(
         id: UUID = UUID(),
         title: String = "New Note",
         content: String = "",
@@ -30,12 +30,12 @@ struct Note: Identifiable, Codable, Hashable {
         self.isPinned = isPinned
     }
 
-    var displayTitle: String {
+    public var displayTitle: String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "New Note" : trimmed
     }
 
-    var preview: String {
+    public var preview: String {
         // Only the first 3 lines (capped to 120 chars) are ever shown, so
         // split just the head of the content. Splitting the whole string
         // allocates an array of every line — slow for very large notes that

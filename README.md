@@ -1,6 +1,6 @@
 # VimText
 
-A native macOS notes app with comprehensive Vim keybinding support. Think Apple Notes, but with Vim.
+A native macOS notes app with broad Vim keybinding support. Think Apple Notes, but with Vim.
 
 ![macOS](https://img.shields.io/badge/macOS-14.0%2B-blue) ![Swift](https://img.shields.io/badge/Swift-5.9-orange) ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -12,11 +12,12 @@ A native macOS notes app with comprehensive Vim keybinding support. Think Apple 
 - **Search across notes** — `Cmd+Shift+F` to search all notes by title/content, navigate results with arrow keys, press Enter to open
 - **Context menus** — right-click notes for rename, pin, delete
 - **Multi-select & bulk delete** — select multiple notes and delete them at once
-- **Auto-save** — notes are saved automatically as you type
-- **Local storage** — all notes stored as JSON in `~/Library/Application Support/VimText/`
+- **Auto-save** — notes are saved automatically as you type, with visible save/error state
+- **Local storage** — notes are stored locally in `~/Library/Application Support/VimText/`
 
 ### Visual & Customization Options
 - **Paper Styles** — Toggle between **Plain**, **Dotted Grid**, and **Lined Paper** editor backgrounds (aligned to text baselines) via the settings menu or `⌘K` Command Palette.
+- **Line Numbers** — Toggle editor line numbers from the format menu.
 - **Modern Monochromatic Icon** — A sleek, minimalist black-and-white macOS dock icon designed for modern setups.
 - **Multiple Editor Themes** — Support for premium themes including Catppuccin, Nord, Dracula, Gruvbox, and Solarized.
 
@@ -30,6 +31,7 @@ A native macOS notes app with comprehensive Vim keybinding support. Think Apple 
 |------|-------------|
 | **Normal** | `Esc` |
 | **Insert** | `i`, `a`, `o`, `O`, `A`, `I`, `s`, `S`, `c` commands |
+| **Replace** | `R` |
 | **Visual** | `v` |
 | **Visual Line** | `Shift+V` |
 | **Visual Block** | `Ctrl+V` |
@@ -42,6 +44,8 @@ A native macOS notes app with comprehensive Vim keybinding support. Think Apple 
 |-----|--------|
 | `h` `j` `k` `l` | Left, down, up, right |
 | `w` `b` `e` | Word forward, word back, end of word |
+| `W` `B` `E` | WORD forward, WORD back, end of WORD |
+| `ge` / `gE` | Previous word / WORD end |
 | `0` `$` `^` | Line start, line end, first non-blank |
 | `gg` / `G` | Document start / end |
 | `{` `}` | Paragraph up / down |
@@ -64,6 +68,7 @@ A native macOS notes app with comprehensive Vim keybinding support. Think Apple 
 | `C` | Change to end of line |
 | `x` | Delete character |
 | `r` + char | Replace character |
+| `R` | Replace mode |
 | `~` | Toggle case |
 | `s` | Substitute character |
 | `S` | Substitute line |
@@ -74,6 +79,8 @@ A native macOS notes app with comprehensive Vim keybinding support. Think Apple 
 Combine counts and motions freely:
 - `d2j` — delete current line and 2 lines below
 - `3dd` — delete 3 lines
+- `2cc` — change 2 lines
+- `2>>` — indent 2 lines
 - `dG` — delete from current line to end of file
 - `cgg` — change from current line to start of file
 - `y3w` — yank 3 words
@@ -177,9 +184,19 @@ swift build -c release
 
 The binary will be at `.build/release/VimText`.
 
+### Verification
+
+```bash
+swift build
+swift run VimTextSmokeTests
+swift build -c release
+```
+
 ## Architecture
 
 ```
+App/
+└── VimTextApp.swift            # SwiftPM executable entry point
 VimText/
 ├── Models/
 │   ├── Note.swift              # Note data model
@@ -197,7 +214,11 @@ VimText/
 │   ├── VimEngine.swift         # Core Vim state machine & key processing
 │   ├── VimMode.swift           # Mode, action, motion & text object enums
 │   └── VimTextView.swift       # NSTextView integration & action execution
+├── Support/
+│   └── NotificationNames.swift # Shared notification constants
 └── VimTextApp.swift            # App entry point & global shortcuts
+Tests/
+└── VimTextSmokeTests/          # CLI smoke coverage for Vim parsing and storage
 ```
 
 ## Data Storage
@@ -208,7 +229,7 @@ Notes are stored as individual JSON files in:
 ~/Library/Application Support/VimText/notes/
 ```
 
-Each note is a separate `.json` file with its content, title, timestamps, and metadata.
+Each note has a `.json` metadata file plus plain-text and optional rich-text sidecars for efficient editing of large notes.
 
 ## Support
 

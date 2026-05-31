@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ContentView: View {
+public struct ContentView: View {
     @StateObject private var viewModel = NotesViewModel()
     @StateObject private var themeManager = ThemeManager()
 
@@ -34,7 +34,9 @@ struct ContentView: View {
         )
     }
 
-    var body: some View {
+    public init() {}
+
+    public var body: some View {
         ZStack {
             NavigationSplitView {
                 NoteListView(viewModel: viewModel)
@@ -68,7 +70,7 @@ struct ContentView: View {
             // Window teardown (closed without quitting): flush any debounced
             // edits before the view model goes away. App quit is covered
             // separately by the willTerminate observer in NotesViewModel.
-            viewModel.flushPendingSaves()
+            viewModel.flushPendingSavesSynchronously()
         }
         .onReceive(NotificationCenter.default.publisher(for: .createNewNote)) { _ in
             viewModel.createNote()

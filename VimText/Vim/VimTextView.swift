@@ -87,6 +87,7 @@ struct VimTextView: NSViewRepresentable {
     var accentColor: NSColor = .systemOrange
     var paperStyle: String = "plain"
     var smartLists: Bool = true
+    var showLineNumbers: Bool = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -173,6 +174,9 @@ struct VimTextView: NSViewRepresentable {
         textView.smartLists = smartLists
 
         scrollView.documentView = textView
+        scrollView.verticalRulerView = LineNumberRulerView(scrollView: scrollView, textView: textView)
+        scrollView.hasVerticalRuler = showLineNumbers
+        scrollView.rulersVisible = showLineNumbers
 
         context.coordinator.textView = textView
         context.coordinator.scrollView = scrollView
@@ -279,6 +283,14 @@ struct VimTextView: NSViewRepresentable {
         }
 
         textView.smartLists = smartLists
+        scrollView.hasVerticalRuler = showLineNumbers
+        scrollView.rulersVisible = showLineNumbers
+        if let ruler = scrollView.verticalRulerView as? LineNumberRulerView {
+            ruler.textView = textView
+            ruler.needsDisplay = true
+        } else {
+            scrollView.verticalRulerView = LineNumberRulerView(scrollView: scrollView, textView: textView)
+        }
 
         textView.updateCursorAppearance(isBlock: !vimEngine.mode.isEditing)
     }
@@ -615,10 +627,10 @@ struct VimTextView: NSViewRepresentable {
             if !isReplayingDot {
                 let isChangeAction = actions.contains { action in
                     switch action {
-                    case .insertMode, .deleteMotion, .deleteLine, .deleteToEnd, .deleteChar,
-                         .deleteCharBefore, .changeMotion, .changeLine, .changeToEnd,
+                    case .insertMode, .deleteMotion, .deleteLine, .deleteLines, .deleteToEnd, .deleteChar,
+                         .deleteCharBefore, .changeMotion, .changeLine, .changeLines, .changeToEnd,
                          .deleteTextObject, .changeTextObject, .toggleCase, .joinLines,
-                         .pasteAfter, .pasteBefore, .indent, .outdent, .replaceChar:
+                         .pasteAfter, .pasteBefore, .indent, .outdent, .indentLines, .outdentLines, .replaceChar:
                         return true
                     default:
                         return false
@@ -626,7 +638,7 @@ struct VimTextView: NSViewRepresentable {
                 }
                 let entersInsert = actions.contains { action in
                     switch action {
-                    case .insertMode, .changeMotion, .changeLine, .changeToEnd, .changeTextObject:
+                    case .insertMode, .changeMotion, .changeLine, .changeLines, .changeToEnd, .changeTextObject:
                         return true
                     default:
                         return false
@@ -644,6 +656,69 @@ struct VimTextView: NSViewRepresentable {
 
             for action in actions {
                 executeAction(action, in: textView)
+            }
+        }
+
+        private func lineRangeForCount(from cursorPos: Int, count: Int, in nsString: NSString, includeTrailingNewline: Bool = true) -> NSRange {
+            let length = nsString.length
+            guard length > 0 else { return NSRange(location: 0, length: 0) }
+
+            let safeCursor = min(cursorPos, max(length - 1, 0))
+            let firstLine = nsString.lineRange(for: NSRange(location: safeCursor, length: 0))
+            var lastLine = firstLine
+
+            if count > 1 {
+                for _ in 1..<count {
+                    let nextLineStart = lastLine.location + lastLine.length
+                    guard nextLineStart < length else { break }
+                    lastLine = nsString.lineRange(for: NSRange(location: nextLineStart, length: 0))
+                }
+            }
+
+            var end = lastLine.location + lastLine.length
+            if !includeTrailingNewline, end > firstLine.location, nsString.character(at: end - 1) == 0x0A {
+                end -= 1
+            }
+            return NSRange(location: firstLine.location, length: max(0, end - firstLine.location))
+        }
+
+        private func indentLineRange(_ range: NSRange, in textView: VimNSTextView) {
+            var pos = range.location
+            var limit = range.location + range.length
+            while pos < limit {
+                let currentNsString = textView.string as NSString
+                let lr = currentNsString.lineRange(for: NSRange(location: min(pos, max(currentNsString.length - 1, 0)), length: 0))
+                textView.insertText("    ", replacementRange: NSRange(location: lr.location, length: 0))
+                pos = lr.location + lr.length + 4
+                limit += 4
+            }
+        }
+
+        private func outdentLineRange(_ range: NSRange, in textView: VimNSTextView) {
+            var pos = range.location
+            var limit = range.location + range.length
+            while pos < limit {
+                let currentNsString = textView.string as NSString
+                guard currentNsString.length > 0 else { break }
+                let lr = currentNsString.lineRange(for: NSRange(location: min(pos, currentNsString.length - 1), length: 0))
+                let lineText = currentNsString.substring(with: lr)
+                var removeCount = 0
+                for ch in lineText {
+                    if ch == " " && removeCount < 4 { removeCount += 1 }
+                    else if ch == "\t" && removeCount == 0 { removeCount = 1; break }
+                    else { break }
+                }
+                if removeCount > 0 {
+                    textView.setSelectedRange(NSRange(location: lr.location, length: removeCount))
+                    textView.delete(nil)
+                    limit -= removeCount
+                }
+                let newNsString = textView.string as NSString
+                guard newNsString.length > 0 else { break }
+                let nextLine = newNsString.lineRange(for: NSRange(location: min(lr.location, newNsString.length - 1), length: 0))
+                let next = nextLine.location + nextLine.length
+                if next <= pos { break }
+                pos = next
             }
         }
 
@@ -791,7 +866,7 @@ struct VimTextView: NSViewRepresentable {
 
                 let entersInsert = savedActions.contains { a in
                     switch a {
-                    case .insertMode, .changeMotion, .changeLine, .changeToEnd, .changeTextObject:
+                    case .insertMode, .changeMotion, .changeLine, .changeLines, .changeToEnd, .changeTextObject:
                         return true
                     default:
                         return false
@@ -847,6 +922,14 @@ struct VimTextView: NSViewRepresentable {
                 textView.setSelectedRange(lineRange)
                 textView.delete(nil)
 
+            case .deleteLines(let count):
+                let range = lineRangeForCount(from: cursorPos, count: max(1, count), in: nsString)
+                if range.length > 0 {
+                    parent.vimEngine.register = nsString.substring(with: range)
+                    textView.setSelectedRange(range)
+                    textView.delete(nil)
+                }
+
             case .deleteToEnd:
                 let lineRange = nsString.lineRange(for: NSRange(location: cursorPos, length: 0))
                 let lineEnd = lineRange.location + lineRange.length
@@ -890,6 +973,19 @@ struct VimTextView: NSViewRepresentable {
                 parent.vimEngine.register = nsString.substring(with: contentRange)
                 textView.setSelectedRange(contentRange)
                 textView.delete(nil)
+                textView.updateCursorAppearance(isBlock: false)
+                if !isReplayingDot {
+                    insertModeStartContent = textView.string
+                    insertModeStartPos = textView.selectedRange().location
+                }
+
+            case .changeLines(let count):
+                let range = lineRangeForCount(from: cursorPos, count: max(1, count), in: nsString, includeTrailingNewline: false)
+                if range.length > 0 {
+                    parent.vimEngine.register = nsString.substring(with: range)
+                    textView.setSelectedRange(range)
+                    textView.delete(nil)
+                }
                 textView.updateCursorAppearance(isBlock: false)
                 if !isReplayingDot {
                     insertModeStartContent = textView.string
@@ -949,6 +1045,14 @@ struct VimTextView: NSViewRepresentable {
                 parent.vimEngine.register = nsString.substring(with: lineRange)
                 parent.vimEngine.statusMessage = "1 line yanked"
                 flashYankHighlight(range: lineRange, in: textView)
+
+            case .yankLines(let count):
+                let range = lineRangeForCount(from: cursorPos, count: max(1, count), in: nsString)
+                if range.length > 0 {
+                    parent.vimEngine.register = nsString.substring(with: range)
+                    parent.vimEngine.statusMessage = "\(max(1, count)) line(s) yanked"
+                    flashYankHighlight(range: range, in: textView)
+                }
 
             case .yankMotion(let motion, let count):
                 let target = resolveMotionNTimes(motion, count: count, in: textView)
@@ -1043,6 +1147,16 @@ struct VimTextView: NSViewRepresentable {
                     textView.setSelectedRange(removeRange)
                     textView.delete(nil)
                 }
+
+            case .indentLines(let count):
+                let range = lineRangeForCount(from: cursorPos, count: max(1, count), in: nsString)
+                indentLineRange(range, in: textView)
+                textView.setSelectedRange(NSRange(location: range.location, length: 0))
+
+            case .outdentLines(let count):
+                let range = lineRangeForCount(from: cursorPos, count: max(1, count), in: nsString)
+                outdentLineRange(range, in: textView)
+                textView.setSelectedRange(NSRange(location: range.location, length: 0))
 
             case .searchForward, .searchBackward:
                 break
@@ -2002,13 +2116,28 @@ struct VimTextView: NSViewRepresentable {
                 return moveVertically(from: cursorPos, direction: -1, in: nsString)
 
             case .wordForward:
-                return findWordForward(from: cursorPos, in: string)
+                return findWordForward(from: cursorPos, in: string, bigWord: false)
 
             case .wordBackward:
-                return findWordBackward(from: cursorPos, in: string)
+                return findWordBackward(from: cursorPos, in: string, bigWord: false)
 
             case .wordEnd:
-                return findWordEnd(from: cursorPos, in: string)
+                return findWordEnd(from: cursorPos, in: string, bigWord: false)
+
+            case .bigWordForward:
+                return findWordForward(from: cursorPos, in: string, bigWord: true)
+
+            case .bigWordBackward:
+                return findWordBackward(from: cursorPos, in: string, bigWord: true)
+
+            case .bigWordEnd:
+                return findWordEnd(from: cursorPos, in: string, bigWord: true)
+
+            case .wordEndBackward:
+                return findWordEndBackward(from: cursorPos, in: string, bigWord: false)
+
+            case .bigWordEndBackward:
+                return findWordEndBackward(from: cursorPos, in: string, bigWord: true)
 
             case .lineStart:
                 let lineRange = nsString.lineRange(for: NSRange(location: cursorPos, length: 0))
@@ -2149,29 +2278,29 @@ struct VimTextView: NSViewRepresentable {
             return targetLineRange.location + targetCol
         }
 
-        private func findWordForward(from pos: Int, in string: String) -> Int {
+        private func findWordForward(from pos: Int, in string: String, bigWord: Bool) -> Int {
             guard pos < string.utf16.count else { return pos }
             let startIndex = string.utf16.index(string.utf16.startIndex, offsetBy: pos)
             var i = startIndex
-            let startType = charType(string[i])
+            let startType = charType(string[i], bigWord: bigWord)
             
-            while i < string.endIndex && charType(string[i]) == startType {
+            while i < string.endIndex && charType(string[i], bigWord: bigWord) == startType {
                 i = string.index(after: i)
             }
-            while i < string.endIndex && charType(string[i]) == .whitespace {
+            while i < string.endIndex && charType(string[i], bigWord: bigWord) == .whitespace {
                 i = string.index(after: i)
             }
             return i.utf16Offset(in: string)
         }
 
-        private func findWordBackward(from pos: Int, in string: String) -> Int {
+        private func findWordBackward(from pos: Int, in string: String, bigWord: Bool) -> Int {
             guard pos > 0 else { return 0 }
             let startIndex = string.utf16.index(string.utf16.startIndex, offsetBy: pos)
             var i = startIndex
             
             while i > string.startIndex {
                 let prevIdx = string.index(before: i)
-                if charType(string[prevIdx]) == .whitespace {
+                if charType(string[prevIdx], bigWord: bigWord) == .whitespace {
                     i = prevIdx
                 } else {
                     break
@@ -2180,11 +2309,11 @@ struct VimTextView: NSViewRepresentable {
             
             guard i > string.startIndex else { return 0 }
             let lastIdx = string.index(before: i)
-            let targetType = charType(string[lastIdx])
+            let targetType = charType(string[lastIdx], bigWord: bigWord)
             
             while i > string.startIndex {
                 let prevIdx = string.index(before: i)
-                if charType(string[prevIdx]) == targetType {
+                if charType(string[prevIdx], bigWord: bigWord) == targetType {
                     i = prevIdx
                 } else {
                     break
@@ -2193,7 +2322,7 @@ struct VimTextView: NSViewRepresentable {
             return i.utf16Offset(in: string)
         }
 
-        private func findWordEnd(from pos: Int, in string: String) -> Int {
+        private func findWordEnd(from pos: Int, in string: String, bigWord: Bool) -> Int {
             guard pos < string.utf16.count else { return pos }
             let startIndex = string.utf16.index(string.utf16.startIndex, offsetBy: pos)
             var i = startIndex
@@ -2204,15 +2333,15 @@ struct VimTextView: NSViewRepresentable {
             
             i = string.index(after: i)
             
-            while i < string.endIndex && charType(string[i]) == .whitespace {
+            while i < string.endIndex && charType(string[i], bigWord: bigWord) == .whitespace {
                 i = string.index(after: i)
             }
             
             if i < string.endIndex {
-                let targetType = charType(string[i])
+                let targetType = charType(string[i], bigWord: bigWord)
                 while i < string.endIndex {
                     let nextIdx = string.index(after: i)
-                    if nextIdx < string.endIndex && charType(string[nextIdx]) == targetType {
+                    if nextIdx < string.endIndex && charType(string[nextIdx], bigWord: bigWord) == targetType {
                         i = nextIdx
                     } else {
                         break
@@ -2222,12 +2351,46 @@ struct VimTextView: NSViewRepresentable {
             return min(i.utf16Offset(in: string), string.utf16.count - 1)
         }
 
+        private func findWordEndBackward(from pos: Int, in string: String, bigWord: Bool) -> Int {
+            guard pos > 0 else { return 0 }
+            var i = string.utf16.index(string.utf16.startIndex, offsetBy: min(pos, string.utf16.count - 1))
+
+            if i > string.startIndex {
+                i = string.index(before: i)
+            }
+            while i > string.startIndex && charType(string[i], bigWord: bigWord) == .whitespace {
+                i = string.index(before: i)
+            }
+
+            let targetType = charType(string[i], bigWord: bigWord)
+            while i > string.startIndex {
+                let prev = string.index(before: i)
+                if charType(string[prev], bigWord: bigWord) == targetType {
+                    i = prev
+                } else {
+                    break
+                }
+            }
+
+            var end = i
+            while end < string.endIndex {
+                let next = string.index(after: end)
+                if next < string.endIndex && charType(string[next], bigWord: bigWord) == targetType {
+                    end = next
+                } else {
+                    break
+                }
+            }
+            return end.utf16Offset(in: string)
+        }
+
         private enum CharType {
             case word, punctuation, whitespace
         }
 
-        private func charType(_ char: Character) -> CharType {
+        private func charType(_ char: Character, bigWord: Bool = false) -> CharType {
             if char.isNewline || char.isWhitespace { return .whitespace }
+            if bigWord { return .word }
             if char.isLetter || char.isNumber || char == "_" { return .word }
             return .punctuation
         }
@@ -2324,6 +2487,79 @@ struct VimTextView: NSViewRepresentable {
 
 extension NSAttributedString.Key {
     static let codeBlock = NSAttributedString.Key("vimTextCodeBlock")
+}
+
+final class LineNumberRulerView: NSRulerView {
+    weak var textView: NSTextView?
+
+    init(scrollView: NSScrollView, textView: NSTextView) {
+        self.textView = textView
+        super.init(scrollView: scrollView, orientation: .verticalRuler)
+        clientView = textView
+        ruleThickness = 44
+        reservedThicknessForMarkers = 0
+    }
+
+    required init(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func drawHashMarksAndLabels(in rect: NSRect) {
+        guard let textView,
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else { return }
+
+        NSColor.clear.setFill()
+        bounds.fill()
+
+        let nsString = textView.string as NSString
+        guard nsString.length > 0 else { return }
+
+        let visibleRect = textView.visibleRect
+        let glyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
+        guard glyphRange.length > 0 else { return }
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
+            .foregroundColor: NSColor.secondaryLabelColor.withAlphaComponent(0.62),
+            .paragraphStyle: {
+                let style = NSMutableParagraphStyle()
+                style.alignment = .right
+                return style
+            }()
+        ]
+
+        var seenLineStarts = Set<Int>()
+        var currentLineNumber = lineNumber(at: layoutManager.characterIndexForGlyph(at: glyphRange.location), in: nsString)
+
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, lineGlyphRange, _ in
+            let charRange = layoutManager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
+            guard charRange.location < nsString.length else { return }
+
+            let lineRange = nsString.lineRange(for: NSRange(location: charRange.location, length: 0))
+            if seenLineStarts.contains(lineRange.location) { return }
+            seenLineStarts.insert(lineRange.location)
+
+            let y = usedRect.minY + textView.textContainerOrigin.y
+            let drawRect = NSRect(x: 0, y: y, width: self.ruleThickness - 8, height: usedRect.height)
+            NSString(string: "\(currentLineNumber)").draw(in: drawRect, withAttributes: attrs)
+            currentLineNumber += 1
+        }
+    }
+
+    private func lineNumber(at characterIndex: Int, in nsString: NSString) -> Int {
+        guard characterIndex > 0 else { return 1 }
+        var line = 1
+        let safeEnd = min(characterIndex, nsString.length)
+        var idx = 0
+        while idx < safeEnd {
+            if nsString.character(at: idx) == 0x0A { line += 1 }
+            idx += 1
+        }
+        return line
+    }
 }
 
 class VimNSTextView: NSTextView {
@@ -2837,6 +3073,19 @@ class VimNSTextView: NSTextView {
                 return
             }
 
+            if engine.mode == .replace {
+                guard let chars = event.characters, !chars.isEmpty else { return }
+                let pos = selectedRange().location
+                let nsString = string as NSString
+                let replacementRange = pos < nsString.length
+                    ? NSRange(location: pos, length: 1)
+                    : NSRange(location: pos, length: 0)
+                insertText(chars, replacementRange: replacementRange)
+                engine.recordNonInsertChange(actions: [.replaceChar])
+                engine.lastReplaceChar = chars
+                return
+            }
+
             if isReturn && !modifiers.contains(.shift) && handleSmartListReturn() {
                 return
             }
@@ -3144,6 +3393,7 @@ class VimNSTextView: NSTextView {
 
     override func didChangeText() {
         super.didChangeText()
+        enclosingScrollView?.verticalRulerView?.needsDisplay = true
         if let engine = vimEngine, !engine.mode.isEditing {
             DispatchQueue.main.async { [weak self] in
                 self?.drawBlockCursor()
@@ -3375,6 +3625,7 @@ class VimNSTextView: NSTextView {
     override func layout() {
         super.layout()
         updateCopyButtons()
+        enclosingScrollView?.verticalRulerView?.needsDisplay = true
     }
 
 }

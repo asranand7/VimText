@@ -1,6 +1,6 @@
 import Foundation
 
-enum VimMode: String {
+public enum VimMode: String, Equatable {
     case normal = "NORMAL"
     case insert = "INSERT"
     case visual = "VISUAL"
@@ -20,7 +20,7 @@ enum VimMode: String {
     }
 }
 
-enum VimAction {
+public enum VimAction: Equatable {
     case moveCursor(Motion)
     case insertMode(InsertEntry)
     case normalMode
@@ -31,16 +31,19 @@ enum VimAction {
 
     case deleteMotion(Motion, Int)
     case deleteLine
+    case deleteLines(Int)
     case deleteToEnd
     case deleteChar
     case deleteCharBefore
 
     case changeMotion(Motion, Int)
     case changeLine
+    case changeLines(Int)
     case changeToEnd
 
     case yankMotion(Motion, Int)
     case yankLine
+    case yankLines(Int)
 
     case pasteAfter
     case pasteBefore
@@ -52,6 +55,8 @@ enum VimAction {
 
     case indent
     case outdent
+    case indentLines(Int)
+    case outdentLines(Int)
 
     case searchForward
     case searchBackward
@@ -86,18 +91,18 @@ enum VimAction {
     case centerCursor(CenteringAlignment)
 }
 
-enum CenteringAlignment {
+public enum CenteringAlignment: Equatable {
     case top
     case center
     case bottom
 }
 
-enum TextObject {
+public enum TextObject: Equatable {
     case inner(TextObjectType)
     case around(TextObjectType)
 }
 
-enum TextObjectType {
+public enum TextObjectType: Equatable {
     case doubleQuote
     case singleQuote
     case backtick
@@ -111,7 +116,7 @@ enum TextObjectType {
     case tag
 }
 
-enum Motion {
+public enum Motion: Equatable {
     case left
     case down
     case up
@@ -120,6 +125,11 @@ enum Motion {
     case wordForward
     case wordBackward
     case wordEnd
+    case bigWordForward
+    case bigWordBackward
+    case bigWordEnd
+    case wordEndBackward
+    case bigWordEndBackward
 
     case lineStart
     case lineEnd
@@ -162,7 +172,7 @@ enum Motion {
     }
 }
 
-enum InsertEntry {
+public enum InsertEntry: Equatable {
     case beforeCursor
     case afterCursor
     case lineStart
