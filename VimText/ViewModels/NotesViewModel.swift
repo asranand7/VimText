@@ -20,6 +20,7 @@ final class NotesViewModel: ObservableObject {
     private let storage = StorageManager.shared
     private var autoSaveTimer: Timer?
     private var pendingSaves: [UUID: Note] = [:]
+    private var rtfInSyncByID: [UUID: Bool] = [:]
     private var cancellables = Set<AnyCancellable>()
 
     var selectedNote: Note? {
@@ -238,6 +239,11 @@ final class NotesViewModel: ObservableObject {
         let titleChanged = notes[index].title != title
         let rtfChanged = notes[index].rtfData != rtfData
         guard contentChanged || titleChanged || rtfChanged else { return }
+        if rtfChanged {
+            rtfInSyncByID[id] = true
+        } else if contentChanged {
+            rtfInSyncByID[id] = false
+        }
         notes[index].title = title
         notes[index].content = content
         notes[index].rtfData = rtfData
@@ -265,11 +271,12 @@ final class NotesViewModel: ObservableObject {
         guard !pendingSaves.isEmpty else { return }
         
         let notesToSave = Array(pendingSaves.values)
+        let flags = notesToSave.reduce(into: [UUID: Bool]()) { $0[$1.id] = rtfInSyncByID[$1.id] ?? true }
         pendingSaves.removeAll()
-        
+
         Task.detached(priority: .utility) {
             for note in notesToSave {
-                StorageManager.shared.saveNote(note)
+                StorageManager.shared.saveNote(note, rtfInSync: flags[note.id] ?? true)
             }
         }
     }
@@ -283,7 +290,7 @@ final class NotesViewModel: ObservableObject {
         guard !pendingSaves.isEmpty else { return }
         
         for note in pendingSaves.values {
-            storage.saveNote(note)
+            storage.saveNote(note, rtfInSync: rtfInSyncByID[note.id] ?? true)
         }
         pendingSaves.removeAll()
     }

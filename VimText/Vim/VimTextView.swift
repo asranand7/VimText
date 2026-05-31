@@ -183,6 +183,7 @@ struct VimTextView: NSViewRepresentable {
             textView.applyBaseFont(font)
         }
         textView.restyleCodeBlocks(baseFont: font)
+        context.coordinator.lastAppliedText = text
 
         let isInsert = vimEngine.mode.isEditing || startInInsertMode
         textView.updateCursorAppearance(isBlock: !isInsert)
@@ -194,7 +195,7 @@ struct VimTextView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? VimNSTextView else { return }
         context.coordinator.parent = self
 
-        if !context.coordinator.isUpdatingFromTextView && !context.coordinator.hasUnsyncedEdits && textView.string != text {
+        if !context.coordinator.isUpdatingFromTextView && !context.coordinator.hasUnsyncedEdits && text != context.coordinator.lastAppliedText {
             let selectedRange = textView.selectedRange()
             let defaultAttrs: [NSAttributedString.Key: Any] = [
                 .font: font,
@@ -216,6 +217,7 @@ struct VimTextView: NSViewRepresentable {
             // combining characters.
             let safeLocation = min(selectedRange.location, (textView.string as NSString).length)
             textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
+            context.coordinator.lastAppliedText = text
         }
 
         // Re-apply base font/size across the document when it changes (preserving bold/italic)
@@ -287,11 +289,13 @@ struct VimTextView: NSViewRepresentable {
         var lastFontName: String = ""
         var lastThemeKey: String = ""
         var lastPaperStyle: String = "plain"
+        var lastAppliedText: String = ""
         var refocusObserver: Any?
         private var findMatchRanges: [NSRange] = []
         private var currentFindIndex: Int = -1
         /// Debounce timer for expensive RTF serialization + code-block restyling.
         private var deferredWorkItem: DispatchWorkItem?
+        private var rtfStale = false
         /// Observer that flushes deferred RTF / restyle work before the editor
         /// disappears (e.g. switching notes) so persisted data stays in sync.
         private var commitObserver: Any?
@@ -303,7 +307,7 @@ struct VimTextView: NSViewRepresentable {
             commitObserver = NotificationCenter.default.addObserver(
                 forName: .commitEditorPendingWork,
                 object: nil,
-                queue: .main
+                queue: nil
             ) { [weak self] _ in
                 self?.flushDeferredWork()
             }
@@ -436,6 +440,7 @@ struct VimTextView: NSViewRepresentable {
             // We sync the binding when typing pauses (500ms debounce) or on
             // teardown.
             hasUnsyncedEdits = true
+            rtfStale = true
             isUpdatingFromTextView = true
             DispatchQueue.main.async {
                 self.isUpdatingFromTextView = false
@@ -452,8 +457,25 @@ struct VimTextView: NSViewRepresentable {
             cursorDebounceItem?.cancel()
             cursorDebounceItem = nil
             executeDeferredWork()
-            // Also sync cursor immediately
+            serializeRTFIfStale()
             syncCursorPosition()
+        }
+
+        private func serializeRTFIfStale() {
+            guard rtfStale, let textView = textView else { return }
+            isUpdatingFromTextView = true
+            if let textStorage = textView.textStorage, textStorage.length > 0 {
+                let range = NSRange(location: 0, length: textStorage.length)
+                if let data = try? textStorage.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
+                    parent.rtfData = data
+                }
+            } else {
+                parent.rtfData = Data()
+            }
+            rtfStale = false
+            DispatchQueue.main.async {
+                self.isUpdatingFromTextView = false
+            }
         }
 
         private func scheduleDeferredWork() {
@@ -472,20 +494,13 @@ struct VimTextView: NSViewRepresentable {
             // current text to SwiftUI so onChange/save handlers see it.
             isUpdatingFromTextView = true
             hasUnsyncedEdits = false
-            parent.text = textView.string
+            var synced = textView.string
+            synced.makeContiguousUTF8()
+            parent.text = synced
+            lastAppliedText = synced
 
-            // Code-block restyle
             textView.restyleCodeBlocks(baseFont: parent.font)
 
-            // RTF serialization
-            if let textStorage = textView.textStorage, textStorage.length > 0 {
-                let range = NSRange(location: 0, length: textStorage.length)
-                if let data = try? textStorage.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
-                    parent.rtfData = data
-                }
-            } else {
-                parent.rtfData = Data()
-            }
             DispatchQueue.main.async {
                 self.isUpdatingFromTextView = false
             }
@@ -508,6 +523,7 @@ struct VimTextView: NSViewRepresentable {
                     parent.rtfData = data
                 }
             }
+            rtfStale = false
             DispatchQueue.main.async {
                 self.isUpdatingFromTextView = false
             }

@@ -87,6 +87,21 @@ final class StorageManager {
         "\(slug(note.title))-\(Self.stampFormatter.string(from: note.createdAt))"
     }
 
+    private func sidecars(for jsonURL: URL) -> (txt: URL, rtf: URL) {
+        let base = jsonURL.deletingPathExtension()
+        return (base.appendingPathExtension("txt"), base.appendingPathExtension("rtf"))
+    }
+
+    private struct NoteMetadata: Codable {
+        let id: UUID
+        var title: String
+        var folderId: UUID?
+        var createdAt: Date
+        var modifiedAt: Date
+        var isPinned: Bool
+        var rtfInSync: Bool
+    }
+
     /// A `.json` URL for `base`, suffixed with `-2`, `-3`… if another note already
     /// owns that name (titles created in the same second can otherwise collide).
     private func uniqueURL(base: String, for id: UUID) -> URL {
@@ -123,10 +138,31 @@ final class StorageManager {
         var notes: [Note] = []
         var urlMap: [UUID: URL] = [:]
         for url in files where url.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: url),
-                  let note = try? decoder.decode(Note.self, from: data) else { continue }
-            urlMap[note.id] = url
-            notes.append(note)
+            guard let data = try? Data(contentsOf: url) else { continue }
+            let (txtURL, rtfURL) = sidecars(for: url)
+            if fileManager.fileExists(atPath: txtURL.path) {
+                guard let meta = try? decoder.decode(NoteMetadata.self, from: data),
+                      let content = try? String(contentsOf: txtURL, encoding: .utf8) else { continue }
+                var rtf: Data? = nil
+                if meta.rtfInSync, fileManager.fileExists(atPath: rtfURL.path) {
+                    rtf = try? Data(contentsOf: rtfURL)
+                }
+                let note = Note(
+                    id: meta.id,
+                    title: meta.title,
+                    content: content,
+                    rtfData: rtf,
+                    folderId: meta.folderId,
+                    createdAt: meta.createdAt,
+                    modifiedAt: meta.modifiedAt,
+                    isPinned: meta.isPinned
+                )
+                urlMap[note.id] = url
+                notes.append(note)
+            } else if let note = try? decoder.decode(Note.self, from: data) {
+                urlMap[note.id] = url
+                notes.append(note)
+            }
         }
         return NotesSnapshot(notes: notes, urlsByID: urlMap)
     }
@@ -153,21 +189,51 @@ final class StorageManager {
         return urlsByID[note.id] ?? uniqueURL(base: desiredBaseName(for: note), for: note.id)
     }
 
-    func saveNote(_ note: Note) {
-        guard let data = try? encoder.encode(note) else { return }
+    func saveNote(_ note: Note, rtfInSync: Bool = true) {
         let target = uniqueURL(base: desiredBaseName(for: note), for: note.id)
+        let (txtURL, rtfURL) = sidecars(for: target)
         lock.lock()
         let existing = urlsByID[note.id]
         lock.unlock()
+
         do {
-            try data.write(to: target, options: .atomic)
+            try Data(note.content.utf8).write(to: txtURL, options: .atomic)
         } catch {
             return
         }
+
+        if let rtf = note.rtfData, !rtf.isEmpty {
+            let existingSize = (try? fileManager.attributesOfItem(atPath: rtfURL.path))?[.size] as? NSNumber
+            if existingSize?.intValue != rtf.count {
+                try? rtf.write(to: rtfURL, options: .atomic)
+            }
+        } else {
+            try? fileManager.removeItem(at: rtfURL)
+        }
+
+        let meta = NoteMetadata(
+            id: note.id,
+            title: note.title,
+            folderId: note.folderId,
+            createdAt: note.createdAt,
+            modifiedAt: note.modifiedAt,
+            isPinned: note.isPinned,
+            rtfInSync: rtfInSync && !(note.rtfData?.isEmpty ?? true)
+        )
+        guard let metaData = try? encoder.encode(meta) else { return }
+        do {
+            try metaData.write(to: target, options: .atomic)
+        } catch {
+            return
+        }
+
         lock.lock()
         defer { lock.unlock() }
         if let existing = existing, existing != target {
             try? fileManager.removeItem(at: existing)
+            let (oldTxt, oldRtf) = sidecars(for: existing)
+            try? fileManager.removeItem(at: oldTxt)
+            try? fileManager.removeItem(at: oldRtf)
         }
         urlsByID[note.id] = target
     }
@@ -177,7 +243,10 @@ final class StorageManager {
         let url = urlsByID[note.id] ?? notesURL.appendingPathComponent("\(desiredBaseName(for: note)).json")
         urlsByID[note.id] = nil
         lock.unlock()
+        let (txtURL, rtfURL) = sidecars(for: url)
         try? fileManager.removeItem(at: url)
+        try? fileManager.removeItem(at: txtURL)
+        try? fileManager.removeItem(at: rtfURL)
     }
 
     func loadFolders() -> [NoteFolder] {

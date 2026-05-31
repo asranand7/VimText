@@ -414,9 +414,10 @@ struct NoteEditorView: View {
     }
 
     private func commitPendingWorkEagerly() {
+        NotificationCenter.default.post(name: .commitEditorPendingWork, object: nil)
         updateViewModelTask?.cancel()
         updateViewModelTask = nil
-        
+
         let title = extractTitle(from: content)
         viewModel.updateNoteContent(
             id: noteId,
