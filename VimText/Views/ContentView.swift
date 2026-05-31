@@ -195,9 +195,9 @@ private struct SidebarResizeHandle: View {
 
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(theme.secondaryText.opacity(isHovered ? 0.42 : 0.16))
-                .frame(width: 4, height: 34)
+                .frame(width: 2, height: 34)
         }
-        .frame(width: 16)
+        .frame(width: 8)
         .frame(maxHeight: .infinity)
         .contentShape(Rectangle())
         .background {

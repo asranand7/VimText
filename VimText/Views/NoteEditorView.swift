@@ -201,7 +201,8 @@ struct NoteEditorView: View {
                             .strokeBorder(editorPanelStroke, lineWidth: 1)
                     )
                     .shadow(color: Color.black.opacity(theme.isDark ? 0.30 : 0.07), radius: 22, x: 0, y: 8)
-                    .padding(.horizontal, 18)
+                    .padding(.leading, 4)
+                    .padding(.trailing, 18)
                     .padding(.top, 8)
                     .padding(.bottom, 18)
                     
