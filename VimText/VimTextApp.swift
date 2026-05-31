@@ -58,4 +58,7 @@ extension Notification.Name {
     static let openCommandPalette = Notification.Name("openCommandPalette")
     static let openChangeLocationPanel = Notification.Name("openChangeLocationPanel")
     static let refocusEditor = Notification.Name("refocusEditor")
+    /// Posted when a note is opened from somewhere other than the sidebar
+    /// (e.g. the command palette) and the sidebar should scroll to reveal it.
+    static let revealNoteInSidebar = Notification.Name("revealNoteInSidebar")
 }

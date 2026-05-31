@@ -401,6 +401,13 @@ struct CommandPaletteView: View {
             case .note(let note):
                 viewModel.selectedNoteId = note.id
                 viewModel.searchText = ""
+                // Ask the sidebar to scroll to and reveal this note —
+                // otherwise opening an old note from the palette leaves
+                // the sidebar scrolled to wherever it was before.
+                NotificationCenter.default.post(
+                    name: .revealNoteInSidebar,
+                    object: note.id
+                )
                 dismiss()
             case .command(let cmd):
                 dismiss()

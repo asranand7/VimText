@@ -520,6 +520,17 @@ struct NoteListView: View {
                     proxy.scrollTo(notes[idx].id, anchor: .center)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .revealNoteInSidebar)) { notification in
+                // Sent by the command palette (and any future "open
+                // note from elsewhere" caller). Scrolls the selected
+                // row into view and centers it so it's obvious where
+                // we landed. Sidebar-internal clicks don't post this,
+                // so clicking a visible row doesn't cause a re-centre.
+                guard let id = notification.object as? UUID else { return }
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                    proxy.scrollTo(id, anchor: .center)
+                }
+            }
         }
     }
 
