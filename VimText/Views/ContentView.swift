@@ -46,7 +46,7 @@ public struct ContentView: View {
         ZStack {
             HStack(spacing: 0) {
                 if isSidebarVisible {
-                    NoteListView(viewModel: viewModel)
+                    NoteListView(viewModel: viewModel, onToggleSidebar: collapseSidebar)
                         .frame(width: clampedSidebarWidth)
                         .transition(.move(edge: .leading).combined(with: .opacity))
 
@@ -155,6 +155,12 @@ public struct ContentView: View {
         }
     }
 
+    private func collapseSidebar() {
+        withAnimation(DS.spring) {
+            isSidebarVisible = false
+        }
+    }
+
     private func showSidebarAndReplay(_ name: Notification.Name, object: Any? = nil) {
         withAnimation(DS.spring) {
             isSidebarVisible = true
@@ -184,14 +190,22 @@ private struct SidebarResizeHandle: View {
     var body: some View {
         ZStack {
             Rectangle()
-                .fill(theme.separator.opacity(isHovered ? 0.72 : 0.46))
+                .fill(theme.separator.opacity(isHovered ? 0.88 : 0.46))
                 .frame(width: 1)
+
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(theme.secondaryText.opacity(isHovered ? 0.42 : 0.16))
+                .frame(width: 4, height: 34)
         }
-        .frame(width: 8)
+        .frame(width: 16)
+        .frame(maxHeight: .infinity)
         .contentShape(Rectangle())
-        .background(theme.surface.opacity(0.001))
-        .gesture(
-            DragGesture(minimumDistance: 0)
+        .background {
+            ResizeCursorZone()
+            theme.surface.opacity(isHovered ? 0.05 : 0.001)
+        }
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
                 .onChanged { value in
                     if dragStartWidth == nil {
                         dragStartWidth = SidebarLayout.clampedWidth(width)
@@ -213,6 +227,20 @@ private struct SidebarResizeHandle: View {
             isHovered = hovering
         }
         .help("Drag to resize sidebar. Double-click to hide.")
+    }
+}
+
+private struct ResizeCursorZone: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        ResizeCursorNSView()
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class ResizeCursorNSView: NSView {
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
     }
 }
 
