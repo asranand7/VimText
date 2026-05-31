@@ -481,7 +481,13 @@ struct NoteListView: View {
 
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 12) {
+                // VStack (not LazyVStack): LazyVStack's deferred row
+                // instantiation can race with NSTrackingArea install for
+                // top-of-list rows, dropping hover events on the most
+                // recent notes. Eager rendering eliminates that race; the
+                // expected note count for this app is small enough that
+                // we don't need the lazy variant.
+                VStack(spacing: 12) {
                     if isSearching {
                         ForEach(Array(notes.enumerated()), id: \.element.id) { idx, note in
                             noteRow(note: note, flatIndex: idx, isSearching: true)
@@ -532,8 +538,10 @@ struct NoteListView: View {
             : (isHovered ? (theme.isDark ? 0.12 : 0.03) : 0)
         let rowShadowRadius: CGFloat = isSelected ? 6 : (isHovered ? 4 : 0)
         let rowShadowY: CGFloat = isSelected ? 2 : (isHovered ? 1.5 : 0)
-        let rowScale: CGFloat = isSelected ? 1.01 : (isHovered ? 1.005 : 1.0)
-        let rowOffset: CGFloat = isHovered && !isSelected ? -1.0 : 0
+        // Note: don't scale or offset on hover. Even a 1pt vertical shift
+        // can race with `.onHover`'s tracking install on the top row of
+        // the list, leaving it visually unresponsive to the cursor.
+        let rowScale: CGFloat = isSelected ? 1.01 : 1.0
 
         NoteRowView(
             note: note,
@@ -569,7 +577,6 @@ struct NoteListView: View {
                     radius: rowShadowRadius,
                     y: rowShadowY)
             .scaleEffect(rowScale, anchor: .center)
-            .offset(y: rowOffset)
             .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
             .onHover { hovering in
                 withAnimation(DS.snappy) {
