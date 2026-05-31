@@ -149,6 +149,12 @@ final class VimEngine: ObservableObject {
             actions = Array(repeating: .moveCursor(.paragraphForward), count: count)
         case "%":
             actions = [.moveCursor(.matchingBracket)]
+        case "H":
+            actions = [.moveCursor(.screenTop)]
+        case "M":
+            actions = [.moveCursor(.screenMiddle)]
+        case "L":
+            actions = [.moveCursor(.screenBottom)]
         case "G":
             if !countBuffer.isEmpty {
                 actions = [.goToLine(count)]
@@ -361,6 +367,9 @@ final class VimEngine: ObservableObject {
         case "}": return .paragraphForward
         case "G": return .documentEnd
         case "%": return .matchingBracket
+        case "H": return .screenTop
+        case "M": return .screenMiddle
+        case "L": return .screenBottom
         default: return nil
         }
     }
@@ -792,6 +801,12 @@ final class VimEngine: ObservableObject {
             return [.moveCursor(.paragraphBackward)]
         case "}":
             return [.moveCursor(.paragraphForward)]
+        case "H":
+            return [.moveCursor(.screenTop)]
+        case "M":
+            return [.moveCursor(.screenMiddle)]
+        case "L":
+            return [.moveCursor(.screenBottom)]
         case "G":
             return [.moveCursor(.documentEnd)]
         case "g":

@@ -2049,7 +2049,47 @@ struct VimTextView: NSViewRepresentable {
 
             case .matchingBracket:
                 return findMatchingBracket(from: cursorPos, in: nsString)
+
+            case .screenTop:
+                return screenLinePosition(.top, in: textView)
+            case .screenMiddle:
+                return screenLinePosition(.middle, in: textView)
+            case .screenBottom:
+                return screenLinePosition(.bottom, in: textView)
             }
+        }
+
+        private enum ScreenLine { case top, middle, bottom }
+
+        /// Character offset of the first non-blank on the line at the top,
+        /// middle, or bottom of the currently visible area (Vim H / M / L).
+        private func screenLinePosition(_ which: ScreenLine, in textView: NSTextView) -> Int {
+            let nsString = textView.string as NSString
+            let length = nsString.length
+            let cursorPos = textView.selectedRange().location
+            guard length > 0,
+                  let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer else { return cursorPos }
+
+            // visibleRect is in view coordinates; the layout manager works in
+            // container coordinates, offset by textContainerOrigin.
+            let visible = textView.visibleRect
+            let origin = textView.textContainerOrigin
+            let targetY: CGFloat
+            switch which {
+            case .top:    targetY = visible.minY + 1
+            case .middle: targetY = visible.midY
+            case .bottom: targetY = visible.maxY - 1
+            }
+            let point = CGPoint(x: 1, y: targetY - origin.y)
+
+            let glyphIndex = layoutManager.glyphIndex(for: point, in: textContainer)
+            let charIndex = min(max(layoutManager.characterIndexForGlyph(at: glyphIndex), 0), length - 1)
+
+            let lineRange = nsString.lineRange(for: NSRange(location: charIndex, length: 0))
+            let lineText = nsString.substring(with: lineRange)
+            let indent = lineText.prefix(while: { $0 == " " || $0 == "\t" })
+            return min(lineRange.location + indent.count, max(lineRange.location, length - 1))
         }
 
         private func moveVertically(from pos: Int, direction: Int, in nsString: NSString) -> Int {
@@ -2664,6 +2704,35 @@ class VimNSTextView: NSTextView {
         return super.performKeyEquivalent(with: event)
     }
 
+    /// Vim Ctrl-D/U (half page) and Ctrl-F/B (full page) scrolling: move the
+    /// cursor by a page worth of lines and scroll the view by the same amount,
+    /// so the cursor keeps its position on screen. Works in normal and visual
+    /// mode (visual extends the selection via the shared moveCursor path).
+    private func performVimScroll(half: Bool, down: Bool, coordinator: VimTextView.Coordinator) {
+        let f = font ?? NSFont.systemFont(ofSize: 16)
+        let lineHeight = layoutManager?.defaultLineHeight(for: f) ?? max(1, f.pointSize * 1.3)
+        guard lineHeight > 0 else { return }
+
+        let visibleHeight = visibleRect.height
+        let visibleLines = max(1, Int(visibleHeight / lineHeight))
+        // Full page keeps a 2-line overlap, like Vim.
+        let lineCount = max(1, half ? visibleLines / 2 : visibleLines - 2)
+
+        let originBeforeY = enclosingScrollView?.contentView.bounds.origin.y ?? 0
+
+        let motion: Motion = down ? .down : .up
+        coordinator.executeActions(Array(repeating: .moveCursor(motion), count: lineCount))
+
+        if let scrollView = enclosingScrollView {
+            let clip = scrollView.contentView
+            let maxY = max(0, bounds.height - visibleHeight)
+            var origin = clip.bounds.origin
+            origin.y = min(max(0, originBeforeY + CGFloat(lineCount) * lineHeight * (down ? 1 : -1)), maxY)
+            clip.scroll(to: origin)
+            scrollView.reflectScrolledClipView(clip)
+        }
+    }
+
     override func keyDown(with event: NSEvent) {
         guard let engine = vimEngine, let coordinator = coordinator else {
             super.keyDown(with: event)
@@ -2754,6 +2823,15 @@ class VimNSTextView: NSTextView {
         if modifiers.contains(.control) && event.charactersIgnoringModifiers == "v" {
             let actions = engine.processKey("v", modifiers: modifiers)
             coordinator.executeActions(actions)
+            return
+        }
+
+        // Ctrl-D / Ctrl-U: half-page scroll. Ctrl-F / Ctrl-B: full-page scroll.
+        if modifiers.contains(.control), let c = event.charactersIgnoringModifiers,
+           c == "d" || c == "u" || c == "f" || c == "b" {
+            let half = (c == "d" || c == "u")
+            let down = (c == "d" || c == "f")
+            performVimScroll(half: half, down: down, coordinator: coordinator)
             return
         }
 

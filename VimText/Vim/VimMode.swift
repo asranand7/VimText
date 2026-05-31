@@ -128,6 +128,12 @@ enum Motion {
     case documentStart
     case documentEnd
 
+    // Screen-relative jumps: H / M / L (top / middle / bottom of the
+    // currently visible area), landing on the line's first non-blank char.
+    case screenTop
+    case screenMiddle
+    case screenBottom
+
     case paragraphForward
     case paragraphBackward
 
@@ -147,7 +153,8 @@ enum Motion {
 
     var isLinewise: Bool {
         switch self {
-        case .documentStart, .documentEnd, .paragraphForward, .paragraphBackward, .up, .down:
+        case .documentStart, .documentEnd, .paragraphForward, .paragraphBackward, .up, .down,
+             .screenTop, .screenMiddle, .screenBottom:
             return true
         default:
             return false
