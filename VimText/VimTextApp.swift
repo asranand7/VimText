@@ -29,6 +29,23 @@ struct VimTextApp: App {
             }
 
             CommandGroup(after: .textEditing) {
+                Button("Increase Text Size") {
+                    EditorPreferences.increaseFontSize()
+                }
+                .keyboardShortcut("=", modifiers: .command)
+
+                Button("Decrease Text Size") {
+                    EditorPreferences.decreaseFontSize()
+                }
+                .keyboardShortcut("-", modifiers: .command)
+
+                Button("Reset Text Size") {
+                    EditorPreferences.resetFontSize()
+                }
+                .keyboardShortcut("0", modifiers: .command)
+
+                Divider()
+
                 Button("Quick Open Note…") {
                     NotificationCenter.default.post(name: .openCommandPalette, object: nil)
                 }

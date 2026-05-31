@@ -74,11 +74,19 @@ for bundle in .build/release/VimText*.bundle; do
     fi
 done
 
+echo "🔏 Signing app bundle..."
+xattr -cr "$APP_NAME.app"
+codesign --force --sign - "$MACOS_DIR/VimText"
+codesign --force --deep --sign - "$APP_NAME.app"
+codesign --verify --deep --strict --verbose=2 "$APP_NAME.app"
+
 echo "📍 Installing to /Applications..."
 pkill -f "VimText" 2>/dev/null || true
 sleep 0.5
 
+rm -rf "/Applications/$APP_NAME.app"
 cp -R "$APP_NAME.app" /Applications/
+codesign --verify --deep --strict --verbose=2 "/Applications/$APP_NAME.app"
 echo "✅ VimText.app installed to /Applications/"
 echo "🚀 Launching VimText..."
 open /Applications/VimText.app

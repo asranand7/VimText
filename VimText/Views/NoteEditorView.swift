@@ -15,7 +15,7 @@ struct NoteEditorView: View {
     @State private var startInInsertMode = false
     @State private var showDeleteConfirm = false
     @FocusState private var isFindFieldFocused: Bool
-    @AppStorage("editorFontSize") private var fontSize: Double = 16
+    @AppStorage(EditorPreferences.fontSizeKey) private var fontSize: Double = EditorPreferences.defaultFontSize
     @AppStorage("showLineNumbers") private var showLineNumbers: Bool = false
     @AppStorage("useMonospacedFont") private var useMonospacedFont: Bool = false
     @AppStorage("editorPaperStyle") private var paperStyle: String = "plain"
@@ -648,11 +648,12 @@ struct NoteEditorView: View {
 
     @ViewBuilder
     private var fontSizeMenu: some View {
-        Button("Increase Font Size") { fontSize = min(fontSize + 1, 32) }
+        Button("Increase Font Size") { fontSize = EditorPreferences.increaseFontSize() }
             .keyboardShortcut("+", modifiers: .command)
-        Button("Decrease Font Size") { fontSize = max(fontSize - 1, 10) }
+        Button("Decrease Font Size") { fontSize = EditorPreferences.decreaseFontSize() }
             .keyboardShortcut("-", modifiers: .command)
-        Button("Reset Font Size") { fontSize = 15 }
+        Button("Reset Font Size") { fontSize = EditorPreferences.resetFontSize() }
+            .keyboardShortcut("0", modifiers: .command)
     }
 
     private var cursorInfo: String {
