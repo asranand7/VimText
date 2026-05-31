@@ -557,6 +557,9 @@ struct NoteEditorView: View {
     private func saveCurrentNote() {
         let title = extractTitle(from: content)
         viewModel.updateNoteContent(id: noteId, title: title.isEmpty ? "Untitled" : title, content: content, rtfData: rtfData)
+        // Explicit save (⌘S / :w) and closing the editor should hit disk now,
+        // not wait for the debounce window.
+        viewModel.flushPendingSaves()
     }
 
     private func extractTitle(from text: String) -> String {

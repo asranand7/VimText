@@ -208,7 +208,11 @@ struct VimTextView: NSViewRepresentable {
                 textView.textStorage?.setAttributedString(attrStr)
             }
             textView.restyleCodeBlocks(baseFont: font)
-            let safeLocation = min(selectedRange.location, textView.string.count)
+            // Clamp against the NSString (UTF-16) length, not String.count
+            // (grapheme count) — selectedRange.location is a UTF-16 offset,
+            // so mixing the two misplaces the cursor in notes with emoji or
+            // combining characters.
+            let safeLocation = min(selectedRange.location, (textView.string as NSString).length)
             textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
         }
 

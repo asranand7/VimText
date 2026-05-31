@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import AppKit
 
 @MainActor
 final class NotesViewModel: ObservableObject {
@@ -11,8 +12,15 @@ final class NotesViewModel: ObservableObject {
     @Published var searchText: String = ""
     @Published var showAllNotes: Bool = true
 
+    /// Filtered + sorted notes for the sidebar. Maintained by a Combine
+    /// pipeline (see init) so it's computed once whenever an input changes
+    /// instead of being a computed property re-run several times per render.
+    @Published private(set) var filteredNotes: [Note] = []
+
     private let storage = StorageManager.shared
     private var autoSaveTimer: Timer?
+    private var pendingSaveIds: Set<UUID> = []
+    private var terminateObserver: NSObjectProtocol?
     private var cancellables = Set<AnyCancellable>()
 
     var selectedNote: Note? {
@@ -28,7 +36,14 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    var filteredNotes: [Note] {
+    /// Pure filter+sort used by the Combine pipeline. Kept static so the
+    /// pipeline closure captures nothing.
+    static func computeFilteredNotes(
+        notes: [Note],
+        showAllNotes: Bool,
+        selectedFolderId: UUID?,
+        searchText: String
+    ) -> [Note] {
         var result = notes
 
         if !showAllNotes, let folderId = selectedFolderId {
@@ -55,7 +70,35 @@ final class NotesViewModel: ObservableObject {
     }
 
     init() {
+        // Recompute filteredNotes whenever any input changes.
+        Publishers.CombineLatest4($notes, $showAllNotes, $selectedFolderId, $searchText)
+            .map { notes, showAll, folderId, search in
+                Self.computeFilteredNotes(
+                    notes: notes,
+                    showAllNotes: showAll,
+                    selectedFolderId: folderId,
+                    searchText: search
+                )
+            }
+            .assign(to: &$filteredNotes)
+
+        // Safety net: flush any debounced edits synchronously before the
+        // app quits (onDisappear isn't guaranteed to fire on termination).
+        terminateObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.flushPendingSaves() }
+        }
+
         Task { await loadAsync() }
+    }
+
+    deinit {
+        if let terminateObserver {
+            NotificationCenter.default.removeObserver(terminateObserver)
+        }
     }
 
     private func loadAsync() async {
@@ -133,6 +176,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func deleteNote(_ note: Note) {
+        pendingSaveIds.remove(note.id)
         storage.deleteNote(note)
         notes.removeAll { $0.id == note.id }
         if selectedNoteId == note.id {
@@ -148,6 +192,9 @@ final class NotesViewModel: ObservableObject {
     }
 
     func deleteAllNotes() {
+        autoSaveTimer?.invalidate()
+        autoSaveTimer = nil
+        pendingSaveIds.removeAll()
         for note in notes {
             storage.deleteNote(note)
         }
@@ -160,6 +207,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func deleteNotes(ids: Set<UUID>) {
+        pendingSaveIds.subtract(ids)
         let toDelete = notes.filter { ids.contains($0.id) }
         for note in toDelete {
             storage.deleteNote(note)
@@ -187,7 +235,35 @@ final class NotesViewModel: ObservableObject {
         notes[index].content = content
         notes[index].rtfData = rtfData
         notes[index].modifiedAt = Date()
-        storage.saveNote(notes[index])
+        // Debounce the disk write. The in-memory note (and the whole UI) is
+        // already up to date; only the expensive encode+write is deferred so
+        // that holding a key down doesn't write the full note to disk on
+        // every character.
+        scheduleSave(id)
+    }
+
+    /// Marks a note as needing a save and (re)arms the debounce timer.
+    private func scheduleSave(_ id: UUID) {
+        pendingSaveIds.insert(id)
+        autoSaveTimer?.invalidate()
+        autoSaveTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.flushPendingSaves() }
+        }
+    }
+
+    /// Writes every note with pending edits to disk immediately. Safe to call
+    /// from the debounce timer or eagerly on save / close / quit. Notes that
+    /// have since been deleted are skipped (they're no longer in `notes`).
+    func flushPendingSaves() {
+        autoSaveTimer?.invalidate()
+        autoSaveTimer = nil
+        guard !pendingSaveIds.isEmpty else { return }
+        for id in pendingSaveIds {
+            if let note = notes.first(where: { $0.id == id }) {
+                storage.saveNote(note)
+            }
+        }
+        pendingSaveIds.removeAll()
     }
 
     func moveNote(_ note: Note, to folderId: UUID?) {
