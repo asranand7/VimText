@@ -28,6 +28,13 @@ struct VimTextApp: App {
                 .keyboardShortcut("f", modifiers: [.command, .shift])
             }
 
+            CommandGroup(replacing: .sidebar) {
+                Button("Toggle Sidebar") {
+                    NotificationCenter.default.post(name: .toggleSidebar, object: nil)
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+            }
+
             CommandGroup(after: .textEditing) {
                 Button("Increase Text Size") {
                     EditorPreferences.increaseFontSize()
