@@ -46,25 +46,21 @@ struct NoteListView: View {
 
     private var glassBackground: some View {
         ZStack {
-            VisualEffectView(material: .sidebar)
-                .opacity(theme.isGraphite ? 0.38 : 1)
-            theme.surface.opacity(sidebarSurfaceOpacity)
-            LinearGradient(
-                colors: [
-                    themeManager.sidebarTint.opacity(sidebarTintTopOpacity),
-                    themeManager.sidebarTint.opacity(sidebarTintBottomOpacity)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            theme.surface
+            if themeManager.isUsingCustomSidebarTint {
+                LinearGradient(
+                    colors: [
+                        themeManager.sidebarTint.opacity(sidebarTintTopOpacity),
+                        themeManager.sidebarTint.opacity(sidebarTintBottomOpacity)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            } else {
+                Color.primary.opacity(theme.isDark ? 0.05 : 0.025)
+            }
         }
         .ignoresSafeArea()
-    }
-
-    private var sidebarSurfaceOpacity: Double {
-        if theme.isGraphite { return 0.74 }
-        if theme.isInk { return 0.46 }
-        return theme.isDark ? 0.36 : 0.52
     }
 
     private var sidebarTintTopOpacity: Double {
