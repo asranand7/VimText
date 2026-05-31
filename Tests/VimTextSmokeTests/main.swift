@@ -90,6 +90,14 @@ func testEditorPreferencesFontSizing() throws {
     try expectEqual(EditorPreferences.resetFontSize(defaults: defaults), EditorPreferences.defaultFontSize, "reset should restore default")
 }
 
+func testGraphiteEditorContrast() throws {
+    let contrast = ThemeContrastChecks.graphiteEditorTextContrastRatio()
+    try expect(
+        contrast >= ThemeContrastChecks.minimumReadableContrastRatio,
+        "Graphite editor text contrast should stay readable"
+    )
+}
+
 func testVimNormalModeMotionsAndCounts() throws {
     let engine = VimEngine()
 
@@ -349,6 +357,7 @@ func testStorageMalformedFilesAndWriteErrors() throws {
 let tests: [(String, () throws -> Void)] = [
     ("Note model derived text", testNoteModelDerivedText),
     ("Editor preferences font sizing", testEditorPreferencesFontSizing),
+    ("Graphite editor contrast", testGraphiteEditorContrast),
     ("Vim normal motions and counts", testVimNormalModeMotionsAndCounts),
     ("Vim insert, replace, and command modes", testVimInsertReplaceAndCommandModes),
     ("Vim operators, text objects, and repeats", testVimOperatorsTextObjectsAndRepeats),

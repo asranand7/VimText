@@ -604,20 +604,15 @@ struct NoteEditorView: View {
     }
 
     private var editorPanelFill: Color {
-        if theme.isInk { return theme.surface.opacity(0.82) }
-        if theme.isGraphite { return Color.white.opacity(0.72) }
-        return theme.isDark ? theme.surface.opacity(0.34) : Color.white.opacity(0.78)
+        EditorSurfacePalette.panelFill(for: theme)
     }
 
     private var editorPanelStroke: Color {
-        if theme.isMonochrome { return theme.separator.opacity(theme.isDark ? 0.55 : 0.62) }
-        return Color.white.opacity(theme.isDark ? 0.055 : 0.55)
+        EditorSurfacePalette.panelStroke(for: theme)
     }
 
     private var editorPaperFill: Color {
-        if theme.isGraphite { return Color(hex: "F7F6F3") }
-        if theme.isInk { return Color(hex: "121315") }
-        return theme.editorBackground.opacity(theme.isDark ? 0.14 : 0.18)
+        EditorSurfacePalette.paperFill(for: theme)
     }
 
     private var modeColor: Color {
