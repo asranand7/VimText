@@ -1,5 +1,5 @@
 import Foundation
-import VimTextCore
+@testable import VimTextCore
 
 enum SmokeTestFailure: Error, CustomStringConvertible {
     case failed(String)
@@ -360,6 +360,33 @@ func testStorageMalformedFilesAndWriteErrors() throws {
     }
 }
 
+func testCommandPaletteSearchMatching() throws {
+    let notes = [
+        Note(title: "Haskell tutorial", content: "Learn monads and functors"),
+        Note(title: "Vim configuration", content: "Keybindings and syntax highlighting"),
+        Note(title: "SwiftUI tips", content: "Using FocusState and onAppear"),
+        Note(title: "Cooking guide", content: "Making the perfect carbonara pasta")
+    ]
+
+    // 1. Test exact/case-insensitive title matching
+    let hMatch = CommandPaletteState.matchingNotes(notes, query: "haskell")
+    try expectEqual(hMatch.count, 1, "Should find 1 note matching 'haskell'")
+    try expectEqual(hMatch.first?.title, "Haskell tutorial", "Title should match 'Haskell tutorial'")
+
+    // 2. Test content matching
+    let vMatch = CommandPaletteState.matchingNotes(notes, query: "syntax")
+    try expectEqual(vMatch.count, 1, "Should find 1 note matching content 'syntax'")
+    try expectEqual(vMatch.first?.title, "Vim configuration", "Should match content owner note")
+
+    // 3. Test query returning multiple notes
+    let multipleMatch = CommandPaletteState.matchingNotes(notes, query: "and")
+    try expectEqual(multipleMatch.count, 3, "Should find 3 notes containing the word 'and'")
+
+    // 4. Test empty query (should return all notes)
+    let emptyQueryMatch = CommandPaletteState.matchingNotes(notes, query: "")
+    try expectEqual(emptyQueryMatch.count, 4, "Empty query should return all notes")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("Note model derived text", testNoteModelDerivedText),
     ("Editor preferences font sizing", testEditorPreferencesFontSizing),
@@ -371,7 +398,8 @@ let tests: [(String, () throws -> Void)] = [
     ("Vim find, search, visual, and control parsing", testVimFindSearchVisualAndControlParsing),
     ("Vim command execution", testVimCommandExecution),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
-    ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors)
+    ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
+    ("Command Palette search matching", testCommandPaletteSearchMatching)
 ]
 
 do {
