@@ -8,6 +8,9 @@ struct NoteEditorView: View {
     @StateObject private var findController = FindController()
     @State private var content: String = ""
     @State private var rtfData: Data = Data()
+    @State private var wordCount: Int = 0
+    @State private var wordCountTask: Task<Void, Never>? = nil
+    @State private var updateViewModelTask: Task<Void, Never>? = nil
     @State private var hasLoaded = false
     @State private var startInInsertMode = false
     @State private var showDeleteConfirm = false
@@ -218,6 +221,11 @@ struct NoteEditorView: View {
             findController.installKeyMonitor()
         }
         .onDisappear {
+            // Flush the editor's debounced restyle/RTF first (synchronous), so
+            // saveCurrentNote() persists content and rich text consistently.
+            NotificationCenter.default.post(name: .commitEditorPendingWork, object: nil)
+            updateViewModelTask?.cancel()
+            updateViewModelTask = nil
             saveCurrentNote()
             findController.removeKeyMonitor()
         }
@@ -231,6 +239,12 @@ struct NoteEditorView: View {
                 findController.isVisible = true
             }
             findController.focusTrigger += 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            commitPendingWorkEagerly()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in
+            commitPendingWorkEagerly()
         }
     }
 
@@ -252,12 +266,11 @@ struct NoteEditorView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(editorPaperFill)
         .onChange(of: content) { _, newValue in
-            let newTitle = extractTitle(from: newValue)
-            viewModel.updateNoteContent(id: noteId, title: newTitle.isEmpty ? "Untitled" : newTitle, content: newValue, rtfData: rtfData)
+            updateWordCountAsync(text: newValue)
+            queueViewModelUpdate(content: newValue, rtfData: rtfData)
         }
         .onChange(of: rtfData) { _, newValue in
-            let title = extractTitle(from: content)
-            viewModel.updateNoteContent(id: noteId, title: title.isEmpty ? "Untitled" : title, content: content, rtfData: newValue)
+            queueViewModelUpdate(content: content, rtfData: newValue)
         }
     }
 
@@ -357,8 +370,61 @@ struct NoteEditorView: View {
         .background(Color.clear)
     }
 
-    private var wordCount: Int {
-        content.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.count
+    nonisolated private static func countWords(_ text: String) -> Int {
+        var count = 0
+        var inWord = false
+        for scalar in text.unicodeScalars {
+            let isWhitespace = CharacterSet.whitespacesAndNewlines.contains(scalar)
+            if isWhitespace {
+                inWord = false
+            } else if !inWord {
+                inWord = true
+                count += 1
+            }
+        }
+        return count
+    }
+
+    private func updateWordCountAsync(text: String) {
+        wordCountTask?.cancel()
+        wordCountTask = Task.detached(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 300_000_000) // 300ms debounce
+            guard !Task.isCancelled else { return }
+            let count = Self.countWords(text)
+            await MainActor.run {
+                self.wordCount = count
+            }
+        }
+    }
+
+    private func queueViewModelUpdate(content: String, rtfData: Data) {
+        updateViewModelTask?.cancel()
+        updateViewModelTask = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000) // 500ms debounce
+            guard !Task.isCancelled else { return }
+            
+            let title = extractTitle(from: content)
+            viewModel.updateNoteContent(
+                id: noteId,
+                title: title.isEmpty ? "Untitled" : title,
+                content: content,
+                rtfData: rtfData
+            )
+        }
+    }
+
+    private func commitPendingWorkEagerly() {
+        updateViewModelTask?.cancel()
+        updateViewModelTask = nil
+        
+        let title = extractTitle(from: content)
+        viewModel.updateNoteContent(
+            id: noteId,
+            title: title.isEmpty ? "Untitled" : title,
+            content: content,
+            rtfData: rtfData
+        )
+        viewModel.flushPendingSavesSynchronously()
     }
 
     private var readingTime: Int {
@@ -541,6 +607,7 @@ struct NoteEditorView: View {
         if let note = viewModel.notes.first(where: { $0.id == noteId }) {
             content = note.content
             rtfData = note.rtfData ?? Data()
+            wordCount = Self.countWords(note.content)
             hasLoaded = true
             let isNewEmpty = note.content.isEmpty
             startInInsertMode = isNewEmpty
@@ -563,7 +630,12 @@ struct NoteEditorView: View {
     }
 
     private func extractTitle(from text: String) -> String {
-        let firstLine = text.components(separatedBy: .newlines).first ?? ""
+        let firstLine: Substring
+        if let firstNewlineIndex = text.firstIndex(of: "\n") {
+            firstLine = text[..<firstNewlineIndex]
+        } else {
+            firstLine = text[...]
+        }
         return String(firstLine.prefix(100)).trimmingCharacters(in: .whitespaces)
     }
 

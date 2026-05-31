@@ -61,4 +61,8 @@ extension Notification.Name {
     /// Posted when a note is opened from somewhere other than the sidebar
     /// (e.g. the command palette) and the sidebar should scroll to reveal it.
     static let revealNoteInSidebar = Notification.Name("revealNoteInSidebar")
+    /// Posted (synchronously) before the editor is torn down so the editor
+    /// flushes its debounced code-block restyle + RTF serialization, keeping
+    /// the persisted content and rich text in sync.
+    static let commitEditorPendingWork = Notification.Name("commitEditorPendingWork")
 }

@@ -179,7 +179,9 @@ struct VimTextView: NSViewRepresentable {
             textView.textStorage?.setAttributedString(attrStr)
         }
 
-        textView.applyBaseFont(font)
+        if !rtfData.isEmpty {
+            textView.applyBaseFont(font)
+        }
         textView.restyleCodeBlocks(baseFont: font)
 
         let isInsert = vimEngine.mode.isEditing || startInInsertMode
@@ -192,7 +194,7 @@ struct VimTextView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? VimNSTextView else { return }
         context.coordinator.parent = self
 
-        if !context.coordinator.isUpdatingFromTextView && textView.string != text {
+        if !context.coordinator.isUpdatingFromTextView && !context.coordinator.hasUnsyncedEdits && textView.string != text {
             let selectedRange = textView.selectedRange()
             let defaultAttrs: [NSAttributedString.Key: Any] = [
                 .font: font,
@@ -259,6 +261,11 @@ struct VimTextView: NSViewRepresentable {
         weak var textView: VimNSTextView?
         weak var scrollView: NSScrollView?
         var isUpdatingFromTextView = false
+        /// True when the user has typed into the NSTextView but we haven't
+        /// yet synced that text back to the SwiftUI binding. While true,
+        /// updateNSView must NOT replace the textView's content — the
+        /// textView is the source of truth, not the (stale) SwiftUI state.
+        var hasUnsyncedEdits = false
         var visualAnchor: Int = 0
         var visualCursorPos: Int = 0
         private var yankHighlightLayer: CALayer?
@@ -283,9 +290,23 @@ struct VimTextView: NSViewRepresentable {
         var refocusObserver: Any?
         private var findMatchRanges: [NSRange] = []
         private var currentFindIndex: Int = -1
+        /// Debounce timer for expensive RTF serialization + code-block restyling.
+        private var deferredWorkItem: DispatchWorkItem?
+        /// Observer that flushes deferred RTF / restyle work before the editor
+        /// disappears (e.g. switching notes) so persisted data stays in sync.
+        private var commitObserver: Any?
 
         init(_ parent: VimTextView) {
             self.parent = parent
+            super.init()
+            // Listen for the flush-before-teardown notification.
+            commitObserver = NotificationCenter.default.addObserver(
+                forName: .commitEditorPendingWork,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                self?.flushDeferredWork()
+            }
         }
 
         func setupRefocusObserver(for textView: VimNSTextView) {
@@ -307,6 +328,10 @@ struct VimTextView: NSViewRepresentable {
             if let observer = refocusObserver {
                 NotificationCenter.default.removeObserver(observer)
             }
+            if let observer = commitObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            deferredWorkItem?.cancel()
         }
 
         func setupFindController() {
@@ -349,6 +374,7 @@ struct VimTextView: NSViewRepresentable {
                 let found = nsString.range(of: query, options: [.caseInsensitive], range: searchRange)
                 if found.location == NSNotFound { break }
                 findMatchRanges.append(found)
+                if findMatchRanges.count >= 2000 { break }
                 searchRange.location = found.location + found.length
                 searchRange.length = length - searchRange.location
             }
@@ -401,15 +427,57 @@ struct VimTextView: NSViewRepresentable {
         }
 
         func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
+            guard notification.object is NSTextView else { return }
+            // DO NOT update parent.text here. For a 2.9 MB file, copying the
+            // entire NSString into a Swift String binding on every keystroke
+            // costs ~5-10ms AND triggers a full SwiftUI body re-evaluation
+            // (recreating VimTextView, calling updateNSView, diffing state).
+            // The NSTextView is the authoritative source of truth while typing.
+            // We sync the binding when typing pauses (500ms debounce) or on
+            // teardown.
+            hasUnsyncedEdits = true
             isUpdatingFromTextView = true
+            DispatchQueue.main.async {
+                self.isUpdatingFromTextView = false
+            }
+            scheduleDeferredWork()
+        }
+
+        /// Immediately executes all deferred work (text sync, RTF export,
+        /// code-block restyle, cursor position). Called before note teardown
+        /// so persisted data stays in sync.
+        func flushDeferredWork() {
+            deferredWorkItem?.cancel()
+            deferredWorkItem = nil
+            cursorDebounceItem?.cancel()
+            cursorDebounceItem = nil
+            executeDeferredWork()
+            // Also sync cursor immediately
+            syncCursorPosition()
+        }
+
+        private func scheduleDeferredWork() {
+            deferredWorkItem?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                self?.executeDeferredWork()
+            }
+            deferredWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+        }
+
+        private func executeDeferredWork() {
+            guard let textView = textView else { return }
+
+            // Sync text binding — now that typing has paused, push the
+            // current text to SwiftUI so onChange/save handlers see it.
+            isUpdatingFromTextView = true
+            hasUnsyncedEdits = false
             parent.text = textView.string
 
-            if let vimTextView = textView as? VimNSTextView {
-                vimTextView.restyleCodeBlocks(baseFont: parent.font)
-            }
+            // Code-block restyle
+            textView.restyleCodeBlocks(baseFont: parent.font)
 
-            // Export RTF data to preserve rich text formatting
+            // RTF serialization
             if let textStorage = textView.textStorage, textStorage.length > 0 {
                 let range = NSRange(location: 0, length: textStorage.length)
                 if let data = try? textStorage.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
@@ -418,20 +486,20 @@ struct VimTextView: NSViewRepresentable {
             } else {
                 parent.rtfData = Data()
             }
-
             DispatchQueue.main.async {
                 self.isUpdatingFromTextView = false
             }
 
+            // Re-scan find matches if the find bar is open
             if parent.findController?.isVisible == true,
                let query = parent.findController?.query, !query.isEmpty {
-                DispatchQueue.main.async { [weak self] in
-                    self?.performFindInEditor(query: query)
-                }
+                performFindInEditor(query: query)
             }
         }
 
         func formattingDidChange() {
+            // Formatting changes (bold/italic/underline toggle) are explicit
+            // user actions — serialize RTF immediately so it persists.
             guard let textView = textView else { return }
             isUpdatingFromTextView = true
             if let textStorage = textView.textStorage, textStorage.length > 0 {
@@ -449,26 +517,49 @@ struct VimTextView: NSViewRepresentable {
             return false
         }
 
+        /// Debounce item for cursor line/col updates. Setting @Published
+        /// cursorLine/cursorCol on VimEngine triggers a full SwiftUI
+        /// re-render of NoteEditorView on every keystroke. Debounce to 100ms
+        /// so the status bar still feels responsive but typing isn't blocked.
+        private var cursorDebounceItem: DispatchWorkItem?
+
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
-            let string = textView.string
-            let nsString = string as NSString
-            let cursorPos = textView.selectedRange().location
-            let length = nsString.length
-            
-            let lineRange = nsString.lineRange(for: NSRange(location: min(cursorPos, length), length: 0))
-            let lineText = nsString.substring(with: NSRange(location: lineRange.location, length: min(cursorPos, length) - lineRange.location))
-            let col = lineText.count + 1
-            
-            var lineNum = 1
-            var pos = 0
-            while pos < lineRange.location {
-                let r = nsString.lineRange(for: NSRange(location: pos, length: 0))
-                lineNum += 1
-                pos = r.location + r.length
-                if r.length == 0 { break }
+            // Debounce — don't let @Published cursorLine/cursorCol trigger
+            // SwiftUI body re-evaluation on every keystroke.
+            cursorDebounceItem?.cancel()
+            let item = DispatchWorkItem { [weak self] in
+                self?.syncCursorPosition()
             }
-            
+            cursorDebounceItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: item)
+        }
+
+        private func syncCursorPosition() {
+            guard let textView = textView else { return }
+            let cursorPos = textView.selectedRange().location
+            let nsString = textView.string as NSString
+            let length = nsString.length
+            let safeCursor = min(cursorPos, length)
+
+            // Column: distance from start of current line to cursor
+            let lineRange = nsString.lineRange(for: NSRange(location: safeCursor, length: 0))
+            let col = safeCursor - lineRange.location + 1
+
+            // Line number: count newlines using raw bytes — no Swift String
+            // allocation. getBytes copies into a stack buffer we control.
+            var lineNum = 1
+            if safeCursor > 0 {
+                let range = NSRange(location: 0, length: safeCursor)
+                let bufSize = min(safeCursor * 4, 4 * 1024 * 1024) // UTF-8 upper bound, 4 MB cap
+                let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: bufSize)
+                defer { buf.deallocate() }
+                var usedLen = 0
+                nsString.getBytes(buf, maxLength: bufSize, usedLength: &usedLen, encoding: String.Encoding.utf8.rawValue, options: [], range: range, remaining: nil)
+                for i in 0..<usedLen {
+                    if buf[i] == 0x0A { lineNum += 1 }
+                }
+            }
+
             parent.vimEngine.cursorLine = lineNum
             parent.vimEngine.cursorCol = col
         }
@@ -2200,6 +2291,8 @@ class VimNSTextView: NSTextView {
             let found = nsString.range(of: term, options: [.caseInsensitive], range: searchRange)
             if found.location == NSNotFound { break }
 
+            if searchHighlightLayers.count >= 250 { break }
+
             let glyphRange = layoutManager.glyphRange(forCharacterRange: found, actualCharacterRange: nil)
             let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
             var highlightRect = rect
@@ -2360,26 +2453,32 @@ class VimNSTextView: NSTextView {
         let ns = string as NSString
         let len = ns.length
         var ranges: [NSRange] = []
-        var inBlock = false
-        var blockStart = 0
-        var idx = 0
-        while idx < len {
-            let lineRange = ns.lineRange(for: NSRange(location: idx, length: 0))
-            let trimmed = ns.substring(with: lineRange).trimmingCharacters(in: .whitespacesAndNewlines)
-            let isFence = trimmed.hasPrefix("```")
-            if isFence {
-                if inBlock {
-                    let end = lineRange.location + lineRange.length
-                    ranges.append(NSRange(location: blockStart, length: end - blockStart))
-                    inBlock = false
+        
+        var searchRange = NSRange(location: 0, length: len)
+        var lastFenceIndex: Int? = nil
+        
+        while searchRange.location < len {
+            let found = ns.range(of: "```", options: [], range: searchRange)
+            if found.location == NSNotFound { break }
+            
+            let lineRange = ns.lineRange(for: NSRange(location: found.location, length: 0))
+            let leadingRange = NSRange(location: lineRange.location, length: found.location - lineRange.location)
+            let leadingStr = ns.substring(with: leadingRange).trimmingCharacters(in: .whitespaces)
+            
+            if leadingStr.isEmpty {
+                if let start = lastFenceIndex {
+                    let endOfLine = lineRange.location + lineRange.length
+                    ranges.append(NSRange(location: start, length: endOfLine - start))
+                    lastFenceIndex = nil
                 } else {
-                    inBlock = true
-                    blockStart = lineRange.location
+                    lastFenceIndex = lineRange.location
                 }
             }
-            let next = lineRange.location + lineRange.length
-            if next <= idx { break }
-            idx = next
+            
+            let nextIndex = lineRange.location + lineRange.length
+            if nextIndex <= searchRange.location { break }
+            searchRange.location = nextIndex
+            searchRange.length = len - nextIndex
         }
         return ranges
     }
@@ -2396,6 +2495,9 @@ class VimNSTextView: NSTextView {
         guard let textStorage = textStorage else { return }
         let len = textStorage.length
         let ranges = computeCodeBlockRanges()
+        if ranges == codeBlockRanges {
+            return
+        }
         codeBlockRanges = ranges
         guard len > 0 else { needsDisplay = true; return }
 

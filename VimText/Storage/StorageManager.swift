@@ -10,6 +10,7 @@ final class StorageManager {
     /// Maps each note's stable id to the file it currently lives in, so a title
     /// change (which changes the filename) can rename rather than orphan the file.
     private var urlsByID: [UUID: URL] = [:]
+    private let lock = NSRecursiveLock()
 
     private static let customPathKey = "customNotesDirectoryPath"
 
@@ -89,6 +90,8 @@ final class StorageManager {
     /// A `.json` URL for `base`, suffixed with `-2`, `-3`… if another note already
     /// owns that name (titles created in the same second can otherwise collide).
     private func uniqueURL(base: String, for id: UUID) -> URL {
+        lock.lock()
+        defer { lock.unlock() }
         let ownURL = urlsByID[id]
         var candidate = notesURL.appendingPathComponent("\(base).json")
         var n = 2
@@ -131,28 +134,38 @@ final class StorageManager {
     /// Applies a previously-read snapshot's url map. Must be called from the
     /// main thread (same isolation as all other `urlsByID` mutators).
     func apply(_ snapshot: NotesSnapshot) {
+        lock.lock()
+        defer { lock.unlock() }
         urlsByID = snapshot.urlsByID
     }
 
     func loadNotes() -> [Note] {
         let snapshot = readNotesSnapshot()
+        lock.lock()
+        defer { lock.unlock() }
         urlsByID = snapshot.urlsByID
         return snapshot.notes
     }
 
     func fileURL(for note: Note) -> URL {
-        urlsByID[note.id] ?? uniqueURL(base: desiredBaseName(for: note), for: note.id)
+        lock.lock()
+        defer { lock.unlock() }
+        return urlsByID[note.id] ?? uniqueURL(base: desiredBaseName(for: note), for: note.id)
     }
 
     func saveNote(_ note: Note) {
         guard let data = try? encoder.encode(note) else { return }
         let target = uniqueURL(base: desiredBaseName(for: note), for: note.id)
+        lock.lock()
         let existing = urlsByID[note.id]
+        lock.unlock()
         do {
             try data.write(to: target, options: .atomic)
         } catch {
             return
         }
+        lock.lock()
+        defer { lock.unlock() }
         if let existing = existing, existing != target {
             try? fileManager.removeItem(at: existing)
         }
@@ -160,9 +173,11 @@ final class StorageManager {
     }
 
     func deleteNote(_ note: Note) {
+        lock.lock()
         let url = urlsByID[note.id] ?? notesURL.appendingPathComponent("\(desiredBaseName(for: note)).json")
-        try? fileManager.removeItem(at: url)
         urlsByID[note.id] = nil
+        lock.unlock()
+        try? fileManager.removeItem(at: url)
     }
 
     func loadFolders() -> [NoteFolder] {

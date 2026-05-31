@@ -19,8 +19,7 @@ final class NotesViewModel: ObservableObject {
 
     private let storage = StorageManager.shared
     private var autoSaveTimer: Timer?
-    private var pendingSaveIds: Set<UUID> = []
-    private var terminateObserver: NSObjectProtocol?
+    private var pendingSaves: [UUID: Note] = [:]
     private var cancellables = Set<AnyCancellable>()
 
     var selectedNote: Note? {
@@ -51,10 +50,9 @@ final class NotesViewModel: ObservableObject {
         }
 
         if !searchText.isEmpty {
-            let query = searchText.lowercased()
             result = result.filter {
-                $0.title.lowercased().contains(query) ||
-                $0.content.lowercased().contains(query)
+                $0.title.range(of: searchText, options: .caseInsensitive) != nil ||
+                $0.content.range(of: searchText, options: .caseInsensitive) != nil
             }
         }
 
@@ -83,21 +81,26 @@ final class NotesViewModel: ObservableObject {
             .assign(to: &$filteredNotes)
 
         // Safety net: flush any debounced edits synchronously before the
-        // app quits (onDisappear isn't guaranteed to fire on termination).
-        terminateObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification,
-            object: nil,
-            queue: nil
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.flushPendingSaves() }
-        }
+        // app quits or loses focus (onDisappear isn't guaranteed to fire).
+        NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
+            .sink { [weak self] _ in
+                self?.flushPendingSavesSynchronously()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)
+            .sink { [weak self] _ in
+                self?.flushPendingSavesSynchronously()
+            }
+            .store(in: &cancellables)
 
         Task { await loadAsync() }
     }
 
     deinit {
-        if let terminateObserver {
-            NotificationCenter.default.removeObserver(terminateObserver)
+        // Flush any unsaved changes synchronously to protect user data on window close
+        for note in pendingSaves.values {
+            StorageManager.shared.saveNote(note)
         }
     }
 
@@ -119,15 +122,6 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    /// Switches the notes directory safely: any debounced edits are written
-    /// to the CURRENT directory first, so they aren't lost or flushed into the
-    /// new directory after the path changes. Pass `nil` to return to the
-    /// default app-support location.
-    func changeDirectory(to path: String?) {
-        flushPendingSaves()
-        storage.customDirectoryPath = path
-        load()
-    }
 
     func load() {
         notes = storage.loadNotes()
@@ -186,7 +180,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func deleteNote(_ note: Note) {
-        pendingSaveIds.remove(note.id)
+        pendingSaves.removeValue(forKey: note.id)
         storage.deleteNote(note)
         notes.removeAll { $0.id == note.id }
         if selectedNoteId == note.id {
@@ -204,7 +198,7 @@ final class NotesViewModel: ObservableObject {
     func deleteAllNotes() {
         autoSaveTimer?.invalidate()
         autoSaveTimer = nil
-        pendingSaveIds.removeAll()
+        pendingSaves.removeAll()
         for note in notes {
             storage.deleteNote(note)
         }
@@ -217,7 +211,9 @@ final class NotesViewModel: ObservableObject {
     }
 
     func deleteNotes(ids: Set<UUID>) {
-        pendingSaveIds.subtract(ids)
+        for id in ids {
+            pendingSaves.removeValue(forKey: id)
+        }
         let toDelete = notes.filter { ids.contains($0.id) }
         for note in toDelete {
             storage.deleteNote(note)
@@ -230,6 +226,7 @@ final class NotesViewModel: ObservableObject {
 
     func togglePin(_ note: Note) {
         guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
+        pendingSaves.removeValue(forKey: note.id)
         notes[index].isPinned.toggle()
         notes[index].modifiedAt = Date()
         storage.saveNote(notes[index])
@@ -249,35 +246,58 @@ final class NotesViewModel: ObservableObject {
         // already up to date; only the expensive encode+write is deferred so
         // that holding a key down doesn't write the full note to disk on
         // every character.
-        scheduleSave(id)
+        scheduleSave(note: notes[index])
     }
 
     /// Marks a note as needing a save and (re)arms the debounce timer.
-    private func scheduleSave(_ id: UUID) {
-        pendingSaveIds.insert(id)
+    private func scheduleSave(note: Note) {
+        pendingSaves[note.id] = note
         autoSaveTimer?.invalidate()
         autoSaveTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.flushPendingSaves() }
         }
     }
 
-    /// Writes every note with pending edits to disk immediately. Safe to call
-    /// from the debounce timer or eagerly on save / close / quit. Notes that
-    /// have since been deleted are skipped (they're no longer in `notes`).
+    /// Writes every note with pending edits to disk immediately on a background thread.
     func flushPendingSaves() {
         autoSaveTimer?.invalidate()
         autoSaveTimer = nil
-        guard !pendingSaveIds.isEmpty else { return }
-        for id in pendingSaveIds {
-            if let note = notes.first(where: { $0.id == id }) {
-                storage.saveNote(note)
+        guard !pendingSaves.isEmpty else { return }
+        
+        let notesToSave = Array(pendingSaves.values)
+        pendingSaves.removeAll()
+        
+        Task.detached(priority: .utility) {
+            for note in notesToSave {
+                StorageManager.shared.saveNote(note)
             }
         }
-        pendingSaveIds.removeAll()
+    }
+
+    /// Writes every note with pending edits to disk synchronously. Used on
+    /// critical events like folder switching, deinit, and app exit to ensure
+    /// the process does not terminate before I/O completes.
+    func flushPendingSavesSynchronously() {
+        autoSaveTimer?.invalidate()
+        autoSaveTimer = nil
+        guard !pendingSaves.isEmpty else { return }
+        
+        for note in pendingSaves.values {
+            storage.saveNote(note)
+        }
+        pendingSaves.removeAll()
+    }
+
+    /// Flushes any pending changes to the old folder before switching directory paths.
+    func changeDirectoryPath(to path: String?) {
+        flushPendingSavesSynchronously()
+        storage.customDirectoryPath = path
+        load()
     }
 
     func moveNote(_ note: Note, to folderId: UUID?) {
         guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
+        pendingSaves.removeValue(forKey: note.id)
         notes[index].folderId = folderId
         notes[index].modifiedAt = Date()
         storage.saveNote(notes[index])

@@ -390,7 +390,7 @@ struct NoteListView: View {
                         
                         if StorageManager.shared.customDirectoryPath != nil {
                             Button("Use Default Location") {
-                                viewModel.changeDirectory(to: nil)
+                                viewModel.changeDirectoryPath(to: nil)
                             }
                         }
                     }
@@ -468,7 +468,7 @@ struct NoteListView: View {
         panel.prompt = "Select"
         
         if panel.runModal() == .OK, let url = panel.url {
-            viewModel.changeDirectory(to: url.path)
+            viewModel.changeDirectoryPath(to: url.path)
         }
     }
 
