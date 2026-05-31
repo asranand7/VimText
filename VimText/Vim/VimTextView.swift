@@ -3001,6 +3001,11 @@ class VimNSTextView: NSTextView {
         }
         if event.modifierFlags.contains(.command) {
             let hasShift = event.modifierFlags.contains(.shift)
+            let hasOption = event.modifierFlags.contains(.option)
+            if event.charactersIgnoringModifiers?.lowercased() == "b" && hasOption && !hasShift {
+                NotificationCenter.default.post(name: .toggleSidebar, object: nil)
+                return true
+            }
             if event.charactersIgnoringModifiers == "=" || event.characters == "+" {
                 EditorPreferences.increaseFontSize()
                 return true
