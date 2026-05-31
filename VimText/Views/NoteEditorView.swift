@@ -241,6 +241,11 @@ struct NoteEditorView: View {
                 isFindFieldFocused = true
             }
         }
+        .onChange(of: isFindFieldFocused) { _, focused in
+            // Let the find key monitor know when Return should mean find-next/
+            // prev (field focused) vs. a normal editor newline.
+            findController.isFieldFocused = focused
+        }
         .onReceive(NotificationCenter.default.publisher(for: .findInNote)) { _ in
             withAnimation(.easeInOut(duration: 0.15)) {
                 findController.isVisible = true

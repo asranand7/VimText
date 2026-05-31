@@ -8,6 +8,11 @@ class FindController: ObservableObject {
     @Published var totalMatches: Int = 0
     @Published var focusTrigger: Int = 0
 
+    /// Mirrors whether the find text field has focus, so the key monitor only
+    /// hijacks Shift+Return (previous match) while you're typing in find — not
+    /// when you're editing the note with the find bar open.
+    var isFieldFocused: Bool = false
+
     var performFind: ((String) -> Void)?
     var findNext: (() -> Void)?
     var findPrev: (() -> Void)?
@@ -32,6 +37,12 @@ class FindController: ObservableObject {
                     return nil
                 }
                 if flags == [.command, .shift], event.charactersIgnoringModifiers == "g" {
+                    self.findPrev?()
+                    return nil
+                }
+                // Shift+Return → previous match (Enter → next is the field's
+                // onSubmit). keyCode 36 is Return.
+                if event.keyCode == 36, flags == .shift, self.isFieldFocused {
                     self.findPrev?()
                     return nil
                 }
@@ -395,12 +406,12 @@ struct VimTextView: NSViewRepresentable {
                 let found = nsString.range(of: query, options: [.caseInsensitive], range: searchRange)
                 if found.location == NSNotFound { break }
                 findMatchRanges.append(found)
-                if findMatchRanges.count >= 2000 { break }
+                if findMatchRanges.count >= VimNSTextView.maxSearchMatches { break }
                 searchRange.location = found.location + found.length
                 searchRange.length = length - searchRange.location
             }
 
-            textView.highlightAllMatches(term: query)
+            textView.applyMatchHighlights(findMatchRanges)
 
             let fc = parent.findController
             fc?.totalMatches = findMatchRanges.count
@@ -2325,8 +2336,14 @@ class VimNSTextView: NSTextView {
     private var copyButtons: [NSButton] = []
     private var blockCursorLayer: CALayer?
     var visualCursorOverride: Int? = nil
-    private var searchHighlightLayers: [CALayer] = []
     private var currentMatchLayer: CALayer?
+    /// Upper bound on matches we find/highlight, as a safety valve against a
+    /// pathological query (e.g. a single common letter in a multi-MB note).
+    /// Far above any realistic search; effectively "all matches".
+    static let maxSearchMatches = 50_000
+    /// Whether temporary search-highlight attributes are currently applied,
+    /// so clearing can skip an O(n) attribute sweep when there's nothing set.
+    private var hasTemporarySearchHighlights = false
 
     func highlightCurrentMatch(range: NSRange) {
         currentMatchLayer?.removeFromSuperlayer()
@@ -2349,51 +2366,57 @@ class VimNSTextView: NSTextView {
         currentMatchLayer = layer
     }
 
-    func highlightAllMatches(term: String) {
+    /// Highlights every match by adding a temporary background-color attribute
+    /// on the layout manager (not the text storage). The layout manager only
+    /// draws the on-screen ones, so this is viewport-bound regardless of how
+    /// many matches there are — no per-match layers, no 250 cap. Temporary
+    /// attributes are display-only, so they're never serialized into the note.
+    func applyMatchHighlights(_ ranges: [NSRange]) {
         clearSearchHighlights()
-        guard !term.isEmpty else { return }
+        guard let layoutManager = self.layoutManager else { return }
+        let length = (self.string as NSString).length
+        guard length > 0, !ranges.isEmpty else { return }
+
+        let color = NSColor.systemYellow.withAlphaComponent(0.30)
+        var applied = 0
+        for r in ranges {
+            let safe = NSIntersectionRange(r, NSRange(location: 0, length: length))
+            guard safe.length > 0 else { continue }
+            layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: safe)
+            applied += 1
+            if applied >= Self.maxSearchMatches { break }
+        }
+        hasTemporarySearchHighlights = applied > 0
+    }
+
+    /// Scans for `term` and highlights all matches. Used by the Vim `/` search.
+    func highlightAllMatches(term: String) {
+        guard !term.isEmpty else { clearSearchHighlights(); return }
         let nsString = self.string as NSString
         let length = nsString.length
-        guard length > 0 else { return }
-        guard let layoutManager = self.layoutManager,
-              let textContainer = self.textContainer else { return }
+        guard length > 0 else { clearSearchHighlights(); return }
 
-        self.wantsLayer = true
+        var ranges: [NSRange] = []
         var searchRange = NSRange(location: 0, length: length)
         while searchRange.location < length {
             let found = nsString.range(of: term, options: [.caseInsensitive], range: searchRange)
             if found.location == NSNotFound { break }
-
-            if searchHighlightLayers.count >= 250 { break }
-
-            let glyphRange = layoutManager.glyphRange(forCharacterRange: found, actualCharacterRange: nil)
-            let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-            var highlightRect = rect
-            highlightRect.origin.x += self.textContainerOrigin.x
-            highlightRect.origin.y += self.textContainerOrigin.y
-
-            let layer = CALayer()
-            layer.frame = highlightRect
-            layer.backgroundColor = NSColor.systemYellow.withAlphaComponent(0.3).cgColor
-            layer.cornerRadius = 2
-            layer.borderWidth = 0.5
-            layer.borderColor = NSColor.systemYellow.withAlphaComponent(0.5).cgColor
-            layer.name = "searchHighlight"
-            self.layer?.addSublayer(layer)
-            searchHighlightLayers.append(layer)
-
+            ranges.append(found)
+            if ranges.count >= Self.maxSearchMatches { break }
             searchRange.location = found.location + found.length
             searchRange.length = length - searchRange.location
         }
+        applyMatchHighlights(ranges)
     }
 
     func clearSearchHighlights() {
-        for layer in searchHighlightLayers {
-            layer.removeFromSuperlayer()
-        }
-        searchHighlightLayers.removeAll()
         currentMatchLayer?.removeFromSuperlayer()
         currentMatchLayer = nil
+        if hasTemporarySearchHighlights, let layoutManager = self.layoutManager {
+            let fullRange = NSRange(location: 0, length: (self.string as NSString).length)
+            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
+            hasTemporarySearchHighlights = false
+        }
     }
 
     // MARK: - Rich Text Formatting
