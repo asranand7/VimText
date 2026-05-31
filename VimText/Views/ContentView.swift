@@ -135,12 +135,18 @@ public struct ContentView: View {
 
     private var sidebarToggleButton: some View {
         Button(action: toggleSidebar) {
-            Image(systemName: "sidebar.leading")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(isSidebarVisible ? theme.secondaryText.opacity(0.65) : theme.accent)
-                .frame(width: 28, height: 24)
-                .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(theme.separator.opacity(0.22), lineWidth: 0.5))
+            HStack(spacing: 5) {
+                Image(systemName: "sidebar.leading")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("⌘⌥B")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(theme.secondaryText.opacity(0.78))
+            }
+            .foregroundStyle(isSidebarVisible ? theme.secondaryText.opacity(0.65) : theme.accent)
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(theme.separator.opacity(0.22), lineWidth: 0.5))
         }
         .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
         .help(isSidebarVisible ? "Hide Sidebar (⌘⌥B)" : "Show Sidebar (⌘⌥B)")
