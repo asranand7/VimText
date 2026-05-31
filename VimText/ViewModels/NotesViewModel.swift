@@ -3,6 +3,20 @@ import SwiftUI
 import Combine
 import AppKit
 
+enum NoteSaveState: Equatable {
+    case saved
+    case saving
+    case error(String)
+
+    var displayText: String {
+        switch self {
+        case .saved: return "Saved"
+        case .saving: return "Saving"
+        case .error: return "Save failed"
+        }
+    }
+}
+
 @MainActor
 final class NotesViewModel: ObservableObject {
     @Published var notes: [Note] = []
@@ -12,6 +26,7 @@ final class NotesViewModel: ObservableObject {
     @Published var pendingSearchHighlight: String?
     @Published var searchText: String = ""
     @Published var showAllNotes: Bool = true
+    @Published var saveState: NoteSaveState = .saved
 
     /// Filtered + sorted notes for the sidebar. Maintained by a Combine
     /// pipeline (see init) so it's computed once whenever an input changes
@@ -32,7 +47,7 @@ final class NotesViewModel: ObservableObject {
         set {
             if let note = newValue, let index = notes.firstIndex(where: { $0.id == note.id }) {
                 notes[index] = note
-                storage.saveNote(note)
+                applySaveResult(storage.saveNote(note))
             }
         }
     }
@@ -104,6 +119,7 @@ final class NotesViewModel: ObservableObject {
         for note in pendingSaves.values {
             StorageManager.shared.saveNote(note)
         }
+        StorageManager.shared.waitForPendingWrites()
     }
 
     private func loadAsync() async {
@@ -142,7 +158,7 @@ final class NotesViewModel: ObservableObject {
         let welcomeContent = """
         Welcome to VimText!
 
-        This editor has full Vim keybinding support.
+        This editor has broad Vim keybinding support for common writing and editing flows.
         You are currently in INSERT mode — start typing!
 
         Quick Reference:
@@ -167,7 +183,7 @@ final class NotesViewModel: ObservableObject {
             content: welcomeContent
         )
         notes.insert(note, at: 0)
-        storage.saveNote(note)
+        applySaveResult(storage.saveNote(note))
         selectedNoteId = note.id
     }
 
@@ -178,7 +194,7 @@ final class NotesViewModel: ObservableObject {
             folderId: showAllNotes ? nil : selectedFolderId
         )
         notes.insert(note, at: 0)
-        storage.saveNote(note)
+        applySaveResult(storage.saveNote(note))
         selectedNoteId = note.id
     }
 
@@ -232,7 +248,7 @@ final class NotesViewModel: ObservableObject {
         pendingSaves.removeValue(forKey: note.id)
         notes[index].isPinned.toggle()
         notes[index].modifiedAt = Date()
-        storage.saveNote(notes[index])
+        applySaveResult(storage.saveNote(notes[index]))
     }
 
     func updateNoteContent(id: UUID, title: String, content: String, rtfData: Data? = nil) {
@@ -250,6 +266,7 @@ final class NotesViewModel: ObservableObject {
         notes[index].content = content
         notes[index].rtfData = rtfData
         notes[index].modifiedAt = Date()
+        saveState = .saving
         // Debounce the disk write. The in-memory note (and the whole UI) is
         // already up to date; only the expensive encode+write is deferred so
         // that holding a key down doesn't write the full note to disk on
@@ -271,14 +288,29 @@ final class NotesViewModel: ObservableObject {
         autoSaveTimer?.invalidate()
         autoSaveTimer = nil
         guard !pendingSaves.isEmpty else { return }
-        
+
         let notesToSave = Array(pendingSaves.values)
         let flags = notesToSave.reduce(into: [UUID: Bool]()) { $0[$1.id] = rtfInSyncByID[$1.id] ?? true }
         pendingSaves.removeAll()
 
-        Task.detached(priority: .utility) {
+        saveState = .saving
+        let batch = notesToSave.map { (note: $0, rtfInSync: flags[$0.id] ?? true) }
+        storage.saveNotesAsync(batch) { [weak self] results in
+            guard let self else { return }
+            var firstError: StorageError?
             for note in notesToSave {
-                StorageManager.shared.saveNote(note, rtfInSync: flags[note.id] ?? true)
+                if case .failure(let error) = results[note.id] {
+                    firstError = firstError ?? error
+                    if self.pendingSaves[note.id] == nil {
+                        self.pendingSaves[note.id] = note
+                    }
+                }
+            }
+
+            if let firstError {
+                self.saveState = .error(firstError.localizedDescription)
+            } else if self.pendingSaves.isEmpty {
+                self.saveState = .saved
             }
         }
     }
@@ -289,12 +321,33 @@ final class NotesViewModel: ObservableObject {
     func flushPendingSavesSynchronously() {
         autoSaveTimer?.invalidate()
         autoSaveTimer = nil
-        guard !pendingSaves.isEmpty else { return }
-        
-        for note in pendingSaves.values {
-            storage.saveNote(note, rtfInSync: rtfInSyncByID[note.id] ?? true)
+        guard !pendingSaves.isEmpty else {
+            storage.waitForPendingWrites()
+            if saveState == .saving {
+                saveState = .saved
+            }
+            return
         }
+
+        saveState = .saving
+        let notesToSave = Array(pendingSaves.values)
         pendingSaves.removeAll()
+        var firstError: StorageError?
+
+        for note in notesToSave {
+            let result = storage.saveNote(note, rtfInSync: rtfInSyncByID[note.id] ?? true)
+            if case .failure(let error) = result {
+                firstError = firstError ?? error
+                pendingSaves[note.id] = note
+            }
+        }
+
+        if let firstError {
+            saveState = .error(firstError.localizedDescription)
+        } else {
+            storage.waitForPendingWrites()
+            saveState = .saved
+        }
     }
 
     /// Flushes any pending changes to the old folder before switching directory paths.
@@ -309,7 +362,7 @@ final class NotesViewModel: ObservableObject {
         pendingSaves.removeValue(forKey: note.id)
         notes[index].folderId = folderId
         notes[index].modifiedAt = Date()
-        storage.saveNote(notes[index])
+        applySaveResult(storage.saveNote(notes[index]))
     }
 
     func createFolder(name: String) {
@@ -327,13 +380,22 @@ final class NotesViewModel: ObservableObject {
     func deleteFolder(_ folder: NoteFolder) {
         for i in notes.indices where notes[i].folderId == folder.id {
             notes[i].folderId = nil
-            storage.saveNote(notes[i])
+            applySaveResult(storage.saveNote(notes[i]))
         }
         folders.removeAll { $0.id == folder.id }
         storage.saveFolders(folders)
         if selectedFolderId == folder.id {
             showAllNotes = true
             selectedFolderId = nil
+        }
+    }
+
+    private func applySaveResult(_ result: Result<Void, StorageError>) {
+        switch result {
+        case .success:
+            saveState = .saved
+        case .failure(let error):
+            saveState = .error(error.localizedDescription)
         }
     }
 }

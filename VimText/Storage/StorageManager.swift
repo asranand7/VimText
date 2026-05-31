@@ -1,11 +1,29 @@
 import Foundation
 
-final class StorageManager {
-    static let shared = StorageManager()
+public enum StorageError: LocalizedError, Equatable {
+    case cannotCreateDirectory(String)
+    case cannotWriteFile(String, String)
+    case cannotEncodeMetadata(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .cannotCreateDirectory(let path):
+            return "Could not create notes directory at \(path)."
+        case .cannotWriteFile(let path, let reason):
+            return "Could not write \(path): \(reason)"
+        case .cannotEncodeMetadata(let title):
+            return "Could not encode metadata for \(title)."
+        }
+    }
+}
+
+public final class StorageManager {
+    public static let shared = StorageManager()
 
     private let fileManager = FileManager.default
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private let ioQueue = DispatchQueue(label: "com.vimtext.storage.io", qos: .utility)
 
     /// Maps each note's stable id to the file it currently lives in, so a title
     /// change (which changes the filename) can rename rather than orphan the file.
@@ -21,7 +39,7 @@ final class StorageManager {
         return formatter
     }()
 
-    var customDirectoryPath: String? {
+    public var customDirectoryPath: String? {
         get { UserDefaults.standard.string(forKey: Self.customPathKey) }
         set {
             if let path = newValue {
@@ -240,7 +258,7 @@ final class StorageManager {
         urlsByID = snapshot.urlsByID
     }
 
-    func loadNotes() -> [Note] {
+    public func loadNotes() -> [Note] {
         let snapshot = readNotesSnapshot()
         lock.lock()
         defer { lock.unlock() }
@@ -248,13 +266,42 @@ final class StorageManager {
         return snapshot.notes
     }
 
-    func fileURL(for note: Note) -> URL {
+    public func fileURL(for note: Note) -> URL {
         lock.lock()
         defer { lock.unlock() }
         return urlsByID[note.id] ?? uniqueURL(base: desiredBaseName(for: note), for: note.id)
     }
 
-    func saveNote(_ note: Note, rtfInSync: Bool = true) {
+    @discardableResult
+    public func saveNote(_ note: Note, rtfInSync: Bool = true) -> Result<Void, StorageError> {
+        ioQueue.sync {
+            performSaveNote(note, rtfInSync: rtfInSync)
+        }
+    }
+
+    func saveNotesAsync(_ notes: [(note: Note, rtfInSync: Bool)], completion: @escaping ([UUID: Result<Void, StorageError>]) -> Void) {
+        ioQueue.async { [self] in
+            var results: [UUID: Result<Void, StorageError>] = [:]
+            for item in notes {
+                results[item.note.id] = performSaveNote(item.note, rtfInSync: item.rtfInSync)
+            }
+            DispatchQueue.main.async {
+                completion(results)
+            }
+        }
+    }
+
+    func waitForPendingWrites() {
+        ioQueue.sync {}
+    }
+
+    private func performSaveNote(_ note: Note, rtfInSync: Bool = true) -> Result<Void, StorageError> {
+        do {
+            try fileManager.createDirectory(at: notesURL, withIntermediateDirectories: true)
+        } catch {
+            return .failure(.cannotCreateDirectory(notesURL.path))
+        }
+
         let target = uniqueURL(base: desiredBaseName(for: note), for: note.id)
         let (txtURL, rtfURL) = sidecars(for: target)
         lock.lock()
@@ -268,13 +315,17 @@ final class StorageManager {
         do {
             try Data(note.content.utf8).write(to: txtURL, options: .atomic)
         } catch {
-            return
+            return .failure(.cannotWriteFile(txtURL.path, error.localizedDescription))
         }
 
         if let rtf = note.rtfData, !rtf.isEmpty {
             let existingSize = (try? fileManager.attributesOfItem(atPath: rtfURL.path))?[.size] as? NSNumber
             if existingSize?.intValue != rtf.count {
-                try? rtf.write(to: rtfURL, options: .atomic)
+                do {
+                    try rtf.write(to: rtfURL, options: .atomic)
+                } catch {
+                    return .failure(.cannotWriteFile(rtfURL.path, error.localizedDescription))
+                }
             }
         } else {
             try? fileManager.removeItem(at: rtfURL)
@@ -289,11 +340,13 @@ final class StorageManager {
             isPinned: note.isPinned,
             rtfInSync: rtfInSync && !(note.rtfData?.isEmpty ?? true)
         )
-        guard let metaData = try? encoder.encode(meta) else { return }
+        guard let metaData = try? encoder.encode(meta) else {
+            return .failure(.cannotEncodeMetadata(note.displayTitle))
+        }
         do {
             try metaData.write(to: target, options: .atomic)
         } catch {
-            return
+            return .failure(.cannotWriteFile(target.path, error.localizedDescription))
         }
 
         lock.lock()
@@ -305,6 +358,7 @@ final class StorageManager {
             try? fileManager.removeItem(at: oldRtf)
         }
         urlsByID[note.id] = target
+        return .success(())
     }
 
     func deleteNote(_ note: Note) {

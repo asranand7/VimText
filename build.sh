@@ -68,9 +68,11 @@ PLIST
 
 cp .build/release/VimText "$MACOS_DIR/VimText"
 
-if [ -d ".build/release/VimText_VimText.bundle" ]; then
-    cp -R ".build/release/VimText_VimText.bundle" "$RESOURCES_DIR/"
-fi
+for bundle in .build/release/VimText*.bundle; do
+    if [ -d "$bundle" ]; then
+        cp -R "$bundle" "$RESOURCES_DIR/"
+    fi
+done
 
 echo "📍 Installing to /Applications..."
 pkill -f "VimText" 2>/dev/null || true

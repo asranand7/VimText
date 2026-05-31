@@ -1,4 +1,5 @@
 import SwiftUI
+import VimTextCore
 
 @main
 struct VimTextApp: App {
@@ -29,7 +30,7 @@ struct VimTextApp: App {
             }
 
             CommandGroup(after: .textEditing) {
-                Button("Quick Open Note…") {
+                Button("Quick Open Note...") {
                     NotificationCenter.default.post(name: .openCommandPalette, object: nil)
                 }
                 .keyboardShortcut("k", modifiers: .command)
@@ -43,8 +44,8 @@ struct VimTextApp: App {
                 Text("Visual: v, V")
                 Text("Command: :")
                 Divider()
-                Text("Save: :w or ⌘S")
-                Text("Motions: h j k l w b e 0 $ gg G")
+                Text("Save: :w or Command-S")
+                Text("Motions: h j k l w b e W B E 0 $ gg G")
                 Text("Operations: d y c p")
             }
         }

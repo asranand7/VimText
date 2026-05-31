@@ -7,16 +7,27 @@ let package = Package(
         .macOS(.v14)
     ],
     targets: [
-        .executableTarget(
-            name: "VimText",
+        .target(
+            name: "VimTextCore",
             path: "VimText",
             exclude: [
                 "Info.plist",
-                "VimText.entitlements"
+                "VimText.entitlements",
+                "VimTextApp.swift"
             ],
             resources: [
                 .process("Assets.xcassets")
             ]
+        ),
+        .executableTarget(
+            name: "VimText",
+            dependencies: ["VimTextCore"],
+            path: "App"
+        ),
+        .executableTarget(
+            name: "VimTextSmokeTests",
+            dependencies: ["VimTextCore"],
+            path: "Tests/VimTextSmokeTests"
         )
     ]
 )

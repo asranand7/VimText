@@ -273,7 +273,8 @@ struct NoteEditorView: View {
             textColor: theme.textNS,
             accentColor: theme.accentNS,
             paperStyle: paperStyle,
-            smartLists: smartLists
+            smartLists: smartLists,
+            showLineNumbers: showLineNumbers
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(editorPaperFill)
@@ -469,10 +470,10 @@ struct NoteEditorView: View {
             
             // Saved status pill
             HStack(spacing: 4) {
-                Image(systemName: "checkmark.circle.fill")
+                Image(systemName: saveStateIconName)
                     .font(.system(size: 10))
-                    .foregroundStyle(.green)
-                Text("Saved")
+                    .foregroundStyle(saveStateColor)
+                Text(viewModel.saveState.displayText)
                     .font(.system(.caption, design: .default).weight(.semibold))
             }
             .foregroundStyle(theme.secondaryText)
@@ -480,6 +481,23 @@ struct NoteEditorView: View {
             .padding(.vertical, 3)
             .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
             .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
+            .help(saveStateHelp)
+
+            if !vimEngine.statusMessage.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 10))
+                    Text(vimEngine.statusMessage)
+                        .font(.system(.caption, design: .monospaced).weight(.medium))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(theme.secondaryText)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
+                .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
+                .frame(maxWidth: 260, alignment: .leading)
+            }
             
             Spacer()
             
@@ -560,6 +578,29 @@ struct NoteEditorView: View {
             )
             .shadow(color: modeFillColor.opacity(theme.isMonochrome ? 0.12 : 0.35), radius: 3, y: 1)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: vimEngine.mode)
+    }
+
+    private var saveStateIconName: String {
+        switch viewModel.saveState {
+        case .saved: return "checkmark.circle.fill"
+        case .saving: return "arrow.triangle.2.circlepath.circle"
+        case .error: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var saveStateColor: Color {
+        switch viewModel.saveState {
+        case .saved: return .green
+        case .saving: return .orange
+        case .error: return .red
+        }
+    }
+
+    private var saveStateHelp: String {
+        if case .error(let message) = viewModel.saveState {
+            return message
+        }
+        return viewModel.saveState.displayText
     }
 
     private var editorPanelFill: Color {
@@ -665,7 +706,7 @@ struct NoteEditorView: View {
         viewModel.updateNoteContent(id: noteId, title: title.isEmpty ? "Untitled" : title, content: content, rtfData: rtfData)
         // Explicit save (⌘S / :w) and closing the editor should hit disk now,
         // not wait for the debounce window.
-        viewModel.flushPendingSaves()
+        viewModel.flushPendingSavesSynchronously()
     }
 
     private func extractTitle(from text: String) -> String {

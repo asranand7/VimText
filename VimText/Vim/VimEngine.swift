@@ -1,8 +1,8 @@
 import Foundation
 import AppKit
 
-final class VimEngine: ObservableObject {
-    @Published var mode: VimMode = .normal
+public final class VimEngine: ObservableObject {
+    @Published public var mode: VimMode = .normal
     @Published var commandBuffer: String = ""
     @Published var statusMessage: String = ""
     @Published var showCommandLine: Bool = false
@@ -65,7 +65,9 @@ final class VimEngine: ObservableObject {
         pendingChangeActions = []
     }
 
-    func processKey(_ key: String, modifiers: KeyModifiers = []) -> [VimAction] {
+    public init() {}
+
+    public func processKey(_ key: String, modifiers: KeyModifiers = []) -> [VimAction] {
         switch mode {
         case .normal:
             return processNormalMode(key, modifiers: modifiers)
@@ -137,6 +139,12 @@ final class VimEngine: ObservableObject {
             actions = Array(repeating: .moveCursor(.wordBackward), count: count)
         case "e":
             actions = Array(repeating: .moveCursor(.wordEnd), count: count)
+        case "W":
+            actions = Array(repeating: .moveCursor(.bigWordForward), count: count)
+        case "B":
+            actions = Array(repeating: .moveCursor(.bigWordBackward), count: count)
+        case "E":
+            actions = Array(repeating: .moveCursor(.bigWordEnd), count: count)
         case "0":
             actions = [.moveCursor(.lineStart)]
         case "$":
@@ -209,7 +217,7 @@ final class VimEngine: ObservableObject {
             return [.none]
         case "Y":
             resetBuffers()
-            return [.yankLine]
+            return [.yankLines(count)]
         case "x":
             resetBuffers()
             return Array(repeating: .deleteChar, count: count)
@@ -235,6 +243,10 @@ final class VimEngine: ObservableObject {
             return Array(repeating: .pasteBefore, count: count)
         case "r":
             keyBuffer = "r"
+            return [.none]
+        case "R":
+            mode = .replace
+            resetBuffers()
             return [.none]
         case "J":
             resetBuffers()
@@ -360,6 +372,9 @@ final class VimEngine: ObservableObject {
         case "w": return .wordForward
         case "b": return .wordBackward
         case "e": return .wordEnd
+        case "W": return .bigWordForward
+        case "B": return .bigWordBackward
+        case "E": return .bigWordEnd
         case "0": return .lineStart
         case "$": return .lineEnd
         case "^": return .firstNonBlank
@@ -392,10 +407,14 @@ final class VimEngine: ObservableObject {
         case "g":
             resetBuffers()
             if key == "g" {
-                if !countBuffer.isEmpty {
+                if count != 1 {
                     return [.goToLine(count)]
                 }
                 return [.moveCursor(.documentStart)]
+            } else if key == "e" {
+                return Array(repeating: .moveCursor(.wordEndBackward), count: count)
+            } else if key == "E" {
+                return Array(repeating: .moveCursor(.bigWordEndBackward), count: count)
             }
             return [.none]
 
@@ -403,7 +422,7 @@ final class VimEngine: ObservableObject {
             switch key {
             case "d":
                 resetBuffers()
-                return Array(repeating: .deleteLine, count: count)
+                return [.deleteLines(count)]
             case "g":
                 keyBuffer = "dg"
                 return [.none]
@@ -493,7 +512,7 @@ final class VimEngine: ObservableObject {
             case "c":
                 resetBuffers()
                 mode = .insert
-                return [.changeLine]
+                return [.changeLines(count)]
             case "g":
                 keyBuffer = "cg"
                 return [.none]
@@ -590,7 +609,7 @@ final class VimEngine: ObservableObject {
             switch key {
             case "y":
                 resetBuffers()
-                return [.yankLine]
+                return [.yankLines(count)]
             case "g":
                 keyBuffer = "yg"
                 return [.none]
@@ -681,14 +700,14 @@ final class VimEngine: ObservableObject {
         case ">":
             resetBuffers()
             if key == ">" {
-                return Array(repeating: .indent, count: count)
+                return [.indentLines(count)]
             }
             return [.none]
 
         case "<":
             resetBuffers()
             if key == "<" {
-                return Array(repeating: .outdent, count: count)
+                return [.outdentLines(count)]
             }
             return [.none]
 
@@ -772,6 +791,20 @@ final class VimEngine: ObservableObject {
             return [.none]
         }
 
+        if keyBuffer == "g" {
+            keyBuffer = ""
+            switch key {
+            case "g":
+                return [.moveCursor(.documentStart)]
+            case "e":
+                return [.moveCursor(.wordEndBackward)]
+            case "E":
+                return [.moveCursor(.bigWordEndBackward)]
+            default:
+                return [.none]
+            }
+        }
+
         switch key {
         case "escape":
             mode = .normal
@@ -791,6 +824,12 @@ final class VimEngine: ObservableObject {
             return [.moveCursor(.wordBackward)]
         case "e":
             return [.moveCursor(.wordEnd)]
+        case "W":
+            return [.moveCursor(.bigWordForward)]
+        case "B":
+            return [.moveCursor(.bigWordBackward)]
+        case "E":
+            return [.moveCursor(.bigWordEnd)]
         case "0":
             return [.moveCursor(.lineStart)]
         case "$":
@@ -899,10 +938,6 @@ final class VimEngine: ObservableObject {
             }
             return [.none]
         default:
-            if keyBuffer == "g" && key == "g" {
-                keyBuffer = ""
-                return [.moveCursor(.documentStart)]
-            }
             keyBuffer = ""
             return [.none]
         }
@@ -920,7 +955,7 @@ final class VimEngine: ObservableObject {
         return [.none]
     }
 
-    func executeCommand(_ command: String) -> [VimAction] {
+    public func executeCommand(_ command: String) -> [VimAction] {
         mode = .normal
         showCommandLine = false
 
@@ -1003,10 +1038,15 @@ final class VimEngine: ObservableObject {
     }
 }
 
-struct KeyModifiers: OptionSet {
-    let rawValue: Int
-    static let shift   = KeyModifiers(rawValue: 1 << 0)
-    static let control = KeyModifiers(rawValue: 1 << 1)
-    static let option  = KeyModifiers(rawValue: 1 << 2)
-    static let command = KeyModifiers(rawValue: 1 << 3)
+public struct KeyModifiers: OptionSet {
+    public let rawValue: Int
+
+    public init(rawValue: Int) {
+        self.rawValue = rawValue
+    }
+
+    public static let shift   = KeyModifiers(rawValue: 1 << 0)
+    public static let control = KeyModifiers(rawValue: 1 << 1)
+    public static let option  = KeyModifiers(rawValue: 1 << 2)
+    public static let command = KeyModifiers(rawValue: 1 << 3)
 }
