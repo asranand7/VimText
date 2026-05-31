@@ -219,6 +219,10 @@ struct NoteEditorView: View {
         .onAppear {
             loadNote()
             findController.installKeyMonitor()
+            // A note opened from a ⌘K search arrives with the query already
+            // pending; onChange won't fire for a freshly-created editor, so
+            // pick it up here.
+            applyPendingSearchHighlight()
         }
         .onChange(of: viewModel.pendingSearchHighlight) { _, newValue in
             if newValue != nil { applyPendingSearchHighlight() }
@@ -629,11 +633,22 @@ struct NoteEditorView: View {
     }
 
     private func applyPendingSearchHighlight() {
+        // Only the editor for the currently-selected note should consume the
+        // pending query — otherwise the outgoing editor (during a note switch)
+        // would grab it and apply it to the wrong note.
+        guard noteId == viewModel.selectedNoteId else { return }
         guard let highlight = viewModel.pendingSearchHighlight, !highlight.isEmpty else { return }
         viewModel.pendingSearchHighlight = nil
         findController.isVisible = true
         findController.query = highlight
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+        // Focus the find field so the next Enter advances to the next match
+        // (the find bar's onSubmit calls findNext).
+        findController.focusTrigger += 1
+        // If the note is already loaded (re-searching the open note), run the
+        // find on the next runloop tick. For a freshly-opened note the text
+        // view triggers the find itself the instant its content loads, so there
+        // is no guessed delay anywhere.
+        DispatchQueue.main.async {
             findController.performFind?(highlight)
         }
     }

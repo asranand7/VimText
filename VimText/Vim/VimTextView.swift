@@ -219,6 +219,19 @@ struct VimTextView: NSViewRepresentable {
             let safeLocation = min(selectedRange.location, (textView.string as NSString).length)
             textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
             context.coordinator.lastAppliedText = text
+
+            // The note's text is now in the view. If a search is pending from a
+            // ⌘K open, run it now — deterministically, the instant the content
+            // is loaded (regardless of note size), instead of guessing a delay.
+            // Deferred one runloop tick so we don't mutate published find state
+            // mid view-update.
+            if !context.coordinator.didInitialFindOnLoad,
+               let fc = findController, fc.isVisible, !fc.query.isEmpty {
+                context.coordinator.didInitialFindOnLoad = true
+                let pendingQuery = fc.query
+                let coordinator = context.coordinator
+                DispatchQueue.main.async { coordinator.performFindInEditor(query: pendingQuery) }
+            }
         }
 
         // Re-apply base font/size across the document when it changes (preserving bold/italic)
@@ -269,6 +282,9 @@ struct VimTextView: NSViewRepresentable {
         /// updateNSView must NOT replace the textView's content — the
         /// textView is the source of truth, not the (stale) SwiftUI state.
         var hasUnsyncedEdits = false
+        /// Ensures a ⌘K-opened search runs exactly once, the moment the note's
+        /// text finishes loading into the view (not on a guessed timer).
+        var didInitialFindOnLoad = false
         var visualAnchor: Int = 0
         var visualCursorPos: Int = 0
         private var yankHighlightLayer: CALayer?
@@ -359,7 +375,7 @@ struct VimTextView: NSViewRepresentable {
             }
         }
 
-        private func performFindInEditor(query: String) {
+        func performFindInEditor(query: String) {
             guard let textView = textView else { return }
             textView.clearSearchHighlights()
             findMatchRanges = []
