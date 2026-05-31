@@ -261,7 +261,7 @@ final class StorageManager {
         let existing = urlsByID[note.id]
         lock.unlock()
 
-        if note.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let existing = existing {
+        if note.content.isEmpty, let existing = existing {
             stashForRecovery(existing)
         }
 
