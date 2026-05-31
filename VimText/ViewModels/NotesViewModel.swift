@@ -119,6 +119,16 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
+    /// Switches the notes directory safely: any debounced edits are written
+    /// to the CURRENT directory first, so they aren't lost or flushed into the
+    /// new directory after the path changes. Pass `nil` to return to the
+    /// default app-support location.
+    func changeDirectory(to path: String?) {
+        flushPendingSaves()
+        storage.customDirectoryPath = path
+        load()
+    }
+
     func load() {
         notes = storage.loadNotes()
         folders = storage.loadFolders()

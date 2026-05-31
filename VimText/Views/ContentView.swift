@@ -67,6 +67,12 @@ struct ContentView: View {
         .tint(theme.accent)
         .navigationTitle("")
         .frame(minWidth: 700, minHeight: 500)
+        .onDisappear {
+            // Window teardown (closed without quitting): flush any debounced
+            // edits before the view model goes away. App quit is covered
+            // separately by the willTerminate observer in NotesViewModel.
+            viewModel.flushPendingSaves()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .createNewNote)) { _ in
             viewModel.createNote()
         }

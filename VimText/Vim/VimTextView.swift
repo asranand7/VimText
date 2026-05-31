@@ -2954,59 +2954,59 @@ class VimNSTextView: NSTextView {
         
         context.setStrokeColor(strokeColor)
         context.setFillColor(strokeColor)
-        
-        var lastLineY: CGFloat = textInset.height + font.ascender + 2.0 - (fontHeight + lineSpacing)
-        var estimatedRowHeight = fontHeight + lineSpacing
-        
-        // 1. Draw lines/dots for existing lines using Layout Manager
-        let glyphRange = layoutManager.glyphRange(for: textContainer)
-        if glyphRange.length > 0 {
-            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { rect, usedRect, container, range, stop in
-                let lineRectY = rect.origin.y + textInset.height
-                let y = lineRectY + font.ascender + 2.0
-                
-                if self.paperStyle == "dotted" {
-                    let dotRadius: CGFloat = 0.8
-                    let spacingX: CGFloat = 20
-                    var x = startX
-                    while x <= endX {
-                        context.addArc(center: CGPoint(x: x, y: y), radius: dotRadius, startAngle: 0, endAngle: 2 * .pi, clockwise: true)
-                        context.fillPath()
-                        x += spacingX
-                    }
-                } else if self.paperStyle == "lined" {
-                    context.setLineWidth(0.8)
-                    context.move(to: CGPoint(x: startX, y: y))
-                    context.addLine(to: CGPoint(x: endX, y: y))
-                    context.strokePath()
-                }
-                
-                lastLineY = y
-                estimatedRowHeight = rect.height
-            }
-        }
-        
-        // 2. Draw lines/dots for the empty area below the text
-        var y = lastLineY + estimatedRowHeight
-        while y < bounds.height {
-            if paperStyle == "dotted" {
-                let dotRadius: CGFloat = 0.8
-                let spacingX: CGFloat = 20
+
+        // Draws one grid row (a dotted or solid rule) at view-space baseline `y`.
+        let dotRadius: CGFloat = 0.8
+        let spacingX: CGFloat = 20
+        let isDotted = (paperStyle == "dotted")
+        let drawRow: (CGFloat) -> Void = { y in
+            if isDotted {
                 var x = startX
                 while x <= endX {
                     context.addArc(center: CGPoint(x: x, y: y), radius: dotRadius, startAngle: 0, endAngle: 2 * .pi, clockwise: true)
                     context.fillPath()
                     x += spacingX
                 }
-            } else if paperStyle == "lined" {
+            } else {
                 context.setLineWidth(0.8)
                 context.move(to: CGPoint(x: startX, y: y))
                 context.addLine(to: CGPoint(x: endX, y: y))
                 context.strokePath()
             }
-            y += estimatedRowHeight
         }
-        
+
+        let rowHeight = fontHeight + lineSpacing
+
+        // 1. Existing text lines — only the fragments overlapping the dirty
+        //    rect, instead of walking every fragment in the document.
+        let containerDirty = NSRect(x: rect.minX,
+                                    y: rect.minY - textInset.height,
+                                    width: rect.width,
+                                    height: rect.height)
+        let visibleGlyphs = layoutManager.glyphRange(forBoundingRect: containerDirty, in: textContainer)
+        if visibleGlyphs.length > 0 {
+            layoutManager.enumerateLineFragments(forGlyphRange: visibleGlyphs) { fragRect, _, _, _, _ in
+                drawRow(fragRect.origin.y + textInset.height + font.ascender + 2.0)
+            }
+        }
+
+        // 2. Empty area below the text. The text bottom comes from usedRect in
+        //    O(1) (layout is already done for display), so we don't have to
+        //    enumerate fragments to find it. Grid rows are kept on the same
+        //    arithmetic baseline as the text lines so the pattern is seamless,
+        //    and we only emit rows within the dirty vertical span.
+        let firstBaseline = textInset.height + font.ascender + 2.0
+        let textBottom = layoutManager.usedRect(for: textContainer).maxY + textInset.height
+        let kBelowText = ((textBottom - firstBaseline) / rowHeight).rounded(.down) + 1
+        let kInDirty = ((rect.minY - firstBaseline) / rowHeight).rounded(.up)
+        let kStart = max(0, max(kBelowText, kInDirty))
+        var y = firstBaseline + kStart * rowHeight
+        let limit = min(rect.maxY, bounds.height)
+        while y < limit {
+            drawRow(y)
+            y += rowHeight
+        }
+
         context.restoreGState()
     }
 
@@ -3024,6 +3024,9 @@ class VimNSTextView: NSTextView {
 
         for range in codeBlockRanges {
             guard let blockRect = codeBlockBoxRect(for: range) else { continue }
+            // Skip blocks scrolled out of the dirty rect — no need to build a
+            // bezier path and fill/stroke something that won't be visible.
+            guard blockRect.intersects(rect) else { continue }
             let path = NSBezierPath(roundedRect: blockRect, xRadius: 6, yRadius: 6)
             fillColor.setFill()
             path.fill()
