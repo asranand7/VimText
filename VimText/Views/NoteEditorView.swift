@@ -15,7 +15,7 @@ struct NoteEditorView: View {
     @State private var startInInsertMode = false
     @State private var showDeleteConfirm = false
     @FocusState private var isFindFieldFocused: Bool
-    @AppStorage("editorFontSize") private var fontSize: Double = 16
+    @AppStorage(EditorPreferences.fontSizeKey) private var fontSize: Double = EditorPreferences.defaultFontSize
     @AppStorage("showLineNumbers") private var showLineNumbers: Bool = false
     @AppStorage("useMonospacedFont") private var useMonospacedFont: Bool = false
     @AppStorage("editorPaperStyle") private var paperStyle: String = "plain"
@@ -604,20 +604,15 @@ struct NoteEditorView: View {
     }
 
     private var editorPanelFill: Color {
-        if theme.isInk { return theme.surface.opacity(0.82) }
-        if theme.isGraphite { return Color.white.opacity(0.72) }
-        return theme.isDark ? theme.surface.opacity(0.34) : Color.white.opacity(0.78)
+        EditorSurfacePalette.panelFill(for: theme)
     }
 
     private var editorPanelStroke: Color {
-        if theme.isMonochrome { return theme.separator.opacity(theme.isDark ? 0.55 : 0.62) }
-        return Color.white.opacity(theme.isDark ? 0.055 : 0.55)
+        EditorSurfacePalette.panelStroke(for: theme)
     }
 
     private var editorPaperFill: Color {
-        if theme.isGraphite { return Color(hex: "F7F6F3") }
-        if theme.isInk { return Color(hex: "121315") }
-        return theme.editorBackground.opacity(theme.isDark ? 0.14 : 0.18)
+        EditorSurfacePalette.paperFill(for: theme)
     }
 
     private var modeColor: Color {
@@ -648,11 +643,12 @@ struct NoteEditorView: View {
 
     @ViewBuilder
     private var fontSizeMenu: some View {
-        Button("Increase Font Size") { fontSize = min(fontSize + 1, 32) }
+        Button("Increase Font Size") { fontSize = EditorPreferences.increaseFontSize() }
             .keyboardShortcut("+", modifiers: .command)
-        Button("Decrease Font Size") { fontSize = max(fontSize - 1, 10) }
+        Button("Decrease Font Size") { fontSize = EditorPreferences.decreaseFontSize() }
             .keyboardShortcut("-", modifiers: .command)
-        Button("Reset Font Size") { fontSize = 15 }
+        Button("Reset Font Size") { fontSize = EditorPreferences.resetFontSize() }
+            .keyboardShortcut("0", modifiers: .command)
     }
 
     private var cursorInfo: String {

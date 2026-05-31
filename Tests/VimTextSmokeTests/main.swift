@@ -75,6 +75,29 @@ func testNoteModelDerivedText() throws {
     try expectEqual(Note(title: "Long", content: longContent).preview.count, 120, "preview should be capped")
 }
 
+func testEditorPreferencesFontSizing() throws {
+    let suiteName = "VimTextSmokeTests-\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: suiteName) else {
+        throw SmokeTestFailure.failed("could not create isolated defaults suite")
+    }
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    try expectEqual(EditorPreferences.fontSize(defaults: defaults), EditorPreferences.defaultFontSize, "missing font preference should use default")
+    try expectEqual(EditorPreferences.setFontSize(999, defaults: defaults), EditorPreferences.maximumFontSize, "font size should clamp to maximum")
+    try expectEqual(EditorPreferences.increaseFontSize(defaults: defaults), EditorPreferences.maximumFontSize, "increase should stay clamped at maximum")
+    try expectEqual(EditorPreferences.setFontSize(-1, defaults: defaults), EditorPreferences.minimumFontSize, "font size should clamp to minimum")
+    try expectEqual(EditorPreferences.decreaseFontSize(defaults: defaults), EditorPreferences.minimumFontSize, "decrease should stay clamped at minimum")
+    try expectEqual(EditorPreferences.resetFontSize(defaults: defaults), EditorPreferences.defaultFontSize, "reset should restore default")
+}
+
+func testGraphiteEditorContrast() throws {
+    let contrast = ThemeContrastChecks.graphiteEditorTextContrastRatio()
+    try expect(
+        contrast >= ThemeContrastChecks.minimumReadableContrastRatio,
+        "Graphite editor text contrast should stay readable"
+    )
+}
+
 func testVimNormalModeMotionsAndCounts() throws {
     let engine = VimEngine()
 
@@ -333,6 +356,8 @@ func testStorageMalformedFilesAndWriteErrors() throws {
 
 let tests: [(String, () throws -> Void)] = [
     ("Note model derived text", testNoteModelDerivedText),
+    ("Editor preferences font sizing", testEditorPreferencesFontSizing),
+    ("Graphite editor contrast", testGraphiteEditorContrast),
     ("Vim normal motions and counts", testVimNormalModeMotionsAndCounts),
     ("Vim insert, replace, and command modes", testVimInsertReplaceAndCommandModes),
     ("Vim operators, text objects, and repeats", testVimOperatorsTextObjectsAndRepeats),

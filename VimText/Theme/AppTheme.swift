@@ -165,6 +165,63 @@ final class ThemeManager: ObservableObject {
     func resetSidebarTint() { sidebarTintHex = nil }
 }
 
+enum EditorSurfacePalette {
+    static func panelFill(for theme: AppTheme) -> Color {
+        if theme.isInk { return theme.surface.opacity(0.82) }
+        if theme.isGraphite { return theme.surface.opacity(0.88) }
+        return theme.isDark ? theme.surface.opacity(0.34) : Color.white.opacity(0.78)
+    }
+
+    static func panelStroke(for theme: AppTheme) -> Color {
+        if theme.isMonochrome { return theme.separator.opacity(theme.isDark ? 0.55 : 0.62) }
+        return Color.white.opacity(theme.isDark ? 0.055 : 0.55)
+    }
+
+    static func paperFill(for theme: AppTheme) -> Color {
+        if theme.isGraphite { return theme.editorBackground.opacity(0.92) }
+        if theme.isInk { return Color(hex: "121315") }
+        return theme.editorBackground.opacity(theme.isDark ? 0.14 : 0.18)
+    }
+
+    static func paperColorForContrast(for theme: AppTheme) -> NSColor {
+        if theme.isInk { return NSColor(hex: "121315") }
+        return theme.editorBackgroundNS
+    }
+}
+
+public enum ThemeContrastChecks {
+    public static let minimumReadableContrastRatio = 4.5
+
+    public static func graphiteEditorTextContrastRatio() -> Double {
+        contrastRatio(
+            foreground: AppTheme.graphite.textNS,
+            background: EditorSurfacePalette.paperColorForContrast(for: .graphite)
+        )
+    }
+
+    private static func contrastRatio(foreground: NSColor, background: NSColor) -> Double {
+        let foregroundLuminance = relativeLuminance(foreground)
+        let backgroundLuminance = relativeLuminance(background)
+        let lighter = max(foregroundLuminance, backgroundLuminance)
+        let darker = min(foregroundLuminance, backgroundLuminance)
+        return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    private static func relativeLuminance(_ color: NSColor) -> Double {
+        let rgb = color.usingColorSpace(.sRGB) ?? color
+        let r = linearized(Double(rgb.redComponent))
+        let g = linearized(Double(rgb.greenComponent))
+        let b = linearized(Double(rgb.blueComponent))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+
+    private static func linearized(_ component: Double) -> Double {
+        component <= 0.03928
+            ? component / 12.92
+            : pow((component + 0.055) / 1.055, 2.4)
+    }
+}
+
 let sidebarTintPresets: [String] = [
     "E5A50A", "3F4146", "D8D3C8", "868E96", "FF6B6B",
     "F06595", "CC5DE8", "845EF7", "5C7CFA", "339AF0",
