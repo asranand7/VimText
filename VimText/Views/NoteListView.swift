@@ -182,7 +182,7 @@ struct NoteListView: View {
                             )
                     }
                     .buttonStyle(PressableIconButtonStyle())
-                    .help("Collapse Sidebar (⌘⌥S)")
+                    .help("Collapse Sidebar (⌘⌥B)")
                 }
 
                 HStack(spacing: 8) {

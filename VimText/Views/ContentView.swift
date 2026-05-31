@@ -143,7 +143,7 @@ public struct ContentView: View {
                 .overlay(Capsule().strokeBorder(theme.separator.opacity(0.22), lineWidth: 0.5))
         }
         .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
-        .help(isSidebarVisible ? "Hide Sidebar (⌘⌥S)" : "Show Sidebar (⌘⌥S)")
+        .help(isSidebarVisible ? "Hide Sidebar (⌘⌥B)" : "Show Sidebar (⌘⌥B)")
     }
 
     private func toggleSidebar() {

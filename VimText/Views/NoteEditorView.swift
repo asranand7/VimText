@@ -60,7 +60,7 @@ struct NoteEditorView: View {
                             .frame(width: 18, height: 18)
                     }
                     .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
-                    .help(isSidebarVisible ? "Hide Sidebar (⌘⌥S)" : "Show Sidebar (⌘⌥S)")
+                    .help(isSidebarVisible ? "Hide Sidebar (⌘⌥B)" : "Show Sidebar (⌘⌥B)")
                 }
 
                 Image(systemName: "folder")

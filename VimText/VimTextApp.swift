@@ -32,7 +32,7 @@ struct VimTextApp: App {
                 Button("Toggle Sidebar") {
                     NotificationCenter.default.post(name: .toggleSidebar, object: nil)
                 }
-                .keyboardShortcut("s", modifiers: [.command, .option])
+                .keyboardShortcut("b", modifiers: [.command, .option])
             }
 
             CommandGroup(after: .textEditing) {
