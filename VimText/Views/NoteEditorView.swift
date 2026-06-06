@@ -525,7 +525,7 @@ struct NoteEditorView: View {
             HStack(spacing: 4) {
                 Image(systemName: "clock")
                     .font(.system(size: 10))
-                Text("\(wordCount) words · \(readingTime) min read")
+                Text("\(wordCount.formatted()) words · \(readingTime) min read")
                     .font(.system(.caption, design: .default).weight(.semibold))
             }
             .foregroundStyle(theme.secondaryText)

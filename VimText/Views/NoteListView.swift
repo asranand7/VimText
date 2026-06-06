@@ -13,6 +13,7 @@ struct NoteListView: View {
     @State private var showSidebarColorPicker = false
     @State private var isSearchFocused = false
     @State private var isSearchHovered = false
+    @State private var collapsedSections: Set<String> = []
 
     private var sidebarTintBinding: Binding<Color> {
         Binding(
@@ -161,6 +162,39 @@ struct NoteListView: View {
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 2)
+    }
+
+    /// A tappable section header with a disclosure chevron. Toggling adds/
+    /// removes the title from `collapsedSections`, which `notesList` reads to
+    /// hide the section's rows.
+    private func collapsibleSectionHeader(_ title: String) -> some View {
+        let isCollapsed = collapsedSections.contains(title)
+        return Button {
+            withAnimation(DS.snappy) {
+                if isCollapsed {
+                    collapsedSections.remove(title)
+                } else {
+                    collapsedSections.insert(title)
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(themeManager.sidebarTint.opacity(0.8))
+                    .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                Text(title)
+                    .font(.system(.caption, design: .default).weight(.bold))
+                    .foregroundStyle(themeManager.sidebarTint)
+                    .textCase(nil)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     var body: some View {
@@ -520,16 +554,20 @@ struct NoteListView: View {
                         let unpinned = notes.filter { !$0.isPinned }
 
                         if !pinned.isEmpty {
-                            sectionHeader("Pinned")
-                            ForEach(pinned) { note in
-                                noteRow(note: note, flatIndex: 0, isSearching: false)
+                            collapsibleSectionHeader("Pinned")
+                            if !collapsedSections.contains("Pinned") {
+                                ForEach(pinned) { note in
+                                    noteRow(note: note, flatIndex: 0, isSearching: false)
+                                }
                             }
                         }
 
                         ForEach(dateSections(unpinned), id: \.title) { section in
-                            sectionHeader(section.title)
-                            ForEach(section.notes) { note in
-                                noteRow(note: note, flatIndex: 0, isSearching: false)
+                            collapsibleSectionHeader(section.title)
+                            if !collapsedSections.contains(section.title) {
+                                ForEach(section.notes) { note in
+                                    noteRow(note: note, flatIndex: 0, isSearching: false)
+                                }
                             }
                         }
                     }

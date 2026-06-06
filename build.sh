@@ -4,7 +4,11 @@ set -e
 cd "$(dirname "$0")"
 
 echo "🔨 Building VimText (release)..."
-swift build -c release 2>&1
+# Build the app product specifically. Plain `swift build` also tries to build
+# the VimTextSmokeTests target, which uses `@testable import` and fails in
+# release mode ("module not compiled for testing"), aborting the script before
+# the app is ever produced.
+swift build -c release --product VimText 2>&1
 
 echo "📦 Creating app bundle..."
 APP_NAME="VimText"
