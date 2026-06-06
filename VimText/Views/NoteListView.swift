@@ -74,13 +74,6 @@ struct NoteListView: View {
         theme.isMonochrome ? 0.0 : 0.02
     }
 
-    private func folderName(for note: Note) -> String {
-        if let id = note.folderId, let folder = viewModel.folders.first(where: { $0.id == id }) {
-            return folder.name
-        }
-        return "Notes"
-    }
-
     private func dateGroup(_ date: Date) -> (order: Int, title: String) {
         let cal = Calendar.current
         let now = Date()
@@ -604,7 +597,6 @@ struct NoteListView: View {
         // re-renders the row entered/left — not the whole list.
         NoteRowListItem(
             note: note,
-            folderName: folderName(for: note),
             isSelected: isSelected,
             isHighlighted: isHighlighted,
             onCopyPath: { copyPath(for: note) },
@@ -663,7 +655,6 @@ struct NoteListView: View {
     private func selectableNoteRow(note: Note) -> some View {
         SelectableNoteRowItem(
             note: note,
-            folderName: folderName(for: note),
             isChecked: selectedNoteIds.contains(note.id),
             onToggle: {
                 if selectedNoteIds.contains(note.id) {
@@ -679,6 +670,16 @@ struct NoteListView: View {
     private func noteContextMenu(for note: Note) -> some View {
         Button(note.isPinned ? "Unpin" : "Pin") {
             viewModel.togglePin(note)
+        }
+
+        Button("Duplicate") {
+            viewModel.duplicateNote(note)
+        }
+
+        Divider()
+
+        Button("Reveal in Finder") {
+            revealInFinder(note)
         }
 
         Button("Copy Path") {
@@ -698,6 +699,11 @@ struct NoteListView: View {
         pasteboard.clearContents()
         pasteboard.setString(path, forType: .string)
     }
+
+    private func revealInFinder(_ note: Note) {
+        let url = StorageManager.shared.fileURL(for: note)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
 }
 
 /// A single sidebar note row. Owns its own hover state so that moving the
@@ -706,7 +712,6 @@ struct NoteListView: View {
 /// every row on every mouse move).
 private struct NoteRowListItem: View {
     let note: Note
-    let folderName: String
     let isSelected: Bool
     let isHighlighted: Bool
     let onCopyPath: () -> Void
@@ -735,7 +740,6 @@ private struct NoteRowListItem: View {
 
         return NoteRowView(
             note: note,
-            folderName: folderName,
             isHovered: isHovered,
             isSelected: isSelected || isHighlighted,
             onCopyPath: onCopyPath,
@@ -798,7 +802,6 @@ private struct NoteRowListItem: View {
 /// reason as `NoteRowListItem`.
 private struct SelectableNoteRowItem: View {
     let note: Note
-    let folderName: String
     let isChecked: Bool
     let onToggle: () -> Void
 
@@ -813,7 +816,7 @@ private struct SelectableNoteRowItem: View {
                 .foregroundStyle(isChecked ? Color.blue : Color.secondary.opacity(0.4))
                 .font(.system(size: 16, weight: .medium))
 
-            NoteRowView(note: note, folderName: folderName, isHovered: isHovered, isSelected: isChecked)
+            NoteRowView(note: note, isHovered: isHovered, isSelected: isChecked)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

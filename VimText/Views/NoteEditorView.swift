@@ -40,17 +40,10 @@ struct NoteEditorView: View {
         viewModel.notes.first { $0.id == noteId }
     }
 
-    private var folderName: String {
-        if let note = note, let id = note.folderId, let folder = viewModel.folders.first(where: { $0.id == id }) {
-            return folder.name
-        }
-        return "Notes"
-    }
-
     private var editorHeader: some View {
         HStack(spacing: 8) {
 
-            // Left: folder + timestamp
+            // Left: sidebar toggle + timestamp
             HStack(spacing: 4) {
                 if let onToggleSidebar {
                     Button(action: onToggleSidebar) {
@@ -69,13 +62,7 @@ struct NoteEditorView: View {
                     .accessibilityHint("Toggles the notes sidebar. Shortcut: Command Option B.")
                 }
 
-                Image(systemName: "folder")
-                    .font(.system(size: 10, weight: .medium))
-                Text(folderName)
-                    .font(.system(size: 11, weight: .semibold))
                 if let note = note {
-                    Text("·")
-                        .font(.system(size: 11))
                     Text(relativeTimeString(for: note.modifiedAt))
                         .font(.system(size: 11, weight: .regular))
                 }

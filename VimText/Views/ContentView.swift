@@ -85,6 +85,11 @@ public struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .createNewNote)) { _ in
             viewModel.createNote()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .duplicateCurrentNote)) { _ in
+            if let note = viewModel.selectedNote {
+                viewModel.duplicateNote(note)
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openCommandPalette)) { _ in
             withAnimation(.spring(response: 0.22, dampingFraction: 0.75)) {
                 showCommandPalette.toggle()

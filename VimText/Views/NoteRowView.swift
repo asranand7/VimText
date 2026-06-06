@@ -2,7 +2,6 @@ import SwiftUI
 
 struct NoteRowView: View {
     let note: Note
-    var folderName: String = "Notes"
     var isHovered: Bool = false
     var isSelected: Bool = false
     var onCopyPath: (() -> Void)? = nil
@@ -11,7 +10,6 @@ struct NoteRowView: View {
     @State private var didCopy = false
 
     private var theme: AppTheme { themeManager.theme }
-    private var tint: Color { themeManager.sidebarTint }
 
     private var formattedDate: String {
         let calendar = Calendar.current
@@ -88,15 +86,6 @@ struct NoteRowView: View {
                 .foregroundStyle(theme.secondaryText.opacity(isSelected ? 0.82 : 0.62))
                 .lineLimit(2)
                 .frame(minHeight: 16, alignment: .topLeading)
-
-            HStack(spacing: 4) {
-                Image(systemName: "folder")
-                    .font(.system(size: 9))
-                Text(folderName)
-                    .font(.system(size: 10.5, weight: .medium, design: .default))
-            }
-            .foregroundStyle(isSelected ? tint.opacity(theme.isDark ? 0.58 : 0.46) : theme.secondaryText.opacity(0.46))
-            .padding(.top, 2)
         }
         .padding(.vertical, 9)
         .animation(DS.snappy, value: isHovered)

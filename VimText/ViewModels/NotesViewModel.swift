@@ -198,6 +198,24 @@ final class NotesViewModel: ObservableObject {
         selectedNoteId = note.id
     }
 
+    /// Creates a copy of `note` (new id/timestamps, unpinned) directly above it
+    /// and selects it. Returns the new note's id.
+    @discardableResult
+    func duplicateNote(_ note: Note) -> UUID? {
+        guard notes.contains(where: { $0.id == note.id }) else { return nil }
+        let copy = Note(
+            title: note.title,
+            content: note.content,
+            rtfData: note.rtfData,
+            folderId: note.folderId
+        )
+        let insertIndex = notes.firstIndex(where: { $0.id == note.id }).map { $0 + 1 } ?? 0
+        notes.insert(copy, at: insertIndex)
+        applySaveResult(storage.saveNote(copy))
+        selectedNoteId = copy.id
+        return copy.id
+    }
+
     func deleteNote(_ note: Note) {
         pendingSaves.removeValue(forKey: note.id)
         storage.deleteNote(note)

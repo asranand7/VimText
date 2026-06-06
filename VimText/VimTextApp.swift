@@ -14,6 +14,11 @@ struct VimTextApp: App {
                     NotificationCenter.default.post(name: .createNewNote, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
+
+                Button("Duplicate Note") {
+                    NotificationCenter.default.post(name: .duplicateCurrentNote, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: .command)
             }
 
             CommandGroup(replacing: .textEditing) {

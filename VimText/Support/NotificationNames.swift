@@ -2,6 +2,7 @@ import Foundation
 
 public extension Notification.Name {
     static let createNewNote = Notification.Name("createNewNote")
+    static let duplicateCurrentNote = Notification.Name("duplicateCurrentNote")
     static let focusNoteSearch = Notification.Name("focusNoteSearch")
     static let findInNote = Notification.Name("findInNote")
     static let openCommandPalette = Notification.Name("openCommandPalette")
