@@ -36,13 +36,12 @@ public struct Note: Identifiable, Codable, Hashable {
     }
 
     public var preview: String {
-        // Only the first 3 lines (capped to 120 chars) are ever shown, so
-        // split just the head of the content. Splitting the whole string
-        // allocates an array of every line — slow for very large notes that
-        // are re-rendered on each list pass. `prefix(1000)` stops after 1000
-        // chars (it does NOT walk the whole string the way `.count` would).
+        // Only the first 3 lines after the title (capped to 120 chars) are
+        // ever shown, so split just the head of the content. The first line
+        // of `content` is also the source of `title`, so it's dropped here
+        // to avoid showing the title twice in each sidebar row.
         let head = String(content.prefix(1000))
-        let lines = head.components(separatedBy: .newlines)
+        let lines = head.components(separatedBy: .newlines).dropFirst()
         let previewLines = lines.prefix(3).joined(separator: " ")
         let trimmed = previewLines.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "No additional text" : String(trimmed.prefix(120))

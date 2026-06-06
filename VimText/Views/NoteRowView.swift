@@ -6,6 +6,7 @@ struct NoteRowView: View {
     var isHovered: Bool = false
     var isSelected: Bool = false
     var onCopyPath: (() -> Void)? = nil
+    var onTogglePin: (() -> Void)? = nil
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var didCopy = false
 
@@ -43,7 +44,18 @@ struct NoteRowView: View {
                     .foregroundStyle(theme.secondaryText.opacity(isSelected ? 0.86 : 0.66))
                     .fixedSize()
 
-                if note.isPinned {
+                if let onTogglePin, isHovered {
+                    Button(action: onTogglePin) {
+                        Image(systemName: note.isPinned ? "pin.slash" : "pin")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(note.isPinned ? theme.accent : theme.secondaryText)
+                            .frame(width: 18, height: 18)
+                            .background(Circle().fill(theme.text.opacity(0.06)))
+                    }
+                    .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
+                    .help(note.isPinned ? "Unpin note" : "Pin note")
+                    .transition(.opacity)
+                } else if note.isPinned {
                     Image(systemName: "pin.fill")
                         .font(.system(size: 10))
                         .foregroundStyle(theme.accent)

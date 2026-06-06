@@ -570,6 +570,9 @@ struct NoteListView: View {
             isSelected: isSelected,
             isHighlighted: isHighlighted,
             onCopyPath: { copyPath(for: note) },
+            onTogglePin: {
+                withAnimation(DS.snappy) { viewModel.togglePin(note) }
+            },
             onTap: {
                 withAnimation(DS.spring) {
                     viewModel.selectedNoteId = note.id
@@ -669,6 +672,7 @@ private struct NoteRowListItem: View {
     let isSelected: Bool
     let isHighlighted: Bool
     let onCopyPath: () -> Void
+    let onTogglePin: () -> Void
     let onTap: () -> Void
 
     @EnvironmentObject private var themeManager: ThemeManager
@@ -696,7 +700,8 @@ private struct NoteRowListItem: View {
             folderName: folderName,
             isHovered: isHovered,
             isSelected: isSelected || isHighlighted,
-            onCopyPath: onCopyPath
+            onCopyPath: onCopyPath,
+            onTogglePin: onTogglePin
         )
             .padding(.horizontal, 14)
             .padding(.vertical, 3)
