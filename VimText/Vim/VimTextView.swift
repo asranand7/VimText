@@ -13,6 +13,11 @@ class FindController: ObservableObject {
     /// when you're editing the note with the find bar open.
     var isFieldFocused: Bool = false
 
+    /// True when the find bar was opened from ⌘K to jump to a match. In this
+    /// mode only Enter (next) / Shift+Enter (previous) cycle matches; pressing
+    /// any other key dismisses the bar, exactly like Escape.
+    var navigationMode: Bool = false
+
     var performFind: ((String) -> Void)?
     var findNext: (() -> Void)?
     var findPrev: (() -> Void)?
@@ -28,6 +33,7 @@ class FindController: ObservableObject {
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             if flags == .command, event.charactersIgnoringModifiers == "f" {
                 self.isVisible = true
+                self.navigationMode = false
                 self.focusTrigger += 1
                 return nil
             }
@@ -47,17 +53,32 @@ class FindController: ObservableObject {
                     return nil
                 }
                 if event.keyCode == 53 {
-                    self.isVisible = false
-                    self.dismiss?()
-                    self.query = ""
-                    self.currentMatch = 0
-                    self.totalMatches = 0
-                    self.refocusEditor?()
+                    self.closeFromMonitor()
+                    return nil
+                }
+                // ⌘K navigation mode: only Enter (passes through to onSubmit →
+                // next) and Shift+Return (handled above) operate; every other
+                // key dismisses, just like Escape.
+                if self.navigationMode, self.isFieldFocused {
+                    if event.keyCode == 36 { return event }
+                    self.closeFromMonitor()
                     return nil
                 }
             }
             return event
         }
+    }
+
+    /// Closes the find bar and returns focus to the editor (the shared
+    /// Escape / navigation-dismiss path).
+    private func closeFromMonitor() {
+        isVisible = false
+        navigationMode = false
+        dismiss?()
+        query = ""
+        currentMatch = 0
+        totalMatches = 0
+        refocusEditor?()
     }
 
     func removeKeyMonitor() {

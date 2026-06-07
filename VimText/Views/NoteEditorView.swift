@@ -368,6 +368,7 @@ struct NoteEditorView: View {
         withAnimation(.easeInOut(duration: 0.15)) {
             findController.isVisible = false
         }
+        findController.navigationMode = false
         findController.dismiss?()
         findController.query = ""
         findController.currentMatch = 0
@@ -689,6 +690,7 @@ struct NoteEditorView: View {
         guard let highlight = viewModel.pendingSearchHighlight, !highlight.isEmpty else { return }
         viewModel.pendingSearchHighlight = nil
         findController.isVisible = true
+        findController.navigationMode = true
         findController.query = highlight
         // Focus the find field so the next Enter advances to the next match
         // (the find bar's onSubmit calls findNext).
