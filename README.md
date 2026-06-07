@@ -194,31 +194,44 @@ swift build -c release
 
 ## Architecture
 
+> 📐 **For contributors and AI agents:** [`ARCHITECTURE.md`](ARCHITECTURE.md) is
+> the detailed code map — it explains the editor core, the data flow for a
+> keystroke, how to add a Vim motion, the persistence/image model, build/test
+> commands, and known gotchas. Start there before diving into the source.
+
 ```
 App/
 └── VimTextApp.swift            # SwiftPM executable entry point
 VimText/
 ├── Models/
-│   ├── Note.swift              # Note data model
+│   ├── Note.swift              # Note data model (+ image-aware preview)
 │   └── NoteFolder.swift        # Folder data model
 ├── Storage/
-│   └── StorageManager.swift    # JSON-based local persistence
+│   └── StorageManager.swift    # Local persistence (json + txt/rtf sidecars), image assets, backups
 ├── ViewModels/
-│   └── NotesViewModel.swift    # App state & business logic
+│   └── NotesViewModel.swift    # App state, filtering pipeline, debounced saves
 ├── Views/
-│   ├── ContentView.swift       # Main layout
+│   ├── ContentView.swift       # Main split layout
 │   ├── NoteListView.swift      # Sidebar note list & search
-│   ├── NoteEditorView.swift    # Editor wrapper
-│   └── NoteRowView.swift       # Individual note row
-├── Vim/
-│   ├── VimEngine.swift         # Core Vim state machine & key processing
-│   ├── VimMode.swift           # Mode, action, motion & text object enums
-│   └── VimTextView.swift       # NSTextView integration & action execution
-├── Support/
-│   └── NotificationNames.swift # Shared notification constants
+│   ├── NoteEditorView.swift    # Editor chrome (header, find bar, status bar)
+│   ├── NoteRowView.swift       # Individual note row
+│   ├── CommandPaletteView.swift# ⌘K command palette
+│   └── SidebarView.swift       # (legacy folder list, currently unused)
+├── Vim/                        # Editor core — see ARCHITECTURE.md
+│   ├── VimMode.swift           # Mode/action/motion/text-object enums (+ word-under-cursor)
+│   ├── VimEngine.swift         # Key → action state machine (parsing)
+│   ├── VimTextView.swift       # NSViewRepresentable (make/updateNSView)
+│   ├── VimTextView+Coordinator.swift  # Delegate bridge: motion resolution + action execution
+│   ├── VimNSTextView.swift     # NSTextView subclass: keyDown, cursor, paste, images, formatting
+│   ├── FindController.swift    # In-note find bar state + key monitor
+│   ├── ImageAttachment.swift   # Inline image attachment ↔ Markdown
+│   ├── LineNumberRulerView.swift   # Line-number gutter
+│   └── PremiumScroller.swift   # Thin overlay scrollbar
+├── Theme/                      # Themes, design tokens (DS), date formatters
+├── Support/                    # Notification names, prefs, image Markdown, layout consts
 └── VimTextApp.swift            # App entry point & global shortcuts
 Tests/
-└── VimTextSmokeTests/          # CLI smoke coverage for Vim parsing and storage
+└── VimTextSmokeTests/          # CLI smoke coverage for Vim parsing, storage, image Markdown
 ```
 
 ## Data Storage
