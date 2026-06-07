@@ -78,6 +78,9 @@ func testNoteModelDerivedText() throws {
 
     let longContent = "title\n" + String(repeating: "a", count: 200)
     try expectEqual(Note(title: "Long", content: longContent).preview.count, 120, "preview should be capped")
+
+    let withImage = Note(title: "Img", content: "Title line\n![](assets/x.png)\nreal text")
+    try expectEqual(withImage.preview, "real text", "preview should strip embedded-image references")
 }
 
 func testEditorPreferencesFontSizing() throws {
@@ -303,6 +306,89 @@ func testImageMarkdownHelpers() throws {
     try expectEqual(ImageMarkdown.strippingImageRefs(from: "a ![](assets/x.png) b"), "a  b", "image refs should be stripped from previews")
 }
 
+func testVimAdditionalActions() throws {
+    var engine = VimEngine()
+    try expectEqual(engine.processKey("Y"), [.yankLines(1)], "Y should yank the current line")
+    try expectEqual(feed(engine, "3", "Y"), [.yankLines(3)], "3Y should yank three lines")
+    try expectEqual(engine.processKey("J"), [.joinLines], "J should join lines")
+
+    engine = VimEngine()
+    try expectEqual(engine.processKey("s"), [.deleteChar, .insertMode(.beforeCursor)], "s should delete a char then insert")
+    try expectEqual(engine.mode, .insert, "s should enter insert mode")
+
+    engine = VimEngine()
+    try expectEqual(engine.processKey("S"), [.changeLine], "S should change the whole line")
+    try expectEqual(engine.mode, .insert, "S should enter insert mode")
+
+    engine = VimEngine()
+    try expectEqual(engine.processKey("r"), [.none], "r should wait for a replacement character")
+    try expectEqual(engine.processKey("z"), [.replaceChar], "r{char} should replace the character")
+
+    engine = VimEngine()
+    try expectEqual(feed(engine, "z", "z"), [.centerCursor(.center)], "zz should center the cursor line")
+    try expectEqual(feed(engine, "z", "t"), [.centerCursor(.top)], "zt should move the cursor line to the top")
+    try expectEqual(feed(engine, "z", "b"), [.centerCursor(.bottom)], "zb should move the cursor line to the bottom")
+}
+
+func testStorageImageAssets() throws {
+    try withTemporaryStorage { manager, _ in
+        let png = Data([0x89, 0x50, 0x4E, 0x47])
+        guard let rel = manager.saveImageAsset(png, fileExtension: "png") else {
+            throw SmokeTestFailure.failed("saveImageAsset should return a relative path")
+        }
+        try expect(rel.hasPrefix("assets/") && rel.hasSuffix(".png"), "asset path should be assets/<uuid>.png")
+        let url = manager.assetURL(forRelativePath: rel)
+        try expect(FileManager.default.fileExists(atPath: url.path), "asset file should be written to disk")
+        try expectEqual(try? Data(contentsOf: url), png, "asset bytes should round-trip")
+
+        // Prune keeps referenced assets, removes orphans.
+        guard let orphan = manager.saveImageAsset(Data([1, 2, 3]), fileExtension: "png") else {
+            throw SmokeTestFailure.failed("orphan asset should save")
+        }
+        let orphanURL = manager.assetURL(forRelativePath: orphan)
+        let note = Note(title: "Has image", content: "see ![](\(rel))")
+        manager.pruneOrphanAssets(referencedBy: [note])
+        try expect(FileManager.default.fileExists(atPath: url.path), "referenced asset should survive prune")
+        try expect(!FileManager.default.fileExists(atPath: orphanURL.path), "unreferenced asset should be pruned")
+    }
+
+    try withTemporaryStorage { manager, _ in
+        guard let rel = manager.saveImageAsset(Data([9, 9, 9]), fileExtension: "png") else {
+            throw SmokeTestFailure.failed("asset should save")
+        }
+        let url = manager.assetURL(forRelativePath: rel)
+        let note = Note(title: "Doomed", content: "![](\(rel))")
+        try expectSuccess(manager.saveNote(note), "note with an image should save")
+        manager.deleteNote(note)
+        try expect(!FileManager.default.fileExists(atPath: url.path), "deleting a note should remove its assets")
+    }
+}
+
+func testNotesViewModelFiltering() throws {
+    let folder = UUID()
+    let older = Date(timeIntervalSince1970: 1000)
+    let newer = Date(timeIntervalSince1970: 2000)
+    let notes = [
+        Note(title: "Grocery list", content: "milk and eggs", createdAt: older),
+        Note(title: "Work notes", content: "meeting agenda", folderId: folder, createdAt: newer),
+        Note(title: "Pinned idea", content: "build a thing", createdAt: older, isPinned: true)
+    ]
+
+    try MainActor.assumeIsolated {
+        let all = NotesViewModel.computeFilteredNotes(notes: notes, showAllNotes: true, selectedFolderId: nil, searchText: "")
+        try expectEqual(all.map(\.title), ["Pinned idea", "Work notes", "Grocery list"], "pinned first, then newest by createdAt")
+
+        let inFolder = NotesViewModel.computeFilteredNotes(notes: notes, showAllNotes: false, selectedFolderId: folder, searchText: "")
+        try expectEqual(inFolder.map(\.title), ["Work notes"], "folder filter keeps only that folder")
+
+        let byContent = NotesViewModel.computeFilteredNotes(notes: notes, showAllNotes: true, selectedFolderId: nil, searchText: "AGENDA")
+        try expectEqual(byContent.map(\.title), ["Work notes"], "search matches content case-insensitively")
+
+        let byTitle = NotesViewModel.computeFilteredNotes(notes: notes, showAllNotes: true, selectedFolderId: nil, searchText: "idea")
+        try expectEqual(byTitle.map(\.title), ["Pinned idea"], "search matches the title")
+    }
+}
+
 func testVimCommandExecution() throws {
     let engine = VimEngine()
     try expectEqual(engine.executeCommand("42"), [.goToLine(42)], ":42 should go to line 42")
@@ -449,7 +535,10 @@ let tests: [(String, () throws -> Void)] = [
     ("Vim operators, text objects, and repeats", testVimOperatorsTextObjectsAndRepeats),
     ("Vim find, search, visual, and control parsing", testVimFindSearchVisualAndControlParsing),
     ("Vim word-under-cursor extraction", testVimWordUnderCursorExtraction),
+    ("Vim additional actions (Y/J/s/S/r/zz)", testVimAdditionalActions),
     ("Image Markdown helpers", testImageMarkdownHelpers),
+    ("Storage image assets", testStorageImageAssets),
+    ("Notes view-model filtering", testNotesViewModelFiltering),
     ("Vim command execution", testVimCommandExecution),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
