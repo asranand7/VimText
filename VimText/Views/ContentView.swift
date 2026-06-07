@@ -102,10 +102,11 @@ public struct ContentView: View {
             guard !isSidebarVisible else { return }
             showSidebarAndReplay(.focusNoteSearch)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .revealNoteInSidebar)) { notification in
-            guard !isSidebarVisible else { return }
-            showSidebarAndReplay(.revealNoteInSidebar, object: notification.object)
-        }
+        // Note: opening a note from ⌘K must NOT force the sidebar open. When the
+        // sidebar is visible, NoteListView's own .revealNoteInSidebar handler
+        // scrolls to the note; when it's hidden (e.g. full-screen editor), we
+        // leave it hidden so the view stays as the user set it. Re-opening the
+        // sidebar later scrolls to the selected note via toggleSidebar.
         .background(
             WindowAccessor { window in
                 window.titlebarAppearsTransparent = true
