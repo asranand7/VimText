@@ -713,13 +713,14 @@ struct NoteEditorView: View {
     }
 
     private func extractTitle(from text: String) -> String {
-        let firstLine: Substring
-        if let firstNewlineIndex = text.firstIndex(of: "\n") {
-            firstLine = text[..<firstNewlineIndex]
-        } else {
-            firstLine = text[...]
+        // Use the first non-empty line that isn't just an embedded image, so a
+        // note starting with a pasted image still gets a sensible title.
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || ImageMarkdown.isImageOnly(line) { continue }
+            return String(line.prefix(100))
         }
-        return String(firstLine.prefix(100)).trimmingCharacters(in: .whitespaces)
+        return ""
     }
 
     private func formatDate(_ date: Date) -> String {

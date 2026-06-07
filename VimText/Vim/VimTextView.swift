@@ -203,6 +203,7 @@ struct VimTextView: NSViewRepresentable {
             textView.applyBaseFont(font)
         }
         textView.restyleCodeBlocks(baseFont: font)
+        textView.renderImageAttachments()
         context.coordinator.lastAppliedText = text
 
         let isInsert = vimEngine.mode.isEditing || startInInsertMode
@@ -231,6 +232,7 @@ struct VimTextView: NSViewRepresentable {
                 textView.textStorage?.setAttributedString(attrStr)
             }
             textView.restyleCodeBlocks(baseFont: font)
+            textView.renderImageAttachments()
             // Clamp against the NSString (UTF-16) length, not String.count
             // (grapheme count) — selectedRange.location is a UTF-16 offset,
             // so mixing the two misplaces the cursor in notes with emoji or
@@ -512,8 +514,9 @@ struct VimTextView: NSViewRepresentable {
             guard rtfStale, let textView = textView else { return }
             isUpdatingFromTextView = true
             if let textStorage = textView.textStorage, textStorage.length > 0 {
-                let range = NSRange(location: 0, length: textStorage.length)
-                if let data = try? textStorage.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
+                let flattened = ImageAttachments.flattened(textStorage)
+                let range = NSRange(location: 0, length: flattened.length)
+                if let data = try? flattened.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
                     parent.rtfData = data
                 }
             } else {
@@ -541,7 +544,9 @@ struct VimTextView: NSViewRepresentable {
             // current text to SwiftUI so onChange/save handlers see it.
             isUpdatingFromTextView = true
             hasUnsyncedEdits = false
-            var synced = textView.string
+            // Serialize image attachments back to portable `![](assets/…)`
+            // Markdown so the on-disk content stays plain text.
+            var synced = textView.textStorage.map { ImageAttachments.markdownString(from: $0) } ?? textView.string
             synced.makeContiguousUTF8()
             parent.text = synced
             lastAppliedText = synced
@@ -559,14 +564,36 @@ struct VimTextView: NSViewRepresentable {
             }
         }
 
+        /// Called after an image is resized via its drag handle: re-serialize
+        /// both content (Markdown, with the new `|width`) and RTF so the size
+        /// persists.
+        func imageDidResize() {
+            guard let textView = textView, let storage = textView.textStorage else { return }
+            isUpdatingFromTextView = true
+            var synced = ImageAttachments.markdownString(from: storage)
+            synced.makeContiguousUTF8()
+            parent.text = synced
+            lastAppliedText = synced
+            if storage.length > 0 {
+                let flattened = ImageAttachments.flattened(storage)
+                let range = NSRange(location: 0, length: flattened.length)
+                if let data = try? flattened.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
+                    parent.rtfData = data
+                }
+            }
+            rtfStale = false
+            DispatchQueue.main.async { self.isUpdatingFromTextView = false }
+        }
+
         func formattingDidChange() {
             // Formatting changes (bold/italic/underline toggle) are explicit
             // user actions — serialize RTF immediately so it persists.
             guard let textView = textView else { return }
             isUpdatingFromTextView = true
             if let textStorage = textView.textStorage, textStorage.length > 0 {
-                let range = NSRange(location: 0, length: textStorage.length)
-                if let data = try? textStorage.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
+                let flattened = ImageAttachments.flattened(textStorage)
+                let range = NSRange(location: 0, length: flattened.length)
+                if let data = try? flattened.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
                     parent.rtfData = data
                 }
             }
@@ -1187,6 +1214,20 @@ struct VimTextView: NSViewRepresentable {
                 textView.highlightAllMatches(term: term)
                 searchAndMoveCursor(term: term, forward: !parent.vimEngine.searchForwardDirection, in: textView)
                 parent.vimEngine.statusMessage = "?\(term)"
+                scheduleSearchHighlightClear(for: textView)
+
+            case .searchWordUnderCursor(let forward):
+                guard let word = wordUnderCursor(in: textView), !word.isEmpty else {
+                    parent.vimEngine.statusMessage = "No word under cursor"
+                    break
+                }
+                // Seed the search register so n / N continue this search in
+                // the same direction (n = forward after *, backward after #).
+                parent.vimEngine.searchTerm = word
+                parent.vimEngine.searchForwardDirection = forward
+                textView.highlightAllMatches(term: word)
+                searchAndMoveCursor(term: word, forward: forward, in: textView)
+                parent.vimEngine.statusMessage = (forward ? "/" : "?") + word
                 scheduleSearchHighlightClear(for: textView)
 
             case .goToLine(let line):
@@ -1828,6 +1869,14 @@ struct VimTextView: NSViewRepresentable {
             }
             searchHighlightTimer = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+        }
+
+        /// The keyword under the cursor (letters/digits/underscore), used by
+        /// `*` / `#`. If the cursor isn't on a keyword char, scans forward on
+        /// the current line to the next one (matching Vim). Returns nil if no
+        /// word is found before end-of-line.
+        private func wordUnderCursor(in textView: VimNSTextView) -> String? {
+            VimWordUnderCursor.word(in: textView.string as NSString, at: textView.selectedRange().location)
         }
 
         private func searchAndMoveCursor(term: String, forward: Bool, in textView: VimNSTextView) {
@@ -2642,6 +2691,8 @@ class VimNSTextView: NSTextView {
     private var copyButtons: [NSButton] = []
     private var blockCursorLayer: CALayer?
     var visualCursorOverride: Int? = nil
+    /// The image currently showing its Google-Docs-style selection box/handles.
+    weak var selectedImageAttachment: ImageTextAttachment?
     private var currentMatchLayer: CALayer?
     /// Upper bound on matches we find/highlight, as a safety valve against a
     /// pathological query (e.g. a single common letter in a multi-MB note).
@@ -3096,6 +3147,8 @@ class VimNSTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // Any keystroke dismisses the image selection box.
+        deselectImage()
         guard let engine = vimEngine, let coordinator = coordinator else {
             super.keyDown(with: event)
             return
@@ -3389,8 +3442,207 @@ class VimNSTextView: NSTextView {
         return true
     }
 
+    /// The eight selection handles around a selected image.
+    enum ImageHandle { case nw, n, ne, e, se, s, sw, w }
+
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+
+        // 1) Dragging a handle of the already-selected image resizes precisely.
+        if let selected = selectedImageAttachment,
+           let rect = rect(for: selected),
+           let handle = imageHandle(at: point, in: rect) {
+            resizeViaHandle(selected, imageRect: rect, handle: handle)
+            return
+        }
+
+        // 2) Clicking an image selects it (showing the box), and dragging its
+        //    body resizes it; a plain click just selects + places the caret.
+        if let (attachment, rect) = imageAttachment(at: point) {
+            selectImage(attachment)
+            resizeViaBody(attachment, imageRect: rect, startPoint: point)
+            return
+        }
+
+        // 3) Clicking elsewhere clears any image selection.
+        deselectImage()
         super.mouseDown(with: event)
+        window?.makeFirstResponder(self)
+        if let engine = vimEngine, !engine.mode.isEditing {
+            updateCursorAppearance(isBlock: true)
+        }
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        for (_, rect) in imageAttachmentRects() {
+            addCursorRect(rect, cursor: .resizeLeftRight)
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        drawImageSelectionChrome()
+    }
+
+    /// Draws the Google-Docs-style blue bounding box and eight square handles
+    /// around the selected image.
+    private func drawImageSelectionChrome() {
+        guard let attachment = selectedImageAttachment, let rect = rect(for: attachment) else { return }
+
+        let box = NSBezierPath(rect: rect.insetBy(dx: -0.5, dy: -0.5))
+        NSColor.systemBlue.setStroke()
+        box.lineWidth = 1.5
+        box.stroke()
+
+        let handleSize: CGFloat = 8
+        for (_, center) in imageHandleCenters(for: rect) {
+            let r = NSRect(x: center.x - handleSize / 2,
+                           y: center.y - handleSize / 2,
+                           width: handleSize,
+                           height: handleSize)
+            let path = NSBezierPath(rect: r)
+            NSColor.white.setFill()
+            path.fill()
+            NSColor.systemBlue.setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+    }
+
+    /// Layout rectangles (in view coordinates) of every embedded image.
+    func imageAttachmentRects() -> [(attachment: ImageTextAttachment, rect: NSRect)] {
+        guard let layoutManager = layoutManager, let textContainer = textContainer,
+              let storage = textStorage else { return [] }
+        let origin = textContainerOrigin
+        var result: [(ImageTextAttachment, NSRect)] = []
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length), options: []) { value, range, _ in
+            guard let attachment = value as? ImageTextAttachment else { return }
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            rect.origin.x += origin.x
+            rect.origin.y += origin.y
+            result.append((attachment, rect))
+        }
+        return result
+    }
+
+    private func rect(for attachment: ImageTextAttachment) -> NSRect? {
+        imageAttachmentRects().first { $0.attachment === attachment }?.rect
+    }
+
+    private func imageAttachment(at point: NSPoint) -> (ImageTextAttachment, NSRect)? {
+        for entry in imageAttachmentRects() where entry.rect.contains(point) {
+            return entry
+        }
+        return nil
+    }
+
+    /// Centre points of the eight handles for an image's `rect` (view coords).
+    func imageHandleCenters(for rect: NSRect) -> [(ImageHandle, NSPoint)] {
+        [
+            (.nw, NSPoint(x: rect.minX, y: rect.minY)),
+            (.n,  NSPoint(x: rect.midX, y: rect.minY)),
+            (.ne, NSPoint(x: rect.maxX, y: rect.minY)),
+            (.e,  NSPoint(x: rect.maxX, y: rect.midY)),
+            (.se, NSPoint(x: rect.maxX, y: rect.maxY)),
+            (.s,  NSPoint(x: rect.midX, y: rect.maxY)),
+            (.sw, NSPoint(x: rect.minX, y: rect.maxY)),
+            (.w,  NSPoint(x: rect.minX, y: rect.midY))
+        ]
+    }
+
+    private func imageHandle(at point: NSPoint, in rect: NSRect) -> ImageHandle? {
+        let tolerance: CGFloat = 10
+        for (handle, center) in imageHandleCenters(for: rect) {
+            if hypot(point.x - center.x, point.y - center.y) <= tolerance {
+                return handle
+            }
+        }
+        return nil
+    }
+
+    private func selectImage(_ attachment: ImageTextAttachment) {
+        if selectedImageAttachment !== attachment {
+            selectedImageAttachment = attachment
+            needsDisplay = true
+        }
+        placeCaretAfter(attachment)
+    }
+
+    func deselectImage() {
+        if selectedImageAttachment != nil {
+            selectedImageAttachment = nil
+            needsDisplay = true
+        }
+    }
+
+    /// Resize by dragging a selection handle: the dragged edge/corner follows
+    /// the pointer, with the opposite edge anchored (aspect locked).
+    private func resizeViaHandle(_ attachment: ImageTextAttachment, imageRect: NSRect, handle: ImageHandle) {
+        guard let window = window else { return }
+        let aspect = attachment.nativeSize.height > 0 ? attachment.nativeSize.width / attachment.nativeSize.height : 1
+        let maxWidth = availableImageWidth()
+        NSCursor.crosshair.push()
+        defer { NSCursor.pop() }
+        while true {
+            guard let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else { continue }
+            if event.type == .leftMouseUp { break }
+            let p = convert(event.locationInWindow, from: nil)
+            var width: CGFloat
+            switch handle {
+            case .ne, .e, .se:          width = p.x - imageRect.minX          // left edge anchored
+            case .nw, .w, .sw:          width = imageRect.maxX - p.x          // right edge anchored
+            case .s:                    width = (p.y - imageRect.minY) * aspect
+            case .n:                    width = (imageRect.maxY - p.y) * aspect
+            }
+            attachment.setDisplayWidth(min(max(48, width), maxWidth))
+            invalidateLayout(for: attachment)
+        }
+        coordinator?.imageDidResize()
+    }
+
+    /// Resize by dragging the image body (width tracks the drag delta). A click
+    /// without a drag leaves the image selected with the caret placed after it.
+    private func resizeViaBody(_ attachment: ImageTextAttachment, imageRect: NSRect, startPoint: NSPoint) {
+        guard let window = window else { return }
+        let startWidth = attachment.bounds.width
+        let maxWidth = availableImageWidth()
+        var didResize = false
+        while true {
+            guard let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) else { continue }
+            if event.type == .leftMouseUp { break }
+            let point = convert(event.locationInWindow, from: nil)
+            if !didResize {
+                if hypot(point.x - startPoint.x, point.y - startPoint.y) < 3 { continue }
+                didResize = true
+                NSCursor.resizeLeftRight.set()
+            }
+            attachment.setDisplayWidth(min(max(48, startWidth + (point.x - startPoint.x)), maxWidth))
+            invalidateLayout(for: attachment)
+        }
+        if didResize { coordinator?.imageDidResize() }
+    }
+
+    /// Widest an image may be drawn — the text column minus insets.
+    private func availableImageWidth() -> CGFloat {
+        let inset = textContainerInset.width * 2
+        let width = (textContainer?.size.width ?? bounds.width) - inset
+        return max(120, width)
+    }
+
+    private func placeCaretAfter(_ attachment: ImageTextAttachment) {
+        guard let storage = textStorage else { return }
+        var caret: Int?
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length), options: []) { value, range, stop in
+            if value as AnyObject === attachment {
+                caret = range.location + range.length
+                stop.pointee = true
+            }
+        }
+        if let caret {
+            setSelectedRange(NSRange(location: caret, length: 0))
+        }
         window?.makeFirstResponder(self)
         if let engine = vimEngine, !engine.mode.isEditing {
             updateCursorAppearance(isBlock: true)
@@ -3445,6 +3697,27 @@ class VimNSTextView: NSTextView {
             }
         }
 
+        // Size the cursor from the font actually at the cursor position — the
+        // view's base `font` can lag behind a font-size change and make the
+        // cursor too small. Real glyphs keep their true bounding-box height so
+        // the cursor matches the text; only empty/newline positions (whose
+        // glyph rect spans the whole line and carries paragraph spacing) get
+        // collapsed to a single cell, otherwise they'd paint a fat bar.
+        let cursorFont: NSFont = {
+            if nsString.length > 0 {
+                let idx = min(pos, nsString.length - 1)
+                if let f = textStorage?.attribute(.font, at: idx, effectiveRange: nil) as? NSFont { return f }
+            }
+            return (typingAttributes[.font] as? NSFont) ?? font ?? NSFont.systemFont(ofSize: 15)
+        }()
+        let cellWidth = max(6, (" " as NSString).size(withAttributes: [.font: cursorFont]).width)
+        let onNewline = pos < nsString.length &&
+            (nsString.character(at: pos) == 0x0A || nsString.character(at: pos) == 0x0D)
+        if onNewline || rect.width > cellWidth * 2 {
+            rect.size.width = cellWidth
+            rect.size.height = layoutManager.defaultLineHeight(for: cursorFont)
+        }
+
         let cursorColor: NSColor = isVisual
             ? accentColor.withAlphaComponent(0.75)
             : accentColor.withAlphaComponent(0.45)
@@ -3489,11 +3762,116 @@ class VimNSTextView: NSTextView {
     }
 
     override func paste(_ sender: Any?) {
+        if insertPastedImage() { return }
         super.paste(sender)
         if let font = self.font {
             applyBaseFont(font)
         }
         coordinator?.formattingDidChange()
+    }
+
+    /// If the pasteboard holds an image (raw data, an NSImage, or image file
+    /// URLs), save it to the assets folder, insert it as an inline attachment,
+    /// and return true. Returns false so normal text paste proceeds otherwise.
+    private func insertPastedImage() -> Bool {
+        let pasteboard = NSPasteboard.general
+
+        // 1) Image file(s) on the pasteboard (e.g. dragged from Finder/Photos).
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self],
+                                             options: [.urlReadingFileURLsOnly: true]) as? [URL] {
+            let imageURLs = urls.filter { Self.imageFileExtensions.contains($0.pathExtension.lowercased()) }
+            var insertedAny = false
+            for url in imageURLs {
+                if let data = try? Data(contentsOf: url),
+                   insertImage(data: data, fileExtension: url.pathExtension.lowercased()) {
+                    insertedAny = true
+                }
+            }
+            if insertedAny { return true }
+        }
+
+        // 2) Raw PNG/TIFF bytes on the pasteboard.
+        if let png = pasteboard.data(forType: .png) {
+            return insertImage(data: png, fileExtension: "png")
+        }
+        if let tiff = pasteboard.data(forType: .tiff),
+           let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            return insertImage(data: png, fileExtension: "png")
+        }
+
+        // 3) An NSImage object (some apps only offer this).
+        if let image = (pasteboard.readObjects(forClasses: [NSImage.self]) as? [NSImage])?.first,
+           let tiff = image.tiffRepresentation,
+           let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            return insertImage(data: png, fileExtension: "png")
+        }
+
+        return false
+    }
+
+    private static let imageFileExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "tif", "bmp", "webp"
+    ]
+
+    private func insertImage(data: Data, fileExtension: String) -> Bool {
+        guard let image = NSImage(data: data),
+              let relativePath = StorageManager.shared.saveImageAsset(data, fileExtension: fileExtension) else {
+            return false
+        }
+        let attachment = ImageTextAttachment(image: image,
+                                             assetRelativePath: relativePath,
+                                             displayWidth: nil)
+        let attachmentString = NSAttributedString(attachment: attachment)
+        let range = selectedRange()
+        guard shouldChangeText(in: range, replacementString: "\u{FFFC}") else { return false }
+        textStorage?.replaceCharacters(in: range, with: attachmentString)
+        didChangeText()
+        setSelectedRange(NSRange(location: range.location + 1, length: 0))
+        coordinator?.formattingDidChange()
+        return true
+    }
+
+    /// Re-lays out the line holding `attachment` after its size changes (during
+    /// a resize drag) so the surrounding text reflows immediately.
+    func invalidateLayout(for attachment: ImageTextAttachment) {
+        guard let storage = textStorage, let layoutManager = layoutManager else { return }
+        let full = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.attachment, in: full, options: []) { value, range, stop in
+            if value as AnyObject === attachment {
+                layoutManager.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
+                layoutManager.invalidateDisplay(forCharacterRange: range)
+                stop.pointee = true
+            }
+        }
+        needsDisplay = true
+        window?.invalidateCursorRects(for: self)
+    }
+
+    /// Replaces literal `![](assets/…)` Markdown references in the document
+    /// with inline image attachments loaded from disk. Runs on load (after the
+    /// text is set), analogous to `restyleCodeBlocks`. References whose asset
+    /// file is missing are left as plain text so nothing is silently lost.
+    func renderImageAttachments() {
+        guard let storage = textStorage, storage.length > 0 else { return }
+        let references = ImageMarkdown.references(in: storage.string)
+        guard !references.isEmpty else { return }
+
+        // Attachments are about to be replaced; drop any stale selection.
+        selectedImageAttachment = nil
+
+        storage.beginEditing()
+        // Replace back-to-front so earlier match ranges stay valid.
+        for reference in references.reversed() {
+            guard reference.path.hasPrefix("assets/") else { continue }
+            let url = StorageManager.shared.assetURL(forRelativePath: reference.path)
+            guard let image = NSImage(contentsOf: url) else { continue }
+            let attachment = ImageTextAttachment(image: image,
+                                                 assetRelativePath: reference.path,
+                                                 displayWidth: reference.width)
+            storage.replaceCharacters(in: reference.range, with: NSAttributedString(attachment: attachment))
+        }
+        storage.endEditing()
+        window?.invalidateCursorRects(for: self)
     }
 
     override func drawBackground(in rect: NSRect) {

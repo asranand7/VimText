@@ -43,7 +43,9 @@ public struct Note: Identifiable, Codable, Hashable {
         let head = String(content.prefix(1000))
         let lines = head.components(separatedBy: .newlines).dropFirst()
         let previewLines = lines.prefix(3).joined(separator: " ")
-        let trimmed = previewLines.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Drop embedded-image Markdown so previews read as prose, not raw refs.
+        let withoutImages = ImageMarkdown.strippingImageRefs(from: previewLines)
+        let trimmed = withoutImages.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "No additional text" : String(trimmed.prefix(120))
     }
 }

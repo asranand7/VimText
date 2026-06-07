@@ -294,6 +294,12 @@ public final class VimEngine: ObservableObject {
         case "N":
             resetBuffers()
             return [.previousMatch]
+        case "*":
+            resetBuffers()
+            return [.searchWordUnderCursor(forward: true)]
+        case "#":
+            resetBuffers()
+            return [.searchWordUnderCursor(forward: false)]
         case ">":
             keyBuffer = ">"
             return [.none]

@@ -68,10 +68,15 @@ func testNoteModelDerivedText() throws {
     try expectEqual(untitled.displayTitle, "New Note", "blank titles should display as New Note")
     try expectEqual(untitled.preview, "No additional text", "blank notes should use empty preview copy")
 
-    let multiline = Note(title: "Preview", content: "one\ntwo\nthree\nfour")
-    try expectEqual(multiline.preview, "one two three", "preview should include only the first three lines")
+    // The first content line is the title source, so preview skips it and
+    // shows the next three lines (avoids printing the title twice in rows).
+    let multiline = Note(title: "Preview", content: "one\ntwo\nthree\nfour\nfive")
+    try expectEqual(multiline.preview, "two three four", "preview should skip the title line and include the next three")
 
-    let longContent = String(repeating: "a", count: 200)
+    let titleOnly = Note(title: "Solo", content: "Just the title line")
+    try expectEqual(titleOnly.preview, "No additional text", "a single-line note has no body to preview")
+
+    let longContent = "title\n" + String(repeating: "a", count: 200)
     try expectEqual(Note(title: "Long", content: longContent).preview.count, 120, "preview should be capped")
 }
 
@@ -224,6 +229,8 @@ func testVimFindSearchVisualAndControlParsing() throws {
     _ = engine.processKey("escape")
     try expectEqual(engine.processKey("n"), [.nextMatch], "n should go to next match")
     try expectEqual(engine.processKey("N"), [.previousMatch], "N should go to previous match")
+    try expectEqual(engine.processKey("*"), [.searchWordUnderCursor(forward: true)], "* should search the word under the cursor forward")
+    try expectEqual(engine.processKey("#"), [.searchWordUnderCursor(forward: false)], "# should search the word under the cursor backward")
 
     engine = VimEngine()
     try expectEqual(engine.processKey("v"), [.visualMode], "v should enter visual mode")
@@ -249,6 +256,51 @@ func testVimFindSearchVisualAndControlParsing() throws {
     try expectEqual(engine.processKey("r", modifiers: .control), [.redo], "Ctrl-R should redo")
     try expectEqual(engine.processKey("d", modifiers: .control), Array(repeating: .moveCursor(.down), count: 15), "Ctrl-D should move half-page down")
     try expectEqual(engine.processKey("u", modifiers: .control), Array(repeating: .moveCursor(.up), count: 15), "Ctrl-U should move half-page up")
+}
+
+func testVimWordUnderCursorExtraction() throws {
+    let line = "foo bar_baz qux" as NSString
+    try expectEqual(VimWordUnderCursor.word(in: line, at: 0), "foo", "cursor on the first char should yield the word")
+    try expectEqual(VimWordUnderCursor.word(in: line, at: 2), "foo", "cursor mid-word should yield the whole word")
+    try expectEqual(VimWordUnderCursor.word(in: line, at: 4), "bar_baz", "underscore should be part of the keyword")
+    try expectEqual(VimWordUnderCursor.word(in: line, at: 7), "bar_baz", "cursor on the underscore should yield the whole keyword")
+    try expectEqual(VimWordUnderCursor.word(in: line, at: 3), "bar_baz", "cursor on a space should scan forward to the next word")
+    try expectEqual(VimWordUnderCursor.word(in: line, at: 12), "qux", "cursor on the last word should yield it")
+
+    let trailing = "hi   \nnext" as NSString
+    try expectEqual(VimWordUnderCursor.word(in: trailing, at: 3), nil, "spaces before end-of-line should yield no word")
+
+    try expectEqual(VimWordUnderCursor.word(in: "" as NSString, at: 0), nil, "empty text should yield no word")
+    try expectEqual(VimWordUnderCursor.word(in: "x" as NSString, at: 9), "x", "out-of-range location should clamp into the text")
+}
+
+func testImageMarkdownHelpers() throws {
+    // Reference round-trip with and without an explicit width.
+    try expectEqual(ImageMarkdown.reference(for: "assets/a.png", width: 320), "![|320](assets/a.png)", "reference should embed width")
+    try expectEqual(ImageMarkdown.reference(for: "assets/a.png", width: nil), "![](assets/a.png)", "no width should produce a plain reference")
+
+    // Width parsing from the alt slot.
+    try expect(ImageMarkdown.width(fromAlt: "|320") == 320, "should parse |width")
+    try expect(ImageMarkdown.width(fromAlt: "alt|240") == 240, "should parse a trailing width")
+    try expect(ImageMarkdown.width(fromAlt: "") == nil, "empty alt has no width")
+    try expect(ImageMarkdown.width(fromAlt: "nobar") == nil, "alt without a bar has no width")
+
+    // Reference extraction + width.
+    let content = "intro\n![|200](assets/x.png)\n![](https://ext/y.png)\nend"
+    let refs = ImageMarkdown.references(in: content)
+    try expectEqual(refs.count, 2, "should find two references")
+    try expectEqual(refs[0].path, "assets/x.png", "first reference path")
+    try expect(refs[0].width == 200, "first reference width should parse")
+    try expect(refs[1].width == nil, "external reference has no width")
+    try expectEqual(ImageMarkdown.localAssetPaths(in: content), ["assets/x.png"], "only local assets are owned")
+
+    // Image-only line detection (used by title extraction).
+    try expect(ImageMarkdown.isImageOnly("![|200](assets/x.png)"), "a bare image line is image-only")
+    try expect(!ImageMarkdown.isImageOnly("see ![](assets/x.png)"), "text plus image is not image-only")
+    try expect(!ImageMarkdown.isImageOnly("hello"), "plain text is not image-only")
+
+    // Stripping for previews.
+    try expectEqual(ImageMarkdown.strippingImageRefs(from: "a ![](assets/x.png) b"), "a  b", "image refs should be stripped from previews")
 }
 
 func testVimCommandExecution() throws {
@@ -396,6 +448,8 @@ let tests: [(String, () throws -> Void)] = [
     ("Vim insert, replace, and command modes", testVimInsertReplaceAndCommandModes),
     ("Vim operators, text objects, and repeats", testVimOperatorsTextObjectsAndRepeats),
     ("Vim find, search, visual, and control parsing", testVimFindSearchVisualAndControlParsing),
+    ("Vim word-under-cursor extraction", testVimWordUnderCursorExtraction),
+    ("Image Markdown helpers", testImageMarkdownHelpers),
     ("Vim command execution", testVimCommandExecution),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),

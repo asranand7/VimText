@@ -67,6 +67,13 @@ public final class StorageManager {
         baseURL.appendingPathComponent("folders.json")
     }
 
+    /// Folder holding embedded note images, alongside the notes so the
+    /// `assets/<file>` references in note content resolve relative to them and
+    /// stay valid across note renames.
+    private var assetsURL: URL {
+        notesURL.appendingPathComponent("assets", isDirectory: true)
+    }
+
     private var appSupportRoot: URL {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return appSupport.appendingPathComponent("VimText", isDirectory: true)
@@ -266,6 +273,58 @@ public final class StorageManager {
         return snapshot.notes
     }
 
+    // MARK: - Image assets
+
+    /// Resolves a relative `assets/<file>` reference to an absolute URL.
+    public func assetURL(forRelativePath relativePath: String) -> URL {
+        notesURL.appendingPathComponent(relativePath)
+    }
+
+    /// Writes image `data` into the assets folder under a fresh UUID name and
+    /// returns the relative path (`assets/<uuid>.<ext>`) to embed in a note,
+    /// or nil on failure.
+    @discardableResult
+    public func saveImageAsset(_ data: Data, fileExtension: String) -> String? {
+        let ext = fileExtension.isEmpty ? "png" : fileExtension.lowercased()
+        do {
+            try fileManager.createDirectory(at: assetsURL, withIntermediateDirectories: true)
+        } catch {
+            return nil
+        }
+        let name = "\(UUID().uuidString).\(ext)"
+        let url = assetsURL.appendingPathComponent(name)
+        do {
+            try data.write(to: url, options: .atomic)
+        } catch {
+            return nil
+        }
+        return "assets/\(name)"
+    }
+
+    /// Removes any local image assets referenced by `content`. Called when a
+    /// note is deleted so its images don't linger. Each pasted image gets a
+    /// unique filename, so assets aren't shared between notes.
+    private func removeAssets(referencedIn content: String) {
+        for relativePath in ImageMarkdown.localAssetPaths(in: content) {
+            try? fileManager.removeItem(at: assetURL(forRelativePath: relativePath))
+        }
+    }
+
+    /// Deletes asset files no longer referenced by any note. Run at launch
+    /// (when content is settled) rather than on every edit, so undoing an image
+    /// deletion within a session never races a file removal.
+    public func pruneOrphanAssets(referencedBy notes: [Note]) {
+        guard fileManager.fileExists(atPath: assetsURL.path) else { return }
+        let referenced = Set(
+            notes.flatMap { ImageMarkdown.localAssetPaths(in: $0.content) }
+                .map { ($0 as NSString).lastPathComponent }
+        )
+        guard let files = try? fileManager.contentsOfDirectory(at: assetsURL, includingPropertiesForKeys: nil) else { return }
+        for file in files where !referenced.contains(file.lastPathComponent) {
+            try? fileManager.removeItem(at: file)
+        }
+    }
+
     public func fileURL(for note: Note) -> URL {
         lock.lock()
         defer { lock.unlock() }
@@ -320,7 +379,16 @@ public final class StorageManager {
 
         if let rtf = note.rtfData, !rtf.isEmpty {
             let existingSize = (try? fileManager.attributesOfItem(atPath: rtfURL.path))?[.size] as? NSNumber
+            // A matching byte count does NOT guarantee identical content — e.g.
+            // an image width changing 560→200 keeps the same length but is a
+            // real change. Only then (rare) read the file to compare bytes.
+            let needsWrite: Bool
             if existingSize?.intValue != rtf.count {
+                needsWrite = true
+            } else {
+                needsWrite = (try? Data(contentsOf: rtfURL)) != rtf
+            }
+            if needsWrite {
                 do {
                     try rtf.write(to: rtfURL, options: .atomic)
                 } catch {
@@ -370,6 +438,7 @@ public final class StorageManager {
         try? fileManager.removeItem(at: url)
         try? fileManager.removeItem(at: txtURL)
         try? fileManager.removeItem(at: rtfURL)
+        removeAssets(referencedIn: note.content)
     }
 
     func loadFolders() -> [NoteFolder] {

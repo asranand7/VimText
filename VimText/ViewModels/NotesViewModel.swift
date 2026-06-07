@@ -134,6 +134,10 @@ final class NotesViewModel: ObservableObject {
         notes = snapshot.notes
         folders = loadedFolders
         storage.makeLaunchBackup()
+        let loadedNotes = snapshot.notes
+        Task.detached(priority: .utility) {
+            StorageManager.shared.pruneOrphanAssets(referencedBy: loadedNotes)
+        }
         if notes.isEmpty {
             createWelcomeNote()
         } else if selectedNoteId == nil || !notes.contains(where: { $0.id == selectedNoteId }) {

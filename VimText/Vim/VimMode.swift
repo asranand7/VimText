@@ -63,6 +63,8 @@ public enum VimAction: Equatable {
     case searchExecute(String, Bool)
     case nextMatch
     case previousMatch
+    /// `*` / `#` — search for the word under the cursor (forward / backward).
+    case searchWordUnderCursor(forward: Bool)
 
     case goToLine(Int)
     case save
@@ -179,4 +181,43 @@ public enum InsertEntry: Equatable {
     case lineEnd
     case newLineBelow
     case newLineAbove
+}
+
+/// Pure word-under-cursor extraction for `*` / `#`. Kept free of AppKit so it
+/// can be unit-tested independently of the text view.
+public enum VimWordUnderCursor {
+    private static func isWordChar(_ u: unichar) -> Bool {
+        if u == 0x5F { return true } // underscore
+        guard let scalar = Unicode.Scalar(u) else { return false }
+        return CharacterSet.alphanumerics.contains(scalar)
+    }
+
+    /// The keyword (letters/digits/underscore) covering `location`. If
+    /// `location` isn't on a keyword char, scans forward on the current line to
+    /// the next one (matching Vim). Returns nil if no word exists before the
+    /// end of the line.
+    public static func word(in string: NSString, at location: Int) -> String? {
+        let length = string.length
+        guard length > 0 else { return nil }
+
+        var pos = min(max(location, 0), length - 1)
+
+        if !isWordChar(string.character(at: pos)) {
+            var scan = pos
+            while scan < length {
+                let c = string.character(at: scan)
+                if c == 0x0A { return nil } // stop at end of current line
+                if isWordChar(c) { break }
+                scan += 1
+            }
+            guard scan < length, isWordChar(string.character(at: scan)) else { return nil }
+            pos = scan
+        }
+
+        var start = pos
+        while start > 0 && isWordChar(string.character(at: start - 1)) { start -= 1 }
+        var end = pos
+        while end < length && isWordChar(string.character(at: end)) { end += 1 }
+        return string.substring(with: NSRange(location: start, length: end - start))
+    }
 }
