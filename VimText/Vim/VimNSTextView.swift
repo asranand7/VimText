@@ -193,6 +193,9 @@ class VimNSTextView: NSTextView {
         let fullRange = NSRange(location: 0, length: textStorage.length)
         guard fullRange.length > 0 else { return }
         let fontManager = NSFontManager.shared
+        // Cosmetic-only: don't pollute the undo stack with font attribute
+        // changes — stale undo entries referencing deallocated fonts crash.
+        undoManager?.disableUndoRegistration()
         textStorage.beginEditing()
         textStorage.addAttribute(.paragraphStyle, value: VimTextView.paragraphStyle(), range: fullRange)
         textStorage.enumerateAttribute(.font, in: fullRange, options: []) { value, range, _ in
@@ -207,15 +210,19 @@ class VimNSTextView: NSTextView {
             textStorage.addAttribute(.font, value: newFont, range: range)
         }
         textStorage.endEditing()
+        undoManager?.enableUndoRegistration()
     }
 
     func applyTextColor(_ color: NSColor) {
         guard let textStorage = textStorage else { return }
         let fullRange = NSRange(location: 0, length: textStorage.length)
         guard fullRange.length > 0 else { return }
+        // Cosmetic-only: don't register theme color changes on the undo stack.
+        undoManager?.disableUndoRegistration()
         textStorage.beginEditing()
         textStorage.addAttribute(.foregroundColor, value: color, range: fullRange)
         textStorage.endEditing()
+        undoManager?.enableUndoRegistration()
     }
 
     /// Find ```-fenced regions in the plain text. Each returned range covers the
@@ -282,6 +289,8 @@ class VimNSTextView: NSTextView {
         let baseParagraph = VimTextView.paragraphStyle()
         let blockGap: CGFloat = 12
 
+        // Cosmetic-only: don't register code-block restyling on the undo stack.
+        undoManager?.disableUndoRegistration()
         textStorage.beginEditing()
         textStorage.removeAttribute(.codeBlock, range: fullRange)
         // Reset paragraph style + font everywhere; blocks override below.
@@ -319,6 +328,7 @@ class VimNSTextView: NSTextView {
             }
         }
         textStorage.endEditing()
+        undoManager?.enableUndoRegistration()
         needsDisplay = true
         updateCopyButtons()
     }
