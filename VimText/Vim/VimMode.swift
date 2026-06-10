@@ -73,6 +73,10 @@ public enum VimAction: Equatable {
     case visualDelete
     case visualYank
     case visualChange
+    /// `p` / `P` in visual mode — replace the selection with the paste
+    /// content. `linewise` is true when the selection was made in V-LINE mode
+    /// (it then includes the trailing newline, and the paste stays linewise).
+    case visualPaste(linewise: Bool)
     case visualIndent
     case visualOutdent
     case visualBlockMode
@@ -86,6 +90,18 @@ public enum VimAction: Equatable {
     case visualSwapAnchor
 
     case toggleCase
+    /// `gu{motion}` / `gU{motion}` — lower/uppercase over a motion.
+    case changeCaseMotion(Motion, Int, upper: Bool)
+    /// `guu` / `gUU` — lower/uppercase whole lines.
+    case changeCaseLines(Int, upper: Bool)
+    /// `u` / `U` in visual mode — lower/uppercase the selection.
+    case visualChangeCase(upper: Bool)
+    /// `m{a-zA-Z}` — set a mark at the cursor.
+    case setMark(Character)
+    /// `` `{mark} `` (exact position) or `'{mark}` (first non-blank of the line).
+    case jumpToMark(Character, exact: Bool)
+    /// `:noh` — clear search highlighting.
+    case clearSearchHighlight
     case repeatLastChange
     case none
     
@@ -156,7 +172,10 @@ public enum Motion: Equatable {
 
     var isInclusive: Bool {
         switch self {
-        case .findChar, .tillChar, .wordEnd, .matchingBracket:
+        // `$` is inclusive in Vim: operators act through the last character
+        // of the line (gU$, y$, …). d$/c$ are special-cased in the engine but
+        // every other operator + $ relies on this.
+        case .findChar, .tillChar, .wordEnd, .matchingBracket, .lineEnd:
             return true
         default:
             return false

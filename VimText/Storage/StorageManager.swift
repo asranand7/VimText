@@ -301,11 +301,14 @@ public final class StorageManager {
         return "assets/\(name)"
     }
 
-    /// Removes any local image assets referenced by `content`. Called when a
-    /// note is deleted so its images don't linger. Each pasted image gets a
-    /// unique filename, so assets aren't shared between notes.
-    private func removeAssets(referencedIn content: String) {
+    /// Removes any local image assets referenced by `content`, except those in
+    /// `keeping`. Called when a note is deleted so its images don't linger.
+    /// Duplicated notes share asset files (duplication copies the content's
+    /// `assets/…` references verbatim), so the caller must pass the filenames
+    /// still referenced by the surviving notes.
+    private func removeAssets(referencedIn content: String, keeping: Set<String>) {
         for relativePath in ImageMarkdown.localAssetPaths(in: content) {
+            guard !keeping.contains((relativePath as NSString).lastPathComponent) else { continue }
             try? fileManager.removeItem(at: assetURL(forRelativePath: relativePath))
         }
     }
@@ -429,7 +432,10 @@ public final class StorageManager {
         return .success(())
     }
 
-    func deleteNote(_ note: Note) {
+    /// Deletes a note's files. `remainingNotes` are the notes that survive the
+    /// deletion; any asset they still reference is preserved (e.g. a duplicate
+    /// of the deleted note shares its image files).
+    func deleteNote(_ note: Note, remainingNotes: [Note]) {
         lock.lock()
         let url = urlsByID[note.id] ?? notesURL.appendingPathComponent("\(desiredBaseName(for: note)).json")
         urlsByID[note.id] = nil
@@ -438,7 +444,12 @@ public final class StorageManager {
         try? fileManager.removeItem(at: url)
         try? fileManager.removeItem(at: txtURL)
         try? fileManager.removeItem(at: rtfURL)
-        removeAssets(referencedIn: note.content)
+        let stillReferenced = Set(
+            remainingNotes
+                .flatMap { ImageMarkdown.localAssetPaths(in: $0.content) }
+                .map { ($0 as NSString).lastPathComponent }
+        )
+        removeAssets(referencedIn: note.content, keeping: stillReferenced)
     }
 
     func loadFolders() -> [NoteFolder] {

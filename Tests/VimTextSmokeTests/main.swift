@@ -330,6 +330,45 @@ func testVimAdditionalActions() throws {
     try expectEqual(feed(engine, "z", "b"), [.centerCursor(.bottom)], "zb should move the cursor line to the bottom")
 }
 
+func testVimVisualCountsPasteAndCaseOps() throws {
+    var engine = VimEngine()
+    _ = engine.processKey("v")
+    try expectEqual(feed(engine, "3", "j"), Array(repeating: .moveCursor(.down), count: 3), "visual 3j should repeat the motion")
+    try expectEqual(feed(engine, "2", "w"), Array(repeating: .moveCursor(.wordForward), count: 2), "visual 2w should repeat the motion")
+    try expectEqual(feed(engine, "5", "G"), [.goToLine(5)], "visual 5G should go to line 5")
+    try expectEqual(engine.processKey("p"), [.visualPaste(linewise: false)], "visual p should paste over the selection")
+    try expectEqual(engine.mode, .normal, "visual p should return to normal mode")
+
+    engine = VimEngine()
+    _ = engine.processKey("V")
+    try expectEqual(engine.processKey("p"), [.visualPaste(linewise: true)], "V-line p should paste linewise")
+
+    engine = VimEngine()
+    _ = engine.processKey("v")
+    try expectEqual(engine.processKey("U"), [.visualChangeCase(upper: true)], "visual U should uppercase the selection")
+    try expectEqual(engine.mode, .normal, "visual U should return to normal mode")
+    _ = engine.processKey("v")
+    try expectEqual(engine.processKey("u"), [.visualChangeCase(upper: false)], "visual u should lowercase the selection")
+
+    engine = VimEngine()
+    try expectEqual(feed(engine, "g", "U", "w"), [.changeCaseMotion(.wordForward, 1, upper: true)], "gUw should uppercase a word")
+    try expectEqual(feed(engine, "g", "u", "$"), [.changeCaseMotion(.lineEnd, 1, upper: false)], "gu$ should lowercase to line end")
+    try expectEqual(feed(engine, "g", "u", "u"), [.changeCaseLines(1, upper: false)], "guu should lowercase the line")
+    try expectEqual(feed(engine, "3", "g", "U", "U"), [.changeCaseLines(3, upper: true)], "3gUU should uppercase three lines")
+
+    try expect(Motion.lineEnd.isInclusive, "$ must be inclusive so gU$ / y$ reach the last character of the line")
+}
+
+func testVimMarksAndNoh() throws {
+    let engine = VimEngine()
+    try expectEqual(feed(engine, "m", "a"), [.setMark("a")], "ma should set mark a")
+    try expectEqual(feed(engine, "`", "a"), [.jumpToMark("a", exact: true)], "`a should jump to the exact mark position")
+    try expectEqual(feed(engine, "'", "a"), [.jumpToMark("a", exact: false)], "'a should jump to the mark's line")
+    try expectEqual(feed(engine, "m", "1"), [.none], "marks only accept letters")
+    try expectEqual(engine.executeCommand("noh"), [.clearSearchHighlight], ":noh should clear search highlights")
+    try expectEqual(engine.executeCommand("nohlsearch"), [.clearSearchHighlight], ":nohlsearch should clear search highlights")
+}
+
 func testStorageImageAssets() throws {
     try withTemporaryStorage { manager, _ in
         let png = Data([0x89, 0x50, 0x4E, 0x47])
@@ -359,8 +398,27 @@ func testStorageImageAssets() throws {
         let url = manager.assetURL(forRelativePath: rel)
         let note = Note(title: "Doomed", content: "![](\(rel))")
         try expectSuccess(manager.saveNote(note), "note with an image should save")
-        manager.deleteNote(note)
+        manager.deleteNote(note, remainingNotes: [])
         try expect(!FileManager.default.fileExists(atPath: url.path), "deleting a note should remove its assets")
+    }
+
+    // A duplicated note shares the original's asset files; deleting one copy
+    // must not delete assets the surviving copy still references.
+    try withTemporaryStorage { manager, _ in
+        guard let rel = manager.saveImageAsset(Data([7, 7, 7]), fileExtension: "png") else {
+            throw SmokeTestFailure.failed("asset should save")
+        }
+        let url = manager.assetURL(forRelativePath: rel)
+        let original = Note(title: "Original", content: "![](\(rel))")
+        let duplicate = Note(title: "Original", content: original.content)
+        try expectSuccess(manager.saveNote(original), "original should save")
+        try expectSuccess(manager.saveNote(duplicate), "duplicate should save")
+
+        manager.deleteNote(original, remainingNotes: [duplicate])
+        try expect(FileManager.default.fileExists(atPath: url.path), "assets referenced by a surviving duplicate should be kept")
+
+        manager.deleteNote(duplicate, remainingNotes: [])
+        try expect(!FileManager.default.fileExists(atPath: url.path), "deleting the last referencing note should remove the asset")
     }
 }
 
@@ -536,6 +594,8 @@ let tests: [(String, () throws -> Void)] = [
     ("Vim find, search, visual, and control parsing", testVimFindSearchVisualAndControlParsing),
     ("Vim word-under-cursor extraction", testVimWordUnderCursorExtraction),
     ("Vim additional actions (Y/J/s/S/r/zz)", testVimAdditionalActions),
+    ("Vim visual counts, paste, and case operators", testVimVisualCountsPasteAndCaseOps),
+    ("Vim marks and :noh", testVimMarksAndNoh),
     ("Image Markdown helpers", testImageMarkdownHelpers),
     ("Storage image assets", testStorageImageAssets),
     ("Notes view-model filtering", testNotesViewModelFiltering),

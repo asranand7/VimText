@@ -46,8 +46,8 @@ It was one 4000-line file; it is now split by responsibility:
 | --- | --- | --- |
 | `VimMode.swift` | `VimMode`, `VimAction`, `Motion`, `TextObject` enums + `VimWordUnderCursor` | The vocabulary of the engine (pure, testable). |
 | `VimEngine.swift` | `VimEngine` | **Key → action state machine.** `processKey` parses normal/visual/operator-pending input into `[VimAction]`. No view knowledge. This is where you add a new keybinding's *parsing*. |
-| `VimTextView.swift` | `VimTextView` (struct) | The `NSViewRepresentable`: builds the `NSScrollView`/text view in `makeNSView`, pushes binding/theme/font changes in `updateNSView`. |
-| `VimTextView+Coordinator.swift` | `VimTextView.Coordinator` | The `NSTextViewDelegate` bridge: **resolves motions against live text** (`resolveMotion`), **executes `VimAction`s** (the big `executeActions` switch), debounced text/RTF sync, find. This is where you *resolve* a new motion/action. |
+| `VimTextView.swift` | `VimTextView` (struct) | The `NSViewRepresentable`: builds the `NSScrollView`/text view and loads the note's content **once** in `makeNSView`; `updateNSView` only syncs presentation (font/theme/paper/rulers). Edits flow out through `onContentChange`. |
+| `VimTextView+Coordinator.swift` | `VimTextView.Coordinator` | The `NSTextViewDelegate` bridge: **resolves motions against live text** (`resolveMotion`), **executes `VimAction`s** (the big `executeActions` switch), debounced serialization reported via `onContentChange`, find, marks. This is where you *resolve* a new motion/action. |
 | `VimNSTextView.swift` | `VimNSTextView` (NSTextView subclass) | Low-level view behavior: `keyDown` routing, block-cursor drawing, paste (incl. images), image selection/resize, rich-text formatting, code-block restyle, paper styles. |
 | `FindController.swift` | `FindController` | In-note find bar state + the local key monitor (Enter/Shift-Enter/⌘G; ⌘K navigation mode). |
 | `ImageAttachment.swift` | `ImageTextAttachment`, `ImageAttachments` | Inline image attachment + attributed-string ↔ Markdown conversion. |
@@ -88,12 +88,17 @@ debounces the expensive per-keystroke work (full-string sync, RTF
 serialization, code-block restyle) and flushes via the `commitEditorPendingWork`
 notification.
 
-## Performance reality (large notes)
+## Editor data flow (NSTextStorage is the source of truth)
 
-The full document round-trips through SwiftUI `@State` per keystroke; the heavy
-work is debounced as a band-aid. The real fix (make `NSTextStorage` the single
-source of truth) is a known, deliberate follow-up — not done. `.id(noteId)`
-recreates the editor per note on purpose (isolates undo stack + Vim mode).
+`NSTextStorage` owns the note content. `VimTextView` takes `initialText` /
+`initialRTFData` and loads them once in `makeNSView`; SwiftUI never pushes
+content back into the view. Edits are serialized (Markdown text + RTF) when
+typing pauses (~0.5s) or on flush (`commitEditorPendingWork`), and reported
+upward via the `onContentChange` callback, which feeds `NoteEditorView`'s save
+pipeline. There is no per-keystroke full-document copy and no
+`updateNSView` content diffing. `.id(noteId)` recreates the editor per note on
+purpose (isolates undo stack, Vim mode, and marks) — which is what makes the
+initial-content-only model safe.
 
 ## Cross-cutting gotchas
 

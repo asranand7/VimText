@@ -12,8 +12,7 @@ let package = Package(
             path: "VimText",
             exclude: [
                 "Info.plist",
-                "VimText.entitlements",
-                "VimTextApp.swift"
+                "VimText.entitlements"
             ],
             resources: [
                 .process("Assets.xcassets")

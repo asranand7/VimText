@@ -9,15 +9,14 @@ extension VimTextView {
         var parent: VimTextView
         weak var textView: VimNSTextView?
         weak var scrollView: NSScrollView?
-        var isUpdatingFromTextView = false
-        /// True when the user has typed into the NSTextView but we haven't
-        /// yet synced that text back to the SwiftUI binding. While true,
-        /// updateNSView must NOT replace the textView's content — the
-        /// textView is the source of truth, not the (stale) SwiftUI state.
+        /// True when the user has typed into the NSTextView but the change
+        /// hasn't been serialized + reported via onContentChange yet.
         var hasUnsyncedEdits = false
-        /// Ensures a ⌘K-opened search runs exactly once, the moment the note's
-        /// text finishes loading into the view (not on a guessed timer).
-        var didInitialFindOnLoad = false
+        /// Latest serialized content (Markdown text / RTF). Seeded from the
+        /// initial values in makeNSView, updated by the deferred sync work,
+        /// and reported together through onContentChange.
+        var latestText: String = ""
+        var latestRTF: Data = Data()
         var visualAnchor: Int = 0
         var visualCursorPos: Int = 0
         private var yankHighlightLayer: CALayer?
@@ -34,6 +33,10 @@ extension VimTextView {
 
         var insertModeStartContent: String = ""
         var insertModeStartPos: Int = 0
+        /// Vim marks (`m{a-zA-Z}`) as UTF-16 offsets. Per-note: the editor is
+        /// recreated per note via `.id(noteId)`. Positions are not adjusted as
+        /// the text changes; jumps clamp into the current document.
+        var marks: [Character: Int] = [:]
         var isReplayingDot: Bool = false
         var lastFontSize: CGFloat = 0
         var lastFontName: String = ""
@@ -182,20 +185,19 @@ extension VimTextView {
 
         func textDidChange(_ notification: Notification) {
             guard notification.object is NSTextView else { return }
-            // DO NOT update parent.text here. For a 2.9 MB file, copying the
-            // entire NSString into a Swift String binding on every keystroke
-            // costs ~5-10ms AND triggers a full SwiftUI body re-evaluation
-            // (recreating VimTextView, calling updateNSView, diffing state).
-            // The NSTextView is the authoritative source of truth while typing.
-            // We sync the binding when typing pauses (500ms debounce) or on
-            // teardown.
+            // Don't serialize here. For a 2.9 MB note, copying the entire
+            // NSString into a Swift String on every keystroke costs ~5-10ms.
+            // The NSTextView is the authoritative source of truth; content is
+            // serialized and reported when typing pauses (500ms debounce) or
+            // on teardown/flush.
             hasUnsyncedEdits = true
             rtfStale = true
-            isUpdatingFromTextView = true
-            DispatchQueue.main.async {
-                self.isUpdatingFromTextView = false
-            }
             scheduleDeferredWork()
+        }
+
+        /// Reports the latest serialized content to the SwiftUI layer.
+        private func notifyContentChange() {
+            parent.onContentChange?(latestText, latestRTF)
         }
 
         /// Immediately executes all deferred work (text sync, RTF export,
@@ -213,20 +215,17 @@ extension VimTextView {
 
         private func serializeRTFIfStale() {
             guard rtfStale, let textView = textView else { return }
-            isUpdatingFromTextView = true
             if let textStorage = textView.textStorage, textStorage.length > 0 {
                 let flattened = ImageAttachments.flattened(textStorage)
                 let range = NSRange(location: 0, length: flattened.length)
                 if let data = try? flattened.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
-                    parent.rtfData = data
+                    latestRTF = data
                 }
             } else {
-                parent.rtfData = Data()
+                latestRTF = Data()
             }
             rtfStale = false
-            DispatchQueue.main.async {
-                self.isUpdatingFromTextView = false
-            }
+            notifyContentChange()
         }
 
         private func scheduleDeferredWork() {
@@ -241,22 +240,17 @@ extension VimTextView {
         private func executeDeferredWork() {
             guard let textView = textView, hasUnsyncedEdits else { return }
 
-            // Sync text binding — now that typing has paused, push the
-            // current text to SwiftUI so onChange/save handlers see it.
-            isUpdatingFromTextView = true
+            // Typing has paused — serialize the current content and report it
+            // so the save pipeline sees it. Image attachments serialize back
+            // to portable `![](assets/…)` Markdown so the on-disk content
+            // stays plain text.
             hasUnsyncedEdits = false
-            // Serialize image attachments back to portable `![](assets/…)`
-            // Markdown so the on-disk content stays plain text.
             var synced = textView.textStorage.map { ImageAttachments.markdownString(from: $0) } ?? textView.string
             synced.makeContiguousUTF8()
-            parent.text = synced
-            lastAppliedText = synced
+            latestText = synced
+            notifyContentChange()
 
             textView.restyleCodeBlocks(baseFont: parent.font)
-
-            DispatchQueue.main.async {
-                self.isUpdatingFromTextView = false
-            }
 
             // Re-scan find matches if the find bar is open
             if parent.findController?.isVisible == true,
@@ -270,38 +264,33 @@ extension VimTextView {
         /// persists.
         func imageDidResize() {
             guard let textView = textView, let storage = textView.textStorage else { return }
-            isUpdatingFromTextView = true
             var synced = ImageAttachments.markdownString(from: storage)
             synced.makeContiguousUTF8()
-            parent.text = synced
-            lastAppliedText = synced
+            latestText = synced
             if storage.length > 0 {
                 let flattened = ImageAttachments.flattened(storage)
                 let range = NSRange(location: 0, length: flattened.length)
                 if let data = try? flattened.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
-                    parent.rtfData = data
+                    latestRTF = data
                 }
             }
             rtfStale = false
-            DispatchQueue.main.async { self.isUpdatingFromTextView = false }
+            notifyContentChange()
         }
 
         func formattingDidChange() {
             // Formatting changes (bold/italic/underline toggle) are explicit
             // user actions — serialize RTF immediately so it persists.
             guard let textView = textView else { return }
-            isUpdatingFromTextView = true
             if let textStorage = textView.textStorage, textStorage.length > 0 {
                 let flattened = ImageAttachments.flattened(textStorage)
                 let range = NSRange(location: 0, length: flattened.length)
                 if let data = try? flattened.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
-                    parent.rtfData = data
+                    latestRTF = data
                 }
             }
             rtfStale = false
-            DispatchQueue.main.async {
-                self.isUpdatingFromTextView = false
-            }
+            notifyContentChange()
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -365,6 +354,7 @@ extension VimTextView {
                     case .insertMode, .deleteMotion, .deleteLine, .deleteLines, .deleteToEnd, .deleteChar,
                          .deleteCharBefore, .changeMotion, .changeLine, .changeLines, .changeToEnd,
                          .deleteTextObject, .changeTextObject, .toggleCase, .joinLines,
+                         .changeCaseMotion, .changeCaseLines,
                          .pasteAfter, .pasteBefore, .indent, .outdent, .indentLines, .outdentLines, .replaceChar:
                         return true
                     default:
@@ -389,8 +379,34 @@ extension VimTextView {
                 }
             }
 
+            // Group every mutating command into one undo step, so e.g. `3x`,
+            // a block-mode delete loop, or a `.` replay undoes atomically
+            // instead of one NSTextView edit at a time. Never wrap undo/redo
+            // themselves — running undo inside an open group corrupts the
+            // stack.
+            let touchesUndoStack = actions.contains { $0 == .undo || $0 == .redo }
+            let shouldGroup = !touchesUndoStack && actions.contains(where: Self.isTextMutating)
+            if shouldGroup { textView.undoManager?.beginUndoGrouping() }
             for action in actions {
                 executeAction(action, in: textView)
+            }
+            if shouldGroup { textView.undoManager?.endUndoGrouping() }
+        }
+
+        /// Actions that can mutate the text storage (used to decide undo
+        /// grouping). Motions, mode bookkeeping, search, and scrolling are out.
+        private static func isTextMutating(_ action: VimAction) -> Bool {
+            switch action {
+            case .insertMode, .deleteMotion, .deleteLine, .deleteLines, .deleteToEnd, .deleteChar,
+                 .deleteCharBefore, .changeMotion, .changeLine, .changeLines, .changeToEnd,
+                 .deleteTextObject, .changeTextObject, .toggleCase, .joinLines,
+                 .changeCaseMotion, .changeCaseLines, .visualChangeCase,
+                 .pasteAfter, .pasteBefore, .indent, .outdent, .indentLines, .outdentLines,
+                 .visualDelete, .visualChange, .visualPaste, .visualIndent, .visualOutdent,
+                 .repeatLastChange, .substitute:
+                return true
+            default:
+                return false
             }
         }
 
@@ -489,6 +505,9 @@ extension VimTextView {
                 textView.scrollRangeToVisible(NSRange(location: newPos, length: 0))
 
             case .insertMode(let entry):
+                // Each insert session is its own undo unit: typed text must
+                // not coalesce with text typed in a previous session.
+                textView.breakUndoCoalescing()
                 handleInsertEntry(entry, in: textView)
                 textView.updateCursorAppearance(isBlock: false)
                 textView.clearSearchHighlights()
@@ -498,6 +517,7 @@ extension VimTextView {
                 }
 
             case .normalMode:
+                textView.breakUndoCoalescing()
                 textView.visualCursorOverride = nil
                 clearBlockHighlights(in: textView)
 
@@ -690,7 +710,10 @@ extension VimTextView {
                 } else {
                     let start = min(cursorPos, target)
                     var end = max(cursorPos, target)
-                    if motion.isInclusive && end < length { end += 1 }
+                    // Inclusive motions take the character under the target —
+                    // but never a newline (e.g. $ on an empty line resolves to
+                    // the line start, which holds the \n).
+                    if motion.isInclusive && end < length && nsString.character(at: end) != 0x0A { end += 1 }
                     if start < end {
                         let range = NSRange(location: start, length: end - start)
                         parent.vimEngine.register = nsString.substring(with: range)
@@ -761,7 +784,10 @@ extension VimTextView {
                 } else {
                     let start = min(cursorPos, target)
                     var end = max(cursorPos, target)
-                    if motion.isInclusive && end < length { end += 1 }
+                    // Inclusive motions take the character under the target —
+                    // but never a newline (e.g. $ on an empty line resolves to
+                    // the line start, which holds the \n).
+                    if motion.isInclusive && end < length && nsString.character(at: end) != 0x0A { end += 1 }
                     if start < end {
                         let range = NSRange(location: start, length: end - start)
                         parent.vimEngine.register = nsString.substring(with: range)
@@ -803,7 +829,10 @@ extension VimTextView {
                 } else {
                     let start = min(cursorPos, target)
                     var end = max(cursorPos, target)
-                    if motion.isInclusive && end < length { end += 1 }
+                    // Inclusive motions take the character under the target —
+                    // but never a newline (e.g. $ on an empty line resolves to
+                    // the line start, which holds the \n).
+                    if motion.isInclusive && end < length && nsString.character(at: end) != 0x0A { end += 1 }
                     if start < end {
                         let range = NSRange(location: start, length: end - start)
                         parent.vimEngine.register = nsString.substring(with: range)
@@ -1034,6 +1063,30 @@ extension VimTextView {
                 }
                 textView.updateCursorAppearance(isBlock: false)
 
+            case .visualPaste(let linewise):
+                textView.visualCursorOverride = nil
+                clearBlockHighlights(in: textView)
+                wasInBlockMode = false
+                let sel = textView.selectedRange()
+                var reg = pasteContent()
+                if !reg.isEmpty && sel.length > 0 {
+                    if linewise {
+                        // V-LINE selections include the trailing newline; keep
+                        // the paste linewise so the replaced lines stay lines.
+                        if !reg.hasSuffix("\n") { reg += "\n" }
+                    } else if reg.hasSuffix("\n") {
+                        // A linewise register pasted over a charwise selection
+                        // is inserted inline (drop the register's newline).
+                        reg.removeLast()
+                    }
+                    textView.insertText(reg, replacementRange: sel)
+                    let ns = textView.string as NSString
+                    textView.setSelectedRange(NSRange(location: min(sel.location, max(ns.length - 1, 0)), length: 0))
+                } else {
+                    textView.setSelectedRange(NSRange(location: sel.location, length: 0))
+                }
+                textView.updateCursorAppearance(isBlock: true)
+
             case .visualIndent:
                 let sel = textView.selectedRange()
                 let lineRange = nsString.lineRange(for: sel)
@@ -1218,9 +1271,82 @@ extension VimTextView {
                 textView.setSelectedRange(NSRange(location: targetRange.location, length: 0))
                 parent.vimEngine.statusMessage = "Replaced \(replaceCount) occurrence(s)"
 
+            case .changeCaseMotion(let motion, let count, let upper):
+                let target = resolveMotionNTimes(motion, count: count, in: textView)
+                let range: NSRange
+                if motion.isLinewise {
+                    let startLine = nsString.lineRange(for: NSRange(location: min(cursorPos, target), length: 0))
+                    let endLine = nsString.lineRange(for: NSRange(location: max(cursorPos, target), length: 0))
+                    range = NSRange(location: startLine.location, length: NSMaxRange(endLine) - startLine.location)
+                } else {
+                    let start = min(cursorPos, target)
+                    var end = max(cursorPos, target)
+                    // Inclusive motions take the character under the target —
+                    // but never a newline (e.g. $ on an empty line resolves to
+                    // the line start, which holds the \n).
+                    if motion.isInclusive && end < length && nsString.character(at: end) != 0x0A { end += 1 }
+                    range = NSRange(location: start, length: end - start)
+                }
+                applyCaseChange(in: range, upper: upper, cursorTo: range.location, in: textView)
+
+            case .changeCaseLines(let count, let upper):
+                let range = lineRangeForCount(from: cursorPos, count: max(1, count), in: nsString)
+                applyCaseChange(in: range, upper: upper, cursorTo: cursorPos, in: textView)
+
+            case .visualChangeCase(let upper):
+                textView.visualCursorOverride = nil
+                clearBlockHighlights(in: textView)
+                wasInBlockMode = false
+                let sel = textView.selectedRange()
+                if sel.length > 0 {
+                    applyCaseChange(in: sel, upper: upper, cursorTo: sel.location, in: textView)
+                } else {
+                    textView.setSelectedRange(NSRange(location: sel.location, length: 0))
+                }
+                textView.updateCursorAppearance(isBlock: true)
+
+            case .setMark(let ch):
+                marks[ch] = cursorPos
+
+            case .jumpToMark(let ch, let exact):
+                guard let stored = marks[ch] else {
+                    parent.vimEngine.statusMessage = "Mark `\(ch)` not set"
+                    break
+                }
+                let clamped = min(stored, max(length - 1, 0))
+                var target = clamped
+                if !exact {
+                    let lineRange = nsString.lineRange(for: NSRange(location: clamped, length: 0))
+                    let lineText = nsString.substring(with: lineRange)
+                    let indent = lineText.prefix(while: { $0 == " " || $0 == "\t" })
+                    target = lineRange.location + indent.count
+                }
+                textView.setSelectedRange(NSRange(location: target, length: 0))
+                textView.scrollRangeToVisible(NSRange(location: target, length: 0))
+
+            case .clearSearchHighlight:
+                searchHighlightTimer?.cancel()
+                textView.clearSearchHighlights()
+
             case .centerCursor(let alignment):
                 scrollCursorToPosition(alignment: alignment, in: textView)
             }
+        }
+
+        /// Replaces `range` with its upper/lowercased text and parks the
+        /// cursor at `cursorTo` (clamped). Uses `insertText` so the change is
+        /// undoable, matching how `~` (toggleCase) is implemented.
+        private func applyCaseChange(in range: NSRange, upper: Bool, cursorTo: Int, in textView: VimNSTextView) {
+            let nsString = textView.string as NSString
+            let safe = NSIntersectionRange(range, NSRange(location: 0, length: nsString.length))
+            guard safe.length > 0 else { return }
+            let text = nsString.substring(with: safe)
+            let changed = upper ? text.uppercased() : text.lowercased()
+            if changed != text {
+                textView.insertText(changed, replacementRange: safe)
+            }
+            let newLength = (textView.string as NSString).length
+            textView.setSelectedRange(NSRange(location: min(cursorTo, max(newLength - 1, 0)), length: 0))
         }
 
         private func resolveTextObject(_ textObject: TextObject, at pos: Int, in nsString: NSString) -> NSRange? {

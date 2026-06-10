@@ -244,6 +244,15 @@ public final class VimEngine: ObservableObject {
         case "r":
             keyBuffer = "r"
             return [.none]
+        case "m":
+            keyBuffer = "m"
+            return [.none]
+        case "`":
+            keyBuffer = "`"
+            return [.none]
+        case "'":
+            keyBuffer = "'"
+            return [.none]
         case "R":
             mode = .replace
             resetBuffers()
@@ -411,6 +420,15 @@ public final class VimEngine: ObservableObject {
             }
 
         case "g":
+            // gu / gU stay pending for their motion (keep the count buffer).
+            if key == "u" {
+                keyBuffer = "gu"
+                return [.none]
+            }
+            if key == "U" {
+                keyBuffer = "gU"
+                return [.none]
+            }
             resetBuffers()
             if key == "g" {
                 if count != 1 {
@@ -421,6 +439,32 @@ public final class VimEngine: ObservableObject {
                 return Array(repeating: .moveCursor(.wordEndBackward), count: count)
             } else if key == "E" {
                 return Array(repeating: .moveCursor(.bigWordEndBackward), count: count)
+            }
+            return [.none]
+
+        case "gu", "gU":
+            let upper = (operator_ == "gU")
+            resetBuffers()
+            // guu / gUU (and gugu-style doubled operators) act on lines.
+            if (key == "u" && !upper) || (key == "U" && upper) || key == "g" {
+                return [.changeCaseLines(count, upper: upper)]
+            }
+            if let motion = motionForKey(key) {
+                return [.changeCaseMotion(motion, count, upper: upper)]
+            }
+            return [.none]
+
+        case "m":
+            resetBuffers()
+            if let ch = key.first, ch.isLetter, key.count == 1 {
+                return [.setMark(ch)]
+            }
+            return [.none]
+
+        case "`", "'":
+            resetBuffers()
+            if let ch = key.first, ch.isLetter, key.count == 1 {
+                return [.jumpToMark(ch, exact: operator_ == "`")]
             }
             return [.none]
 
@@ -799,16 +843,36 @@ public final class VimEngine: ObservableObject {
 
         if keyBuffer == "g" {
             keyBuffer = ""
+            let gCount = pendingCount
+            let hadCount = !countBuffer.isEmpty
+            countBuffer = ""
             switch key {
             case "g":
+                if hadCount {
+                    return [.goToLine(gCount)]
+                }
                 return [.moveCursor(.documentStart)]
             case "e":
-                return [.moveCursor(.wordEndBackward)]
+                return Array(repeating: .moveCursor(.wordEndBackward), count: gCount)
             case "E":
-                return [.moveCursor(.bigWordEndBackward)]
+                return Array(repeating: .moveCursor(.bigWordEndBackward), count: gCount)
             default:
                 return [.none]
             }
+        }
+
+        // Counts: digits accumulate exactly like normal mode. Checked after
+        // the pending-key blocks above so `f3` still finds a literal "3".
+        if key.count == 1, let ch = key.first, ch.isNumber && !(countBuffer.isEmpty && ch == "0") {
+            countBuffer.append(ch)
+            return [.none]
+        }
+        let count = pendingCount
+
+        // Returns `motion` repeated `count` times, consuming the count buffer.
+        func counted(_ motion: Motion) -> [VimAction] {
+            countBuffer = ""
+            return Array(repeating: .moveCursor(motion), count: count)
         }
 
         switch key {
@@ -817,42 +881,46 @@ public final class VimEngine: ObservableObject {
             resetBuffers()
             return [.normalMode]
         case "h":
-            return [.moveCursor(.left)]
+            return counted(.left)
         case "j":
-            return [.moveCursor(.down)]
+            return counted(.down)
         case "k":
-            return [.moveCursor(.up)]
+            return counted(.up)
         case "l":
-            return [.moveCursor(.right)]
+            return counted(.right)
         case "w":
-            return [.moveCursor(.wordForward)]
+            return counted(.wordForward)
         case "b":
-            return [.moveCursor(.wordBackward)]
+            return counted(.wordBackward)
         case "e":
-            return [.moveCursor(.wordEnd)]
+            return counted(.wordEnd)
         case "W":
-            return [.moveCursor(.bigWordForward)]
+            return counted(.bigWordForward)
         case "B":
-            return [.moveCursor(.bigWordBackward)]
+            return counted(.bigWordBackward)
         case "E":
-            return [.moveCursor(.bigWordEnd)]
+            return counted(.bigWordEnd)
         case "0":
-            return [.moveCursor(.lineStart)]
+            return counted(.lineStart)
         case "$":
-            return [.moveCursor(.lineEnd)]
+            return counted(.lineEnd)
         case "^":
-            return [.moveCursor(.firstNonBlank)]
+            return counted(.firstNonBlank)
         case "{":
-            return [.moveCursor(.paragraphBackward)]
+            return counted(.paragraphBackward)
         case "}":
-            return [.moveCursor(.paragraphForward)]
+            return counted(.paragraphForward)
         case "H":
-            return [.moveCursor(.screenTop)]
+            return counted(.screenTop)
         case "M":
-            return [.moveCursor(.screenMiddle)]
+            return counted(.screenMiddle)
         case "L":
-            return [.moveCursor(.screenBottom)]
+            return counted(.screenBottom)
         case "G":
+            if !countBuffer.isEmpty {
+                countBuffer = ""
+                return [.goToLine(count)]
+            }
             return [.moveCursor(.documentEnd)]
         case "g":
             keyBuffer = "g"
@@ -877,6 +945,19 @@ public final class VimEngine: ObservableObject {
             mode = .insert
             resetBuffers()
             return [.visualChange]
+        case "p", "P":
+            let linewise = (mode == .visualLine)
+            mode = .normal
+            resetBuffers()
+            return [.visualPaste(linewise: linewise)]
+        case "u":
+            mode = .normal
+            resetBuffers()
+            return [.visualChangeCase(upper: false)]
+        case "U":
+            mode = .normal
+            resetBuffers()
+            return [.visualChangeCase(upper: true)]
         case "I":
             if mode == .visualBlock {
                 mode = .insert
@@ -927,24 +1008,16 @@ public final class VimEngine: ObservableObject {
             return [.none]
         case ";":
             if let (ch, forward, isFind) = lastFindChar {
-                if isFind {
-                    return [.moveCursor(.findChar(ch, forward))]
-                } else {
-                    return [.moveCursor(.tillChar(ch, forward))]
-                }
+                return counted(isFind ? .findChar(ch, forward) : .tillChar(ch, forward))
             }
             return [.none]
         case ",":
             if let (ch, forward, isFind) = lastFindChar {
-                if isFind {
-                    return [.moveCursor(.findChar(ch, !forward))]
-                } else {
-                    return [.moveCursor(.tillChar(ch, !forward))]
-                }
+                return counted(isFind ? .findChar(ch, !forward) : .tillChar(ch, !forward))
             }
             return [.none]
         default:
-            keyBuffer = ""
+            resetBuffers()
             return [.none]
         }
     }
@@ -982,6 +1055,8 @@ public final class VimEngine: ObservableObject {
             return [.save, .quit]
         case "q!":
             return [.quit]
+        case "noh", "nohl", "nohlsearch":
+            return [.clearSearchHighlight]
         default:
             if trimmed.hasPrefix("s/") || trimmed.hasPrefix("%s/") {
                 let isEntireDocument = trimmed.hasPrefix("%")

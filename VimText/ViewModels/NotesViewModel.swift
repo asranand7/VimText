@@ -222,7 +222,7 @@ final class NotesViewModel: ObservableObject {
 
     func deleteNote(_ note: Note) {
         pendingSaves.removeValue(forKey: note.id)
-        storage.deleteNote(note)
+        storage.deleteNote(note, remainingNotes: notes.filter { $0.id != note.id })
         notes.removeAll { $0.id == note.id }
         if selectedNoteId == note.id {
             selectedNoteId = filteredNotes.first?.id
@@ -241,7 +241,7 @@ final class NotesViewModel: ObservableObject {
         autoSaveTimer = nil
         pendingSaves.removeAll()
         for note in notes {
-            storage.deleteNote(note)
+            storage.deleteNote(note, remainingNotes: [])
         }
         notes.removeAll()
         selectedNoteId = nil
@@ -256,8 +256,9 @@ final class NotesViewModel: ObservableObject {
             pendingSaves.removeValue(forKey: id)
         }
         let toDelete = notes.filter { ids.contains($0.id) }
+        let remaining = notes.filter { !ids.contains($0.id) }
         for note in toDelete {
-            storage.deleteNote(note)
+            storage.deleteNote(note, remainingNotes: remaining)
             notes.removeAll { $0.id == note.id }
         }
         if let sel = selectedNoteId, ids.contains(sel) {

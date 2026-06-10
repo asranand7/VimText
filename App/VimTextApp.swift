@@ -15,6 +15,11 @@ struct VimTextApp: App {
                     NotificationCenter.default.post(name: .createNewNote, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
+
+                Button("Duplicate Note") {
+                    NotificationCenter.default.post(name: .duplicateCurrentNote, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: .command)
             }
 
             CommandGroup(replacing: .textEditing) {
@@ -54,7 +59,7 @@ struct VimTextApp: App {
 
                 Divider()
 
-                Button("Quick Open Note...") {
+                Button("Quick Open Note…") {
                     NotificationCenter.default.post(name: .openCommandPalette, object: nil)
                 }
                 .keyboardShortcut("k", modifiers: .command)
@@ -68,7 +73,7 @@ struct VimTextApp: App {
                 Text("Visual: v, V")
                 Text("Command: :")
                 Divider()
-                Text("Save: :w or Command-S")
+                Text("Save: :w or ⌘S")
                 Text("Motions: h j k l w b e W B E 0 $ gg G")
                 Text("Operations: d y c p")
             }

@@ -268,9 +268,19 @@ struct NoteEditorView: View {
     }
 
     private var editorArea: some View {
+        // The text view owns the content after creation (NSTextStorage is the
+        // source of truth); edits flow back through onContentChange. The
+        // editor is recreated per note via .id(noteId), so initial values are
+        // read straight from the note.
         VimTextView(
-            text: $content,
-            rtfData: $rtfData,
+            initialText: note?.content ?? "",
+            initialRTFData: note?.rtfData ?? Data(),
+            onContentChange: { newText, newRTF in
+                content = newText
+                rtfData = newRTF
+                updateWordCountAsync(text: newText)
+                queueViewModelUpdate(content: newText, rtfData: newRTF)
+            },
             vimEngine: vimEngine,
             findController: findController,
             onSave: { saveCurrentNote() },
@@ -285,13 +295,6 @@ struct NoteEditorView: View {
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(editorPaperFill)
-        .onChange(of: content) { _, newValue in
-            updateWordCountAsync(text: newValue)
-            queueViewModelUpdate(content: newValue, rtfData: rtfData)
-        }
-        .onChange(of: rtfData) { _, newValue in
-            queueViewModelUpdate(content: content, rtfData: newValue)
-        }
     }
 
     private var findBar: some View {
@@ -695,10 +698,9 @@ struct NoteEditorView: View {
         // Focus the find field so the next Enter advances to the next match
         // (the find bar's onSubmit calls findNext).
         findController.focusTrigger += 1
-        // If the note is already loaded (re-searching the open note), run the
-        // find on the next runloop tick. For a freshly-opened note the text
-        // view triggers the find itself the instant its content loads, so there
-        // is no guessed delay anywhere.
+        // The text view receives the note's content at creation (makeNSView),
+        // so by the next runloop tick the editor always holds the full text —
+        // run the find then, with no guessed delay.
         DispatchQueue.main.async {
             findController.performFind?(highlight)
         }

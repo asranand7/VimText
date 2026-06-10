@@ -5,8 +5,15 @@ import AppKit
 // MARK: - VimTextView
 
 struct VimTextView: NSViewRepresentable {
-    @Binding var text: String
-    @Binding var rtfData: Data
+    /// Content the editor is created with. The NSTextStorage is the source of
+    /// truth from then on — SwiftUI never pushes content back into the view.
+    /// The editor is recreated per note (`.id(noteId)`), so initial-only is
+    /// sufficient.
+    var initialText: String
+    var initialRTFData: Data
+    /// Called (debounced, and on flush) with the latest serialized content
+    /// (Markdown text + RTF) whenever the user edits the note.
+    var onContentChange: ((String, Data) -> Void)?
     @ObservedObject var vimEngine: VimEngine
     var findController: FindController?
     var onSave: (() -> Void)?
@@ -120,21 +127,20 @@ struct VimTextView: NSViewRepresentable {
         context.coordinator.setupFindController()
         context.coordinator.setupRefocusObserver(for: textView)
 
-        // Load rich text content or fall back to plain text
-        if !rtfData.isEmpty, let attrStr = NSAttributedString(rtf: rtfData, documentAttributes: nil) {
+        // Load rich text content or fall back to plain text. From here on the
+        // text storage is authoritative; content flows out via onContentChange.
+        if !initialRTFData.isEmpty, let attrStr = NSAttributedString(rtf: initialRTFData, documentAttributes: nil) {
             textView.textStorage?.setAttributedString(attrStr)
             textView.applyTextColor(textColor)
-        } else {
-            let attrStr = NSAttributedString(string: text, attributes: defaultAttrs)
-            textView.textStorage?.setAttributedString(attrStr)
-        }
-
-        if !rtfData.isEmpty {
             textView.applyBaseFont(font)
+        } else {
+            let attrStr = NSAttributedString(string: initialText, attributes: defaultAttrs)
+            textView.textStorage?.setAttributedString(attrStr)
         }
         textView.restyleCodeBlocks(baseFont: font)
         textView.renderImageAttachments()
-        context.coordinator.lastAppliedText = text
+        context.coordinator.latestText = initialText
+        context.coordinator.latestRTF = initialRTFData
 
         let isInsert = vimEngine.mode.isEditing || startInInsertMode
         textView.updateCursorAppearance(isBlock: !isInsert)
@@ -146,44 +152,9 @@ struct VimTextView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? VimNSTextView else { return }
         context.coordinator.parent = self
 
-        if !context.coordinator.isUpdatingFromTextView && !context.coordinator.hasUnsyncedEdits && text != context.coordinator.lastAppliedText {
-            let selectedRange = textView.selectedRange()
-            let defaultAttrs: [NSAttributedString.Key: Any] = [
-                .font: font,
-                .foregroundColor: textColor,
-                .paragraphStyle: Self.paragraphStyle()
-            ]
-            if !rtfData.isEmpty, let attrStr = NSAttributedString(rtf: rtfData, documentAttributes: nil) {
-                textView.textStorage?.setAttributedString(attrStr)
-                textView.applyBaseFont(font)
-                textView.applyTextColor(textColor)
-            } else {
-                let attrStr = NSAttributedString(string: text, attributes: defaultAttrs)
-                textView.textStorage?.setAttributedString(attrStr)
-            }
-            textView.restyleCodeBlocks(baseFont: font)
-            textView.renderImageAttachments()
-            // Clamp against the NSString (UTF-16) length, not String.count
-            // (grapheme count) — selectedRange.location is a UTF-16 offset,
-            // so mixing the two misplaces the cursor in notes with emoji or
-            // combining characters.
-            let safeLocation = min(selectedRange.location, (textView.string as NSString).length)
-            textView.setSelectedRange(NSRange(location: safeLocation, length: 0))
-            context.coordinator.lastAppliedText = text
-
-            // The note's text is now in the view. If a search is pending from a
-            // ⌘K open, run it now — deterministically, the instant the content
-            // is loaded (regardless of note size), instead of guessing a delay.
-            // Deferred one runloop tick so we don't mutate published find state
-            // mid view-update.
-            if !context.coordinator.didInitialFindOnLoad,
-               let fc = findController, fc.isVisible, !fc.query.isEmpty {
-                context.coordinator.didInitialFindOnLoad = true
-                let pendingQuery = fc.query
-                let coordinator = context.coordinator
-                DispatchQueue.main.async { coordinator.performFindInEditor(query: pendingQuery) }
-            }
-        }
+        // Note content is never pushed from SwiftUI after creation — the text
+        // storage is the source of truth and the editor is recreated per note.
+        // Only presentation inputs (font, theme, paper, rulers) sync below.
 
         // Re-apply base font/size across the document when it changes (preserving bold/italic)
         if context.coordinator.lastFontSize != font.pointSize || context.coordinator.lastFontName != font.fontName {
