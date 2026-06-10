@@ -1086,9 +1086,11 @@ class VimNSTextView: NSTextView {
     override func paste(_ sender: Any?) {
         if insertPastedImage() { return }
         super.paste(sender)
-        if let font = self.font {
-            applyBaseFont(font)
-        }
+        // Use the coordinator's parent font — the live, user-configured font
+        // from EditorPreferences — instead of self.font which is the stale
+        // NSTextView-level property and may carry an outdated size.
+        let baseFont = coordinator?.parent.font ?? self.font ?? NSFont.systemFont(ofSize: 16)
+        applyBaseFont(baseFont)
         coordinator?.formattingDidChange()
     }
 
@@ -1209,7 +1211,7 @@ class VimNSTextView: NSTextView {
         
         context.saveGState()
         
-        let font = self.font ?? NSFont.systemFont(ofSize: 16)
+        let font = coordinator?.parent.font ?? self.font ?? NSFont.systemFont(ofSize: 16)
         let fontHeight = layoutManager.defaultLineHeight(for: font)
         
         var lineSpacing: CGFloat = 8
