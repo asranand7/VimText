@@ -42,10 +42,34 @@ public struct Note: Identifiable, Codable, Hashable {
         // to avoid showing the title twice in each sidebar row.
         let head = String(content.prefix(1000))
         let lines = head.components(separatedBy: .newlines).dropFirst()
-        let previewLines = lines.prefix(3).joined(separator: " ")
+        // List markers ("1.", "-", "•") read as noise when lines are joined
+        // into one preview string, so they're stripped per line.
+        let previewLines = lines.prefix(3)
+            .map { Self.strippingListMarker(from: $0) }
+            .joined(separator: " ")
         // Drop embedded-image Markdown so previews read as prose, not raw refs.
         let withoutImages = ImageMarkdown.strippingImageRefs(from: previewLines)
         let trimmed = withoutImages.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "No additional text" : String(trimmed.prefix(120))
+    }
+
+    /// Removes a leading list marker (`- `, `* `, `+ `, `• `, `1. `, `2) `…)
+    /// from a single line, for sidebar previews.
+    static func strippingListMarker<S: StringProtocol>(from line: S) -> String {
+        var rest = line[...]
+        let indent = rest.prefix(while: { $0 == " " || $0 == "\t" })
+        rest = rest.dropFirst(indent.count)
+
+        if let first = rest.first, "-*+•".contains(first), rest.dropFirst().first == " " {
+            return String(rest.dropFirst(2))
+        }
+        let digits = rest.prefix(while: \.isNumber)
+        if !digits.isEmpty, digits.count <= 3 {
+            let afterDigits = rest.dropFirst(digits.count)
+            if let sep = afterDigits.first, sep == "." || sep == ")", afterDigits.dropFirst().first == " " {
+                return afterDigits.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return String(line)
     }
 }

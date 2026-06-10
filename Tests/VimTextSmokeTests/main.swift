@@ -81,6 +81,11 @@ func testNoteModelDerivedText() throws {
 
     let withImage = Note(title: "Img", content: "Title line\n![](assets/x.png)\nreal text")
     try expectEqual(withImage.preview, "real text", "preview should strip embedded-image references")
+
+    let list = Note(title: "List", content: "Gifts\n1. Hand bag\n2) Earphones\n- chocolates")
+    try expectEqual(list.preview, "Hand bag Earphones chocolates", "preview should strip list markers")
+    let notAList = Note(title: "N", content: "t\n2024. A year\n-dash not list")
+    try expectEqual(notAList.preview, "2024. A year -dash not list", "4+ digit numbers and unspaced dashes are not list markers")
 }
 
 func testEditorPreferencesFontSizing() throws {

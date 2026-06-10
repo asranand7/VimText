@@ -37,11 +37,6 @@ struct NoteRowView: View {
 
                 Spacer(minLength: 4)
 
-                Text(formattedDate)
-                    .font(.system(size: 10.5, weight: .medium, design: .default))
-                    .foregroundStyle(theme.secondaryText.opacity(isSelected ? 0.86 : 0.66))
-                    .fixedSize()
-
                 if let onTogglePin, isHovered {
                     Button(action: onTogglePin) {
                         Image(systemName: note.isPinned ? "pin.slash" : "pin")
@@ -81,11 +76,20 @@ struct NoteRowView: View {
                 }
             }
 
-            Text(note.preview.isEmpty ? "No additional text" : note.preview)
-                .font(.system(size: 12, weight: .regular, design: .default))
-                .foregroundStyle(theme.secondaryText.opacity(isSelected ? 0.82 : 0.62))
-                .lineLimit(2)
-                .frame(minHeight: 16, alignment: .topLeading)
+            // Date leads the preview line (like Apple Notes) — right-aligned
+            // dates of varying width made the rows' right edge ragged.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(formattedDate)
+                    .font(.system(size: 11, weight: .medium, design: .default))
+                    .foregroundStyle(theme.secondaryText.opacity(isSelected ? 0.9 : 0.72))
+                    .fixedSize()
+
+                Text(note.preview.isEmpty ? "No additional text" : note.preview)
+                    .font(.system(size: 12, weight: .regular, design: .default))
+                    .foregroundStyle(theme.secondaryText.opacity(isSelected ? 0.82 : 0.62))
+                    .lineLimit(2)
+                    .frame(minHeight: 16, alignment: .topLeading)
+            }
         }
         .padding(.vertical, 9)
         .animation(DS.snappy, value: isHovered)

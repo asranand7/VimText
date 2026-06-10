@@ -195,16 +195,11 @@ struct NoteListView: View {
             HStack(spacing: 8) {
                 if let onToggleSidebar {
                     Button(action: onToggleSidebar) {
-                        HStack(spacing: 5) {
-                            Image(systemName: "sidebar.leading")
-                                .font(.system(size: 13, weight: .semibold))
-                            Text("⌘⌥B")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(theme.secondaryText.opacity(0.78))
-                        }
-                        .foregroundStyle(theme.secondaryText.opacity(0.74))
-                        .padding(.horizontal, 10)
-                        .frame(height: 36)
+                        Image(systemName: "sidebar.leading")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(theme.secondaryText.opacity(0.74))
+                            .padding(.horizontal, 10)
+                            .frame(height: 36)
                         .background(
                             Capsule()
                                 .fill(theme.isDark ? Color.white.opacity(0.06) : Color.white.opacity(0.42))

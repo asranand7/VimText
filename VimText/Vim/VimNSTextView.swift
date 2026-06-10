@@ -1038,9 +1038,11 @@ class VimNSTextView: NSTextView {
             rect.size.height = layoutManager.defaultLineHeight(for: cursorFont)
         }
 
+        // Keep the block cursor clearly visible — at 0.45 it read as a faint
+        // smudge on light themes and was hard to locate at a glance.
         let cursorColor: NSColor = isVisual
-            ? accentColor.withAlphaComponent(0.75)
-            : accentColor.withAlphaComponent(0.45)
+            ? accentColor.withAlphaComponent(0.85)
+            : accentColor.withAlphaComponent(0.70)
 
         self.wantsLayer = true
         

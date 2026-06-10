@@ -47,14 +47,9 @@ struct NoteEditorView: View {
             HStack(spacing: 4) {
                 if let onToggleSidebar {
                     Button(action: onToggleSidebar) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "sidebar.leading")
-                                .font(.system(size: 11, weight: .semibold))
-                            Text("⌘⌥B")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(theme.secondaryText.opacity(0.76))
-                        }
-                        .foregroundStyle(isSidebarVisible ? theme.secondaryText.opacity(0.62) : theme.accent)
+                        Image(systemName: "sidebar.leading")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(isSidebarVisible ? theme.secondaryText.opacity(0.62) : theme.accent)
                     }
                     .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
                     .help(isSidebarVisible ? "Hide Sidebar (⌘⌥B)" : "Show Sidebar (⌘⌥B)")
@@ -71,7 +66,7 @@ struct NoteEditorView: View {
 
             Spacer()
 
-            // Right pill 1: pin · trash · theme
+            // Right pill: pin · trash · theme │ Aa
             HStack(spacing: 2) {
                 Button(action: {
                     if let note = note {
@@ -109,38 +104,35 @@ struct NoteEditorView: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .help("Theme")
-            }
-            .fixedSize()
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(.regularMaterial)
-            .clipShape(Capsule())
-            .overlay(Capsule().strokeBorder(theme.separator.opacity(0.22), lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.05), radius: 2, y: 1)
 
-            // Right pill 2: Aa
-            Menu {
-                fontSizeMenu
                 Divider()
-                Toggle("Monospaced Font", isOn: $useMonospacedFont)
-                Toggle("Line Numbers", isOn: $showLineNumbers)
-                Toggle("Smart Lists", isOn: $smartLists)
-                Divider()
-                Menu("Paper Style") {
-                    Picker("Paper Style", selection: $paperStyle) {
-                        Text("Plain").tag("plain")
-                        Text("Dotted Grid").tag("dotted")
-                        Text("Lined Paper").tag("lined")
+                    .frame(height: 12)
+                    .padding(.horizontal, 3)
+
+                Menu {
+                    fontSizeMenu
+                    Divider()
+                    Toggle("Monospaced Font", isOn: $useMonospacedFont)
+                    Toggle("Line Numbers", isOn: $showLineNumbers)
+                    Toggle("Smart Lists", isOn: $smartLists)
+                    Divider()
+                    Menu("Paper Style") {
+                        Picker("Paper Style", selection: $paperStyle) {
+                            Text("Plain").tag("plain")
+                            Text("Dotted Grid").tag("dotted")
+                            Text("Lined Paper").tag("lined")
+                        }
+                        .pickerStyle(.inline)
                     }
-                    .pickerStyle(.inline)
+                } label: {
+                    Image(systemName: "textformat.size")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(theme.secondaryText.opacity(0.6))
                 }
-            } label: {
-                Image(systemName: "textformat.size")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(theme.secondaryText.opacity(0.6))
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help("Font Settings")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
             .fixedSize()
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -148,7 +140,6 @@ struct NoteEditorView: View {
             .clipShape(Capsule())
             .overlay(Capsule().strokeBorder(theme.separator.opacity(0.22), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.05), radius: 2, y: 1)
-            .help("Font Settings")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
@@ -478,21 +469,24 @@ struct NoteEditorView: View {
         HStack(spacing: 8) {
             // Mode Pill
             modeIndicator
-            
-            // Saved status pill
-            HStack(spacing: 4) {
-                Image(systemName: saveStateIconName)
-                    .font(.system(size: 10))
-                    .foregroundStyle(saveStateColor)
-                Text(viewModel.saveState.displayText)
-                    .font(.system(.caption, design: .default).weight(.semibold))
+
+            // Save status only surfaces when something is happening — a
+            // permanent "Saved ✓" pill is noise (Apple-style: silence = saved).
+            if viewModel.saveState != .saved {
+                HStack(spacing: 4) {
+                    Image(systemName: saveStateIconName)
+                        .font(.system(size: 10))
+                        .foregroundStyle(saveStateColor)
+                    Text(viewModel.saveState.displayText)
+                        .font(.system(.caption, design: .default).weight(.semibold))
+                }
+                .foregroundStyle(theme.secondaryText)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
+                .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
+                .help(saveStateHelp)
             }
-            .foregroundStyle(theme.secondaryText)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 3)
-            .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
-            .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
-            .help(saveStateHelp)
 
             if !vimEngine.statusMessage.isEmpty {
                 HStack(spacing: 4) {
@@ -512,11 +506,11 @@ struct NoteEditorView: View {
             
             Spacer()
             
-            // Reading stats pill
+            // Word-count pill (reading time lives in the tooltip)
             HStack(spacing: 4) {
                 Image(systemName: "clock")
                     .font(.system(size: 10))
-                Text("\(wordCount.formatted()) words · \(readingTime) min read")
+                Text("\(wordCount.formatted()) words")
                     .font(.system(.caption, design: .default).weight(.semibold))
             }
             .foregroundStyle(theme.secondaryText)
@@ -524,19 +518,22 @@ struct NoteEditorView: View {
             .padding(.vertical, 3)
             .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
             .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
-            
-            // Paper Style Pill
-            HStack(spacing: 4) {
-                Image(systemName: paperStyleIconName)
-                    .font(.system(size: 10))
-                Text(paperStyleDisplayName)
-                    .font(.system(.caption, design: .default).weight(.medium))
+            .help("\(readingTime) min read")
+
+            // Paper Style pill — only when a non-default paper is active.
+            if paperStyle != "plain" {
+                HStack(spacing: 4) {
+                    Image(systemName: paperStyleIconName)
+                        .font(.system(size: 10))
+                    Text(paperStyleDisplayName)
+                        .font(.system(.caption, design: .default).weight(.medium))
+                }
+                .foregroundStyle(theme.secondaryText)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
+                .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
             }
-            .foregroundStyle(theme.secondaryText)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 3)
-            .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
-            .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
             
             // Cursor Coordinates Pill
             HStack(spacing: 4) {
