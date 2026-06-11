@@ -25,6 +25,9 @@ struct VimTextView: NSViewRepresentable {
     var paperStyle: String = "plain"
     var smartLists: Bool = true
     var showLineNumbers: Bool = false
+    /// Locked notes are read-only: typing is disabled and Vim mutations are
+    /// rejected with a status hint. Navigation/search still work.
+    var isLocked: Bool = false
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -113,6 +116,8 @@ struct VimTextView: NSViewRepresentable {
         textView.coordinator = context.coordinator
         textView.paperStyle = paperStyle
         textView.smartLists = smartLists
+        textView.isLockedNote = isLocked
+        textView.isEditable = !isLocked
 
         scrollView.documentView = textView
         scrollView.verticalRulerView = LineNumberRulerView(scrollView: scrollView, textView: textView)
@@ -192,6 +197,8 @@ struct VimTextView: NSViewRepresentable {
         }
 
         textView.smartLists = smartLists
+        textView.isLockedNote = isLocked
+        textView.isEditable = !isLocked
         textView.textContainerInset = textContainerInset
         scrollView.hasVerticalRuler = showLineNumbers
         scrollView.rulersVisible = showLineNumbers

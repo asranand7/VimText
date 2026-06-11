@@ -7,6 +7,9 @@ class VimNSTextView: NSTextView {
     var accentColor: NSColor = .systemOrange
     var paperStyle: String = "plain"
     var smartLists: Bool = true
+    /// Read-only mode for locked notes — Vim mutations are rejected with a
+    /// status hint (see Coordinator.executeActions and keyDown's `r` path).
+    var isLockedNote: Bool = false
     var codeBlockRanges: [NSRange] = []
     private var copyButtons: [NSButton] = []
     private var blockCursorLayer: CALayer?
@@ -603,6 +606,10 @@ class VimNSTextView: NSTextView {
 
         if engine.keyBuffer == "r" && !isEsc {
             engine.resetBuffers()
+            if isLockedNote {
+                engine.statusMessage = "Note is locked — unlock to edit"
+                return
+            }
             let pos = selectedRange().location
             let nsString = string as NSString
             if pos < nsString.length {

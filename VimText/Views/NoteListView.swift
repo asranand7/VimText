@@ -479,7 +479,10 @@ struct NoteListView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will permanently delete all \(viewModel.notes.count) notes. This action cannot be undone.")
+            let lockedCount = viewModel.notes.filter(\.isLocked).count
+            Text(lockedCount > 0
+                 ? "This will permanently delete all unlocked notes. \(lockedCount) locked note\(lockedCount == 1 ? "" : "s") will be kept. This action cannot be undone."
+                 : "This will permanently delete all \(viewModel.notes.count) notes. This action cannot be undone.")
         }
         .confirmationDialog(
             "Delete \(selectedNoteIds.count) Notes?",
@@ -493,7 +496,10 @@ struct NoteListView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will permanently delete \(selectedNoteIds.count) selected notes. This action cannot be undone.")
+            let lockedSelected = viewModel.notes.filter { selectedNoteIds.contains($0.id) && $0.isLocked }.count
+            Text(lockedSelected > 0
+                 ? "This will permanently delete the selected notes, except \(lockedSelected) locked note\(lockedSelected == 1 ? "" : "s") which will be kept. This action cannot be undone."
+                 : "This will permanently delete \(selectedNoteIds.count) selected notes. This action cannot be undone.")
         }
         .confirmationDialog(
             "Delete \"\(noteToDelete?.displayTitle ?? "")\"?",
@@ -690,6 +696,10 @@ struct NoteListView: View {
             viewModel.togglePin(note)
         }
 
+        Button(note.isLocked ? "Unlock" : "Lock") {
+            viewModel.toggleLock(note)
+        }
+
         Button("Duplicate") {
             viewModel.duplicateNote(note)
         }
@@ -706,8 +716,13 @@ struct NoteListView: View {
 
         Divider()
 
-        Button("Delete", role: .destructive) {
-            viewModel.deleteNote(note)
+        if note.isLocked {
+            Button("Delete (locked)") {}
+                .disabled(true)
+        } else {
+            Button("Delete", role: .destructive) {
+                viewModel.deleteNote(note)
+            }
         }
     }
 

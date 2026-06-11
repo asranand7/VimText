@@ -246,6 +246,9 @@ final class NotesViewModel: ObservableObject {
     }
 
     func deleteNote(_ note: Note) {
+        // Locked notes can't be deleted — every UI path hides/blocks this,
+        // but guard here too so no future caller can bypass the lock.
+        guard !note.isLocked else { return }
         pendingSaves.removeValue(forKey: note.id)
         storage.deleteNote(note, remainingNotes: notes.filter { $0.id != note.id })
         notes.removeAll { $0.id == note.id }
@@ -264,12 +267,13 @@ final class NotesViewModel: ObservableObject {
     func deleteAllNotes() {
         autoSaveTimer?.invalidate()
         autoSaveTimer = nil
-        pendingSaves.removeAll()
-        for note in notes {
-            storage.deleteNote(note, remainingNotes: [])
+        let locked = notes.filter { $0.isLocked }
+        pendingSaves = pendingSaves.filter { id, _ in locked.contains { $0.id == id } }
+        for note in notes where !note.isLocked {
+            storage.deleteNote(note, remainingNotes: locked)
         }
-        notes.removeAll()
-        selectedNoteId = nil
+        notes = locked
+        selectedNoteId = filteredNotes.first?.id
     }
 
     func selectAllNoteIds() -> Set<UUID> {
@@ -277,6 +281,8 @@ final class NotesViewModel: ObservableObject {
     }
 
     func deleteNotes(ids: Set<UUID>) {
+        // Locked notes survive bulk deletion.
+        let ids = Set(notes.filter { ids.contains($0.id) && !$0.isLocked }.map(\.id))
         for id in ids {
             pendingSaves.removeValue(forKey: id)
         }
@@ -291,6 +297,14 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
+    func toggleLock(_ note: Note) {
+        guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
+        // Flush any in-flight edit first so locking can't race a pending save.
+        flushPendingSavesSynchronously()
+        notes[index].isLocked.toggle()
+        applySaveResult(storage.saveNote(notes[index]))
+    }
+
     func togglePin(_ note: Note) {
         guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
         pendingSaves.removeValue(forKey: note.id)
@@ -301,6 +315,9 @@ final class NotesViewModel: ObservableObject {
 
     func updateNoteContent(id: UUID, title: String, content: String, rtfData: Data? = nil) {
         guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+        // Backstop: the editor is read-only for locked notes, but never let a
+        // stray callback overwrite locked content either.
+        guard !notes[index].isLocked else { return }
         let contentChanged = notes[index].content != content
         let titleChanged = notes[index].title != title
         let rtfChanged = notes[index].rtfData != rtfData

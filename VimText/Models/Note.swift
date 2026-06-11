@@ -9,6 +9,8 @@ public struct Note: Identifiable, Codable, Hashable {
     public var createdAt: Date
     public var modifiedAt: Date
     public var isPinned: Bool
+    /// Locked notes are read-only and protected from deletion until unlocked.
+    public var isLocked: Bool
 
     public init(
         id: UUID = UUID(),
@@ -18,7 +20,8 @@ public struct Note: Identifiable, Codable, Hashable {
         folderId: UUID? = nil,
         createdAt: Date = Date(),
         modifiedAt: Date = Date(),
-        isPinned: Bool = false
+        isPinned: Bool = false,
+        isLocked: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -28,6 +31,21 @@ public struct Note: Identifiable, Codable, Hashable {
         self.createdAt = createdAt
         self.modifiedAt = modifiedAt
         self.isPinned = isPinned
+        self.isLocked = isLocked
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        content = try c.decode(String.self, forKey: .content)
+        rtfData = try c.decodeIfPresent(Data.self, forKey: .rtfData)
+        folderId = try c.decodeIfPresent(UUID.self, forKey: .folderId)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        modifiedAt = try c.decode(Date.self, forKey: .modifiedAt)
+        isPinned = try c.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        // Added after isPinned — notes saved by older versions lack the key.
+        isLocked = try c.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
     }
 
     public var displayTitle: String {

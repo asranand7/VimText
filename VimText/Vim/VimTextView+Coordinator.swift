@@ -348,6 +348,28 @@ extension VimTextView {
             guard let textView = textView else { return }
             let engine = parent.vimEngine
 
+            // Locked notes are read-only: reject any mutating action with a
+            // hint, and undo the mode switch the engine already made (e.g. `i`
+            // flips to .insert before actions reach us). Navigation, visual
+            // selection, and search all pass through untouched.
+            if textView.isLockedNote {
+                let mutates = actions.contains { action in
+                    if Self.isTextMutating(action) { return true }
+                    switch action {
+                    case .undo, .redo, .replaceChar, .deleteToEnd:
+                        return true
+                    default:
+                        return false
+                    }
+                }
+                if mutates {
+                    if engine.mode.isEditing { engine.mode = .normal }
+                    engine.resetBuffers()
+                    engine.statusMessage = "Note is locked — unlock to edit"
+                    return
+                }
+            }
+
             if !isReplayingDot {
                 let isChangeAction = actions.contains { action in
                     switch action {

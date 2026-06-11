@@ -38,6 +38,13 @@ struct NoteRowView: View {
 
                 Spacer(minLength: 4)
 
+                if note.isLocked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(theme.secondaryText.opacity(0.75))
+                        .help("Locked — read-only, can't be deleted")
+                }
+
                 if let onTogglePin, isHovered {
                     Button(action: onTogglePin) {
                         Image(systemName: note.isPinned ? "pin.slash" : "pin")
@@ -76,7 +83,7 @@ struct NoteRowView: View {
                     .transition(.opacity)
                 }
 
-                if let onDelete, isHovered {
+                if let onDelete, isHovered, !note.isLocked {
                     Button(action: onDelete) {
                         Image(systemName: "trash")
                             .font(.system(size: 11, weight: .medium))

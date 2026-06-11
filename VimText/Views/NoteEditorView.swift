@@ -41,6 +41,10 @@ struct NoteEditorView: View {
         viewModel.notes.first { $0.id == noteId }
     }
 
+    private var isLocked: Bool {
+        note?.isLocked == true
+    }
+
     private var editorHeader: some View {
         HStack(spacing: 8) {
 
@@ -72,6 +76,24 @@ struct NoteEditorView: View {
             // comfortably clickable, not 12pt slivers.
             HStack(spacing: 6) {
                 headerIconButton(
+                    icon: isLocked ? "lock.fill" : "lock.open",
+                    tint: isLocked ? theme.accent : nil,
+                    help: isLocked ? "Unlock Note (allow editing and deletion)" : "Lock Note (prevent editing and deletion)"
+                ) {
+                    if let note = note {
+                        withAnimation(DS.snappy) { viewModel.toggleLock(note) }
+                        if note.isLocked {
+                            vimEngine.statusMessage = "Note unlocked"
+                        } else {
+                            // Just locked: leave any half-open insert session.
+                            vimEngine.mode = .normal
+                            vimEngine.resetBuffers()
+                            vimEngine.statusMessage = "Note locked — editing and deletion disabled"
+                        }
+                    }
+                }
+
+                headerIconButton(
                     icon: note?.isPinned == true ? "pin.fill" : "pin",
                     tint: note?.isPinned == true ? theme.accent : nil,
                     help: note?.isPinned == true ? "Unpin Note" : "Pin Note"
@@ -81,9 +103,17 @@ struct NoteEditorView: View {
                     }
                 }
 
-                headerIconButton(icon: "trash", help: "Delete Note") {
-                    showDeleteConfirm = true
+                headerIconButton(
+                    icon: "trash",
+                    help: isLocked ? "Note is locked — unlock to delete" : "Delete Note"
+                ) {
+                    if isLocked {
+                        vimEngine.statusMessage = "Note is locked — unlock to delete"
+                    } else {
+                        showDeleteConfirm = true
+                    }
                 }
+                .opacity(isLocked ? 0.4 : 1)
 
                 headerIconButton(icon: "paintpalette", help: "Theme") {
                     showThemePicker.toggle()
@@ -268,7 +298,8 @@ struct NoteEditorView: View {
             accentColor: theme.accentNS,
             paperStyle: paperStyle,
             smartLists: smartLists,
-            showLineNumbers: showLineNumbers
+            showLineNumbers: showLineNumbers,
+            isLocked: isLocked
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(editorPaperFill)
@@ -455,6 +486,22 @@ struct NoteEditorView: View {
         HStack(spacing: 8) {
             // Mode Pill
             modeIndicator
+
+            // Locked pill — the persistent hint that the note is read-only.
+            if isLocked {
+                HStack(spacing: 4) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 10))
+                    Text("Locked")
+                        .font(.system(.caption, design: .default).weight(.semibold))
+                }
+                .foregroundStyle(theme.accent)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(theme.accent.opacity(theme.isDark ? 0.16 : 0.10), in: Capsule())
+                .overlay(Capsule().strokeBorder(theme.accent.opacity(0.3), lineWidth: 0.5))
+                .help("This note is read-only and can't be deleted. Click the lock in the toolbar to unlock.")
+            }
 
             // Save status only surfaces when something is happening — a
             // permanent "Saved ✓" pill is noise (Apple-style: silence = saved).
@@ -722,11 +769,11 @@ struct NoteEditorView: View {
             rtfData = note.rtfData ?? Data()
             wordCount = Self.countWords(note.content)
             hasLoaded = true
-            let isNewEmpty = note.content.isEmpty
+            let isNewEmpty = note.content.isEmpty && !note.isLocked
             startInInsertMode = isNewEmpty
             vimEngine.mode = isNewEmpty ? .insert : .normal
             vimEngine.resetBuffers()
-            vimEngine.statusMessage = ""
+            vimEngine.statusMessage = note.isLocked ? "Note is locked — unlock to edit" : ""
             vimEngine.showCommandLine = false
             if findController.isVisible {
                 closeFindBar()
