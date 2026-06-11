@@ -626,6 +626,9 @@ struct NoteListView: View {
             onTogglePin: {
                 withAnimation(DS.snappy) { viewModel.togglePin(note) }
             },
+            onToggleLock: {
+                withAnimation(DS.snappy) { viewModel.toggleLock(note) }
+            },
             onDelete: { noteToDelete = note },
             onTap: {
                 withAnimation(DS.spring) {
@@ -749,6 +752,7 @@ private struct NoteRowListItem: View {
     let isHighlighted: Bool
     let onCopyPath: () -> Void
     let onTogglePin: () -> Void
+    let onToggleLock: () -> Void
     let onDelete: () -> Void
     let onTap: () -> Void
 
@@ -778,6 +782,7 @@ private struct NoteRowListItem: View {
             isSelected: isSelected || isHighlighted,
             onCopyPath: onCopyPath,
             onTogglePin: onTogglePin,
+            onToggleLock: onToggleLock,
             onDelete: onDelete
         )
             .padding(.horizontal, 14)

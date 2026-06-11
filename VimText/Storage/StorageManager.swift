@@ -189,6 +189,9 @@ public final class StorageManager {
         var createdAt: Date
         var modifiedAt: Date
         var isPinned: Bool
+        // Optional so metadata written before the field existed still decodes
+        // (a required Bool would make every old note fail to load).
+        var isLocked: Bool?
         var rtfInSync: Bool
     }
 
@@ -245,7 +248,8 @@ public final class StorageManager {
                     folderId: meta.folderId,
                     createdAt: meta.createdAt,
                     modifiedAt: meta.modifiedAt,
-                    isPinned: meta.isPinned
+                    isPinned: meta.isPinned,
+                    isLocked: meta.isLocked ?? false
                 )
                 urlMap[note.id] = url
                 notes.append(note)
@@ -409,6 +413,7 @@ public final class StorageManager {
             createdAt: note.createdAt,
             modifiedAt: note.modifiedAt,
             isPinned: note.isPinned,
+            isLocked: note.isLocked,
             rtfInSync: rtfInSync && !(note.rtfData?.isEmpty ?? true)
         )
         guard let metaData = try? encoder.encode(meta) else {

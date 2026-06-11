@@ -6,6 +6,7 @@ struct NoteRowView: View {
     var isSelected: Bool = false
     var onCopyPath: (() -> Void)? = nil
     var onTogglePin: (() -> Void)? = nil
+    var onToggleLock: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var didCopy = false
@@ -28,6 +29,35 @@ struct NoteRowView: View {
         }
     }
 
+    private var lockStatusGlyph: some View {
+        Image(systemName: "lock.fill")
+            .font(.system(size: 10))
+            .foregroundStyle(theme.secondaryText.opacity(0.75))
+            .help("Locked — read-only, can't be deleted")
+    }
+
+    /// One consistent style for every hover action on a row: 20pt circle,
+    /// 11pt icon. Keeping them identical makes the row scannable — the lock
+    /// indicator no longer looks like a differently-drawn odd one out.
+    private func hoverIconButton(
+        icon: String,
+        tint: Color,
+        background: Color? = nil,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(background ?? theme.text.opacity(0.06)))
+        }
+        .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
+        .help(help)
+        .transition(.opacity)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -38,62 +68,71 @@ struct NoteRowView: View {
 
                 Spacer(minLength: 4)
 
-                if note.isLocked {
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(theme.secondaryText.opacity(0.75))
-                        .help("Locked — read-only, can't be deleted")
-                }
-
-                if let onTogglePin, isHovered {
-                    Button(action: onTogglePin) {
-                        Image(systemName: note.isPinned ? "pin.slash" : "pin")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(note.isPinned ? theme.accent : theme.secondaryText)
-                            .frame(width: 18, height: 18)
-                            .background(Circle().fill(theme.text.opacity(0.06)))
+                // Resting state shows compact status glyphs (lock/pin); on
+                // hover they become actionable buttons with one consistent
+                // 20pt circular style, ordered: lock · pin · copy · delete.
+                if isHovered {
+                    if let onToggleLock {
+                        hoverIconButton(
+                            icon: note.isLocked ? "lock.fill" : "lock.open",
+                            tint: note.isLocked ? theme.accent : theme.secondaryText,
+                            help: note.isLocked
+                                ? "Unlock note (allow editing and deletion)"
+                                : "Lock note (prevent editing and deletion)",
+                            action: onToggleLock
+                        )
+                    } else if note.isLocked {
+                        lockStatusGlyph
                     }
-                    .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
-                    .help(note.isPinned ? "Unpin note" : "Pin note")
-                    .transition(.opacity)
-                } else if note.isPinned {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(theme.accent)
-                }
 
-                if let onCopyPath, isHovered || didCopy {
-                    Button {
-                        onCopyPath()
-                        didCopy = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                            didCopy = false
+                    if let onTogglePin {
+                        hoverIconButton(
+                            icon: note.isPinned ? "pin.slash" : "pin",
+                            tint: note.isPinned ? theme.accent : theme.secondaryText,
+                            help: note.isPinned ? "Unpin note" : "Pin note",
+                            action: onTogglePin
+                        )
+                    }
+
+                    if let onCopyPath {
+                        hoverIconButton(
+                            icon: didCopy ? "checkmark" : "doc.on.doc",
+                            tint: didCopy ? theme.accent : theme.secondaryText,
+                            help: "Copy note file path"
+                        ) {
+                            onCopyPath()
+                            didCopy = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                                didCopy = false
+                            }
                         }
-                    } label: {
-                        Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(didCopy ? theme.accent : theme.secondaryText)
-                            .frame(width: 18, height: 18)
-                            .background(
-                                Circle().fill(theme.text.opacity(didCopy ? 0 : 0.06))
-                            )
                     }
-                    .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
-                    .help("Copy note file path")
-                    .transition(.opacity)
-                }
 
-                if let onDelete, isHovered, !note.isLocked {
-                    Button(action: onDelete) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.red.opacity(0.85))
-                            .frame(width: 18, height: 18)
-                            .background(Circle().fill(Color.red.opacity(0.08)))
+                    if let onDelete {
+                        if note.isLocked {
+                            hoverIconButton(
+                                icon: "trash.slash",
+                                tint: theme.secondaryText.opacity(0.55),
+                                help: "Locked — unlock to delete",
+                                action: {}
+                            )
+                        } else {
+                            hoverIconButton(
+                                icon: "trash",
+                                tint: Color.red.opacity(0.85),
+                                background: Color.red.opacity(0.08),
+                                help: "Delete note",
+                                action: onDelete
+                            )
+                        }
                     }
-                    .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
-                    .help("Delete note")
-                    .transition(.opacity)
+                } else {
+                    if note.isLocked { lockStatusGlyph }
+                    if note.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(theme.accent)
+                    }
                 }
             }
 

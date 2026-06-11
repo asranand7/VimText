@@ -538,7 +538,15 @@ func testStorageRoundTripRenameCollisionAndRTF() throws {
 
         note.title = "Second"
         note.content = "two"
+        note.isLocked = true
         try expectSuccess(manager.saveNote(note), "renamed save should succeed")
+
+        // isLocked must survive the metadata round-trip (it once silently
+        // dropped because NoteMetadata didn't carry the field).
+        try expectEqual(manager.loadNotes().first?.isLocked, true, "isLocked should persist across save/load")
+        note.isLocked = false
+        try expectSuccess(manager.saveNote(note), "unlock save should succeed")
+        try expectEqual(manager.loadNotes().first?.isLocked, false, "unlock should persist across save/load")
 
         try expect(!FileManager.default.fileExists(atPath: oldURL.path), "old metadata file should be removed after rename")
         try expect(!FileManager.default.fileExists(atPath: oldTextURL.path), "old text sidecar should be removed after rename")
