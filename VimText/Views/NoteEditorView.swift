@@ -67,42 +67,34 @@ struct NoteEditorView: View {
 
             Spacer()
 
-            // Right pill: pin · trash · theme │ Aa
-            HStack(spacing: 2) {
-                Button(action: {
+            // Right pill: pin · trash · theme │ Aa. Each icon sits in a
+            // 28×26 hover-highlighted hit area so targets are visible and
+            // comfortably clickable, not 12pt slivers.
+            HStack(spacing: 6) {
+                headerIconButton(
+                    icon: note?.isPinned == true ? "pin.fill" : "pin",
+                    tint: note?.isPinned == true ? theme.accent : nil,
+                    help: note?.isPinned == true ? "Unpin Note" : "Pin Note"
+                ) {
                     if let note = note {
                         withAnimation(DS.snappy) { viewModel.togglePin(note) }
                     }
-                }) {
-                    Image(systemName: note?.isPinned == true ? "pin.fill" : "pin")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(note?.isPinned == true ? theme.accent : theme.secondaryText.opacity(0.6))
                 }
-                .buttonStyle(PlainButtonStyle())
-                .help(note?.isPinned == true ? "Unpin Note" : "Pin Note")
 
-                Button(action: { showDeleteConfirm = true }) {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(theme.secondaryText.opacity(0.6))
+                headerIconButton(icon: "trash", help: "Delete Note") {
+                    showDeleteConfirm = true
                 }
-                .buttonStyle(PlainButtonStyle())
-                .help("Delete Note")
 
-                Button(action: { showThemePicker.toggle() }) {
-                    Image(systemName: "paintpalette")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(theme.secondaryText.opacity(0.6))
+                headerIconButton(icon: "paintpalette", help: "Theme") {
+                    showThemePicker.toggle()
                 }
-                .buttonStyle(PlainButtonStyle())
-                .help("Theme")
                 .popover(isPresented: $showThemePicker, arrowEdge: .bottom) {
                     themeSwatchPicker
                 }
 
                 Divider()
-                    .frame(height: 12)
-                    .padding(.horizontal, 3)
+                    .frame(height: 14)
+                    .padding(.horizontal, 2)
 
                 Menu {
                     fontSizeMenu
@@ -120,16 +112,15 @@ struct NoteEditorView: View {
                         .pickerStyle(.inline)
                     }
                 } label: {
-                    Image(systemName: "textformat.size")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(theme.secondaryText.opacity(0.6))
+                    HeaderIconLabel(icon: "textformat.size", tint: nil, theme: theme)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
+                .fixedSize()
                 .help("Font Settings")
             }
             .fixedSize()
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(.regularMaterial)
             .clipShape(Capsule())
@@ -548,6 +539,19 @@ struct NoteEditorView: View {
         .background(editorPaperFill)
     }
 
+    private func headerIconButton(
+        icon: String,
+        tint: Color? = nil,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HeaderIconLabel(icon: icon, tint: tint, theme: theme)
+        }
+        .buttonStyle(PressableIconButtonStyle(pressedScale: 0.92))
+        .help(help)
+    }
+
     /// A grid of theme swatches — each shows the theme's editor background,
     /// text color ("Aa"), and accent dot, so themes can be compared at a
     /// glance instead of guessing from a name in a text menu.
@@ -822,6 +826,32 @@ struct ToolbarButton: View {
 struct ToolbarButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         ToolbarButton(configuration: configuration)
+    }
+}
+
+/// Icon in a fixed 28×26 frame with a hover-highlight circle — the shared
+/// look for the editor header's action pill (buttons and menu labels alike).
+struct HeaderIconLabel: View {
+    let icon: String
+    let tint: Color?
+    let theme: AppTheme
+    @State private var isHovered = false
+
+    var body: some View {
+        Image(systemName: icon)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(tint ?? theme.secondaryText.opacity(isHovered ? 0.95 : 0.62))
+            .frame(width: 28, height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.primary.opacity(isHovered ? 0.08 : 0))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .onHover { hovering in
+                withAnimation(.spring(response: 0.18, dampingFraction: 0.85)) {
+                    isHovered = hovering
+                }
+            }
     }
 }
 
