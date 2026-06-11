@@ -6,6 +6,7 @@ struct NoteRowView: View {
     var isSelected: Bool = false
     var onCopyPath: (() -> Void)? = nil
     var onTogglePin: (() -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
     @EnvironmentObject private var themeManager: ThemeManager
     @State private var didCopy = false
 
@@ -72,6 +73,19 @@ struct NoteRowView: View {
                     }
                     .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
                     .help("Copy note file path")
+                    .transition(.opacity)
+                }
+
+                if let onDelete, isHovered {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.red.opacity(0.85))
+                            .frame(width: 18, height: 18)
+                            .background(Circle().fill(Color.red.opacity(0.08)))
+                    }
+                    .buttonStyle(PressableIconButtonStyle(pressedScale: 0.94))
+                    .help("Delete note")
                     .transition(.opacity)
                 }
             }

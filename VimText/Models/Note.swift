@@ -49,7 +49,12 @@ public struct Note: Identifiable, Codable, Hashable {
             .joined(separator: " ")
         // Drop embedded-image Markdown so previews read as prose, not raw refs.
         let withoutImages = ImageMarkdown.strippingImageRefs(from: previewLines)
-        let trimmed = withoutImages.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Tabs and runs of spaces (smart-list indentation, aligned columns)
+        // render as ragged gaps in a one-line preview, so collapse them.
+        let collapsed = withoutImages
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        let trimmed = collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "No additional text" : String(trimmed.prefix(120))
     }
 
@@ -60,13 +65,15 @@ public struct Note: Identifiable, Codable, Hashable {
         let indent = rest.prefix(while: { $0 == " " || $0 == "\t" })
         rest = rest.dropFirst(indent.count)
 
-        if let first = rest.first, "-*+•".contains(first), rest.dropFirst().first == " " {
+        if let first = rest.first, "-*+•".contains(first),
+           let gap = rest.dropFirst().first, gap == " " || gap == "\t" {
             return String(rest.dropFirst(2))
         }
         let digits = rest.prefix(while: \.isNumber)
         if !digits.isEmpty, digits.count <= 3 {
             let afterDigits = rest.dropFirst(digits.count)
-            if let sep = afterDigits.first, sep == "." || sep == ")", afterDigits.dropFirst().first == " " {
+            if let sep = afterDigits.first, sep == "." || sep == ")",
+               let gap = afterDigits.dropFirst().first, gap == " " || gap == "\t" {
                 return afterDigits.dropFirst(2).trimmingCharacters(in: .whitespaces)
             }
         }

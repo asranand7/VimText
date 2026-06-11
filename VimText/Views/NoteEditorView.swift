@@ -16,6 +16,7 @@ struct NoteEditorView: View {
     @State private var hasLoaded = false
     @State private var startInInsertMode = false
     @State private var showDeleteConfirm = false
+    @State private var showThemePicker = false
     @FocusState private var isFindFieldFocused: Bool
     @AppStorage(EditorPreferences.fontSizeKey) private var fontSize: Double = EditorPreferences.defaultFontSize
     @AppStorage("showLineNumbers") private var showLineNumbers: Bool = false
@@ -88,22 +89,16 @@ struct NoteEditorView: View {
                 .buttonStyle(PlainButtonStyle())
                 .help("Delete Note")
 
-                Menu {
-                    ForEach(AppTheme.all) { item in
-                        Button { themeManager.themeID = item.id } label: {
-                            if themeManager.themeID == item.id {
-                                Label(item.name, systemImage: "checkmark")
-                            } else { Text(item.name) }
-                        }
-                    }
-                } label: {
+                Button(action: { showThemePicker.toggle() }) {
                     Image(systemName: "paintpalette")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(theme.secondaryText.opacity(0.6))
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
+                .buttonStyle(PlainButtonStyle())
                 .help("Theme")
+                .popover(isPresented: $showThemePicker, arrowEdge: .bottom) {
+                    themeSwatchPicker
+                }
 
                 Divider()
                     .frame(height: 12)
@@ -508,7 +503,7 @@ struct NoteEditorView: View {
             
             // Word-count pill (reading time lives in the tooltip)
             HStack(spacing: 4) {
-                Image(systemName: "clock")
+                Image(systemName: "text.alignleft")
                     .font(.system(size: 10))
                 Text("\(wordCount.formatted()) words")
                     .font(.system(.caption, design: .default).weight(.semibold))
@@ -551,6 +546,60 @@ struct NoteEditorView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(editorPaperFill)
+    }
+
+    /// A grid of theme swatches — each shows the theme's editor background,
+    /// text color ("Aa"), and accent dot, so themes can be compared at a
+    /// glance instead of guessing from a name in a text menu.
+    private var themeSwatchPicker: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Theme")
+                .font(.system(.headline, design: .default))
+
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(72), spacing: 10), count: 4), spacing: 12) {
+                ForEach(AppTheme.all) { item in
+                    Button {
+                        themeManager.themeID = item.id
+                    } label: {
+                        VStack(spacing: 5) {
+                            ZStack(alignment: .bottomTrailing) {
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .fill(item.editorBackground)
+                                    .frame(width: 72, height: 44)
+                                    .overlay(
+                                        Text("Aa")
+                                            .font(.system(size: 15, weight: .semibold))
+                                            .foregroundStyle(item.text)
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                            .strokeBorder(
+                                                themeManager.themeID == item.id
+                                                    ? item.accent
+                                                    : Color.primary.opacity(0.12),
+                                                lineWidth: themeManager.themeID == item.id ? 2 : 1
+                                            )
+                                    )
+
+                                Circle()
+                                    .fill(item.accent)
+                                    .frame(width: 10, height: 10)
+                                    .overlay(Circle().strokeBorder(Color.white.opacity(0.6), lineWidth: 0.5))
+                                    .padding(5)
+                            }
+
+                            Text(item.name)
+                                .font(.system(size: 10, weight: themeManager.themeID == item.id ? .semibold : .regular))
+                                .foregroundStyle(themeManager.themeID == item.id ? theme.accent : .secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help(item.name)
+                }
+            }
+        }
+        .padding(16)
     }
 
     private var themeMenu: some View {
@@ -724,23 +773,28 @@ struct NoteEditorView: View {
         return ""
     }
 
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
-
     private func relativeTimeString(for date: Date) -> String {
         let elapsed = Date().timeIntervalSince(date)
         if elapsed < 60 {
             return "Saved just now"
-        } else if elapsed < 3600 {
-            let minutes = Int(elapsed / 60)
-            return "Edited \(minutes) min ago"
-        } else {
-            return "Edited " + formatDate(date)
         }
+        if elapsed < 3600 {
+            return "Edited \(Int(elapsed / 60)) min ago"
+        }
+        // Match the sidebar's friendly date buckets rather than a stiff
+        // "9 Jun 2026 at 11:35 PM" for notes touched recently.
+        let cal = Calendar.current
+        let time = AppDateFormatters.timeOnly.string(from: date)
+        if cal.isDateInToday(date) {
+            return "Edited today at \(time)"
+        }
+        if cal.isDateInYesterday(date) {
+            return "Edited yesterday at \(time)"
+        }
+        if let weekAgo = cal.date(byAdding: .day, value: -7, to: Date()), date > weekAgo {
+            return "Edited \(AppDateFormatters.weekday.string(from: date)) at \(time)"
+        }
+        return "Edited " + AppDateFormatters.shortDateTime.string(from: date)
     }
 }
 

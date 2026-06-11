@@ -15,29 +15,74 @@ public struct ContentView: View {
     }
 
     private var emptyDetail: some View {
-        VStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(theme.accent.opacity(theme.isDark ? 0.12 : 0.10))
-                    .frame(width: 84, height: 84)
-                Image(systemName: "sparkles")
-                    .font(.system(size: 34, weight: .light))
-                    .foregroundStyle(theme.accent)
-            }
+        VStack(spacing: 28) {
+            VStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(theme.accent.opacity(theme.isDark ? 0.12 : 0.10))
+                        .frame(width: 84, height: 84)
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 34, weight: .light))
+                        .foregroundStyle(theme.accent)
+                }
 
-            VStack(spacing: 6) {
                 Text("Capture ideas before they disappear.")
                     .font(.system(.title3, weight: .semibold))
                     .foregroundStyle(theme.text)
-                Text("Press ⌘N to start a new note, or ⌘K to search.")
-                    .font(.system(.subheadline))
-                    .foregroundStyle(theme.secondaryText)
+            }
+
+            HStack(alignment: .top, spacing: 40) {
+                shortcutColumn(title: "App", shortcuts: [
+                    ("⌘N", "New note"),
+                    ("⌘K", "Quick open"),
+                    ("⌘F", "Find in note"),
+                    ("⌘⇧F", "Search all notes"),
+                    ("⌘⌥B", "Toggle sidebar")
+                ])
+                shortcutColumn(title: "Vim", shortcuts: [
+                    ("i", "Insert mode"),
+                    ("esc", "Normal mode"),
+                    ("v", "Visual mode"),
+                    ("/", "Search in note"),
+                    (":w", "Save")
+                ])
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             VisualEffectView(material: .windowBackground, blendingMode: .behindWindow)
         )
+    }
+
+    private func shortcutColumn(title: String, shortcuts: [(String, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title)
+                .font(.system(.caption, weight: .bold))
+                .foregroundStyle(theme.secondaryText.opacity(0.7))
+                .padding(.bottom, 2)
+
+            ForEach(shortcuts, id: \.0) { keys, label in
+                HStack(spacing: 10) {
+                    Text(keys)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(theme.secondaryText)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2.5)
+                        .frame(minWidth: 38)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(theme.text.opacity(theme.isDark ? 0.08 : 0.05))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .strokeBorder(theme.separator.opacity(0.4), lineWidth: 0.5)
+                        )
+                    Text(label)
+                        .font(.system(.caption))
+                        .foregroundStyle(theme.secondaryText.opacity(0.85))
+                }
+            }
+        }
     }
 
     public init() {}

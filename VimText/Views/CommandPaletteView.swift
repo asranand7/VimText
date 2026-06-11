@@ -5,6 +5,7 @@ struct PaletteCommand: Identifiable {
     let id: String
     let name: String
     let icon: String
+    var shortcut: String? = nil
     let action: () -> Void
 }
 
@@ -24,15 +25,31 @@ class CommandPaletteState: ObservableObject {
     @Published var searchText = ""
     @Published var selectedIndex = 0
     @Published var results: [PaletteItem] = []
+    /// True when the latest selection change came from hover. Hover-driven
+    /// selection must not auto-scroll the list, or rows would slide out from
+    /// under the cursor and re-trigger hover in a feedback loop.
+    var selectionCameFromHover = false
+    /// Ids shown under the "Recent" header for the current (empty-query)
+    /// results; empty when a query is active.
+    private(set) var recentNoteIdSet: Set<UUID> = []
     private var searchGeneration = 0
     private var debounceItem: DispatchWorkItem?
 
     func getCommands(themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteCommand] {
         return [
-            PaletteCommand(id: "new_note", name: "Create New Note", icon: "square.and.pencil") {
+            PaletteCommand(id: "new_note", name: "Create New Note", icon: "square.and.pencil", shortcut: "⌘N") {
                 Task { @MainActor in
                     viewModel.createNote()
                 }
+            },
+            PaletteCommand(id: "duplicate_note", name: "Duplicate Current Note", icon: "plus.square.on.square", shortcut: "⌘D") {
+                NotificationCenter.default.post(name: .duplicateCurrentNote, object: nil)
+            },
+            PaletteCommand(id: "find_in_note", name: "Find in Note", icon: "magnifyingglass", shortcut: "⌘F") {
+                NotificationCenter.default.post(name: .findInNote, object: nil)
+            },
+            PaletteCommand(id: "toggle_sidebar", name: "Toggle Sidebar", icon: "sidebar.leading", shortcut: "⌘⌥B") {
+                NotificationCenter.default.post(name: .toggleSidebar, object: nil)
             },
             PaletteCommand(id: "change_location", name: "Change Notes Location…", icon: "folder.badge.gearshape") {
                 NotificationCenter.default.post(name: .openChangeLocationPanel, object: nil)
@@ -64,14 +81,14 @@ class CommandPaletteState: ObservableObject {
         ]
     }
     
-    func scheduleSearch(notes: [Note], themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) {
+    func scheduleSearch(notes: [Note], recentIds: [UUID], themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) {
         debounceItem?.cancel()
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         searchGeneration &+= 1
         let gen = searchGeneration
 
         if query.isEmpty {
-            results = buildItems(matched: notes, query: "", themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
+            results = buildItems(matched: notes, query: "", recentIds: recentIds, themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
             return
         }
 
@@ -79,7 +96,7 @@ class CommandPaletteState: ObservableObject {
             let matched = CommandPaletteState.matchingNotes(notes, query: query)
             DispatchQueue.main.async {
                 guard let self, gen == self.searchGeneration else { return }
-                self.results = self.buildItems(matched: matched, query: query, themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
+                self.results = self.buildItems(matched: matched, query: query, recentIds: recentIds, themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
             }
         }
         debounceItem = work
@@ -115,10 +132,27 @@ class CommandPaletteState: ObservableObject {
         return buckets.flatMap { $0 }
     }
 
-    func buildItems(matched: [Note], query: String, themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteItem] {
+    func buildItems(matched: [Note], query: String, recentIds: [UUID], themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteItem] {
         var items: [PaletteItem] = []
-        for note in matched where note.isPinned { items.append(.note(note)) }
-        for note in matched where !note.isPinned { items.append(.note(note)) }
+        if query.isEmpty, !recentIds.isEmpty {
+            // Empty query: recently opened notes first (recency order), then
+            // the rest by last modified. Section headers key off this set.
+            var byId = Dictionary(matched.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            var recents: [Note] = []
+            for id in recentIds {
+                if let note = byId.removeValue(forKey: id) { recents.append(note) }
+            }
+            let rest = matched
+                .filter { byId[$0.id] != nil }
+                .sorted { $0.modifiedAt > $1.modifiedAt }
+            recentNoteIdSet = Set(recents.map(\.id))
+            for note in recents { items.append(.note(note)) }
+            for note in rest { items.append(.note(note)) }
+        } else {
+            recentNoteIdSet = []
+            for note in matched where note.isPinned { items.append(.note(note)) }
+            for note in matched where !note.isPinned { items.append(.note(note)) }
+        }
         let filteredCommands = getCommands(themeManager: themeManager, viewModel: viewModel, dismiss: dismiss).filter { cmd in
             query.isEmpty || cmd.name.localizedCaseInsensitiveContains(query)
         }
@@ -221,6 +255,7 @@ struct CommandPaletteView: View {
                     }
                     .frame(maxHeight: .infinity)
                     .onChange(of: state.selectedIndex) { _, newIndex in
+                        guard !state.selectionCameFromHover else { return }
                         if newIndex >= 0 && newIndex < items.count {
                             withAnimation(.easeInOut(duration: 0.1)) {
                                 proxy.scrollTo(items[newIndex].id, anchor: .center)
@@ -330,11 +365,12 @@ struct CommandPaletteView: View {
             startWidth = width
             startHeight = height
             setupKeyboardMonitor()
-            state.scheduleSearch(notes: viewModel.notes, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
+            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
         }
         .onChange(of: state.searchText) {
+            state.selectionCameFromHover = false
             state.selectedIndex = 0
-            state.scheduleSearch(notes: viewModel.notes, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
+            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
         }
     }
     
@@ -382,12 +418,18 @@ struct CommandPaletteView: View {
                 .strokeBorder(isSelected ? theme.accent.opacity(0.35) : Color.clear, lineWidth: 0.8)
         )
         .contentShape(Rectangle())
+        .onHover { hovering in
+            if hovering {
+                state.selectionCameFromHover = true
+                state.selectedIndex = index
+            }
+        }
         .onTapGesture {
             state.selectedIndex = index
             selectCurrentItem()
         }
     }
-    
+
     @ViewBuilder
     private func paletteCommandRow(cmd: PaletteCommand, index: Int, isSelected: Bool) -> some View {
         HStack(spacing: 12) {
@@ -396,18 +438,26 @@ struct CommandPaletteView: View {
                 .foregroundStyle(isSelected ? theme.accent : theme.secondaryText)
                 .frame(width: 20, height: 20)
             
-            Text(cmd.name)
+            Text(highlightedText(cmd.name, query: state.searchText))
                 .font(.system(.body, design: .default).weight(.medium))
                 .foregroundStyle(theme.text)
-            
+
             Spacer()
-            
-            Text("Action")
-                .font(.caption2)
-                .foregroundStyle(theme.secondaryText.opacity(0.6))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.primary.opacity(0.05), in: Capsule())
+
+            // A real shortcut hint earns its pixels; a generic "Action"
+            // badge doesn't, so commands without one get nothing.
+            if let shortcut = cmd.shortcut {
+                Text(shortcut)
+                    .font(.system(size: 10, weight: .semibold, design: .default))
+                    .foregroundStyle(theme.secondaryText.opacity(0.75))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2.5)
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4.5, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                    )
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -420,12 +470,18 @@ struct CommandPaletteView: View {
                 .strokeBorder(isSelected ? theme.accent.opacity(0.35) : Color.clear, lineWidth: 0.8)
         )
         .contentShape(Rectangle())
+        .onHover { hovering in
+            if hovering {
+                state.selectionCameFromHover = true
+                state.selectedIndex = index
+            }
+        }
         .onTapGesture {
             state.selectedIndex = index
             selectCurrentItem()
         }
     }
-    
+
     private func dismiss() {
         withAnimation(.easeInOut(duration: 0.15)) {
             isPresented = false
@@ -466,6 +522,9 @@ struct CommandPaletteView: View {
         let curr = items[index]
         switch (prev, curr) {
         case (.note(let p), .note(let c)):
+            if !state.recentNoteIdSet.isEmpty {
+                return state.recentNoteIdSet.contains(p.id) != state.recentNoteIdSet.contains(c.id)
+            }
             return p.isPinned != c.isPinned
         case (.note, .command):
             return true
@@ -479,6 +538,9 @@ struct CommandPaletteView: View {
     private func sectionHeaderTitle(for item: PaletteItem) -> String {
         switch item {
         case .note(let note):
+            if !state.recentNoteIdSet.isEmpty {
+                return state.recentNoteIdSet.contains(note.id) ? "RECENT" : "NOTES"
+            }
             return note.isPinned ? "PINNED" : "NOTES"
         case .command:
             return "COMMANDS"
@@ -508,6 +570,7 @@ struct CommandPaletteView: View {
             if isUp {
                 let count = paletteState.results.count
                 if count > 0 {
+                    paletteState.selectionCameFromHover = false
                     paletteState.selectedIndex = (paletteState.selectedIndex - 1 + count) % count
                 }
                 return nil
@@ -515,6 +578,7 @@ struct CommandPaletteView: View {
             if isDown {
                 let count = paletteState.results.count
                 if count > 0 {
+                    paletteState.selectionCameFromHover = false
                     paletteState.selectedIndex = (paletteState.selectedIndex + 1) % count
                 }
                 return nil

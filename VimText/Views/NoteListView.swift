@@ -14,6 +14,7 @@ struct NoteListView: View {
     @State private var isSearchFocused = false
     @State private var isSearchHovered = false
     @State private var collapsedSections: Set<String> = []
+    @State private var noteToDelete: Note? = nil
 
     private var sidebarTintBinding: Binding<Color> {
         Binding(
@@ -160,7 +161,7 @@ struct NoteListView: View {
     /// A tappable section header with a disclosure chevron. Toggling adds/
     /// removes the title from `collapsedSections`, which `notesList` reads to
     /// hide the section's rows.
-    private func collapsibleSectionHeader(_ title: String) -> some View {
+    private func collapsibleSectionHeader(_ title: String, count: Int) -> some View {
         let isCollapsed = collapsedSections.contains(title)
         return Button {
             withAnimation(DS.snappy) {
@@ -180,6 +181,9 @@ struct NoteListView: View {
                     .font(.system(.caption, design: .default).weight(.bold))
                     .foregroundStyle(themeManager.sidebarTint)
                     .textCase(nil)
+                Text("· \(count)")
+                    .font(.system(.caption2, design: .default).weight(.semibold))
+                    .foregroundStyle(themeManager.sidebarTint.opacity(0.55))
                 Spacer()
             }
             .padding(.horizontal, 12)
@@ -491,6 +495,24 @@ struct NoteListView: View {
         } message: {
             Text("This will permanently delete \(selectedNoteIds.count) selected notes. This action cannot be undone.")
         }
+        .confirmationDialog(
+            "Delete \"\(noteToDelete?.displayTitle ?? "")\"?",
+            isPresented: Binding(
+                get: { noteToDelete != nil },
+                set: { if !$0 { noteToDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let note = noteToDelete {
+                    viewModel.deleteNote(note)
+                }
+                noteToDelete = nil
+            }
+            Button("Cancel", role: .cancel) { noteToDelete = nil }
+        } message: {
+            Text("This will permanently delete the note. This action cannot be undone.")
+        }
         .onReceive(NotificationCenter.default.publisher(for: .focusNoteSearch)) { _ in
             searchFocusTrigger.toggle()
         }
@@ -542,7 +564,7 @@ struct NoteListView: View {
                         let unpinned = notes.filter { !$0.isPinned }
 
                         if !pinned.isEmpty {
-                            collapsibleSectionHeader("Pinned")
+                            collapsibleSectionHeader("Pinned", count: pinned.count)
                             if !collapsedSections.contains("Pinned") {
                                 ForEach(pinned) { note in
                                     noteRow(note: note, flatIndex: 0, isSearching: false)
@@ -551,7 +573,7 @@ struct NoteListView: View {
                         }
 
                         ForEach(dateSections(unpinned), id: \.title) { section in
-                            collapsibleSectionHeader(section.title)
+                            collapsibleSectionHeader(section.title, count: section.notes.count)
                             if !collapsedSections.contains(section.title) {
                                 ForEach(section.notes) { note in
                                     noteRow(note: note, flatIndex: 0, isSearching: false)
@@ -598,6 +620,7 @@ struct NoteListView: View {
             onTogglePin: {
                 withAnimation(DS.snappy) { viewModel.togglePin(note) }
             },
+            onDelete: { noteToDelete = note },
             onTap: {
                 withAnimation(DS.spring) {
                     viewModel.selectedNoteId = note.id
@@ -711,6 +734,7 @@ private struct NoteRowListItem: View {
     let isHighlighted: Bool
     let onCopyPath: () -> Void
     let onTogglePin: () -> Void
+    let onDelete: () -> Void
     let onTap: () -> Void
 
     @EnvironmentObject private var themeManager: ThemeManager
@@ -738,7 +762,8 @@ private struct NoteRowListItem: View {
             isHovered: isHovered,
             isSelected: isSelected || isHighlighted,
             onCopyPath: onCopyPath,
-            onTogglePin: onTogglePin
+            onTogglePin: onTogglePin,
+            onDelete: onDelete
         )
             .padding(.horizontal, 14)
             .padding(.vertical, 3)

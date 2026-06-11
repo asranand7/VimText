@@ -21,7 +21,32 @@ enum NoteSaveState: Equatable {
 final class NotesViewModel: ObservableObject {
     @Published var notes: [Note] = []
     @Published var folders: [NoteFolder] = []
-    @Published var selectedNoteId: UUID?
+    @Published var selectedNoteId: UUID? {
+        didSet {
+            if let id = selectedNoteId, id != oldValue { recordRecentNote(id) }
+        }
+    }
+
+    /// Most-recently-opened note ids, newest first. Drives the command
+    /// palette's empty-query ordering. Persisted so recents survive relaunch.
+    private(set) var recentNoteIds: [UUID] = NotesViewModel.loadRecentNoteIds()
+
+    private static let recentNoteIdsKey = "recentNoteIds"
+    private static let recentNoteLimit = 15
+
+    private static func loadRecentNoteIds() -> [UUID] {
+        (UserDefaults.standard.stringArray(forKey: recentNoteIdsKey) ?? [])
+            .compactMap(UUID.init(uuidString:))
+    }
+
+    private func recordRecentNote(_ id: UUID) {
+        recentNoteIds.removeAll { $0 == id }
+        recentNoteIds.insert(id, at: 0)
+        if recentNoteIds.count > Self.recentNoteLimit {
+            recentNoteIds.removeLast(recentNoteIds.count - Self.recentNoteLimit)
+        }
+        UserDefaults.standard.set(recentNoteIds.map(\.uuidString), forKey: Self.recentNoteIdsKey)
+    }
     @Published var selectedFolderId: UUID?
     @Published var pendingSearchHighlight: String?
     @Published var searchText: String = ""
