@@ -58,11 +58,14 @@ class FindController: ObservableObject {
                 }
                 // ⌘K navigation mode: only Enter (passes through to onSubmit →
                 // next) and Shift+Return (handled above) operate; every other
-                // key dismisses, just like Escape.
+                // key dismisses, just like Escape — and then PASSES THROUGH to
+                // the editor (closeFromMonitor refocuses it synchronously), so
+                // e.g. `/` or `j` right after a ⌘K jump acts in the editor
+                // instead of being swallowed.
                 if self.navigationMode, self.isFieldFocused {
                     if event.keyCode == 36 { return event }
                     self.closeFromMonitor()
-                    return nil
+                    return event
                 }
             }
             return event

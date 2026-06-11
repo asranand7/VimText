@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 @testable import VimTextCore
 
@@ -452,6 +453,57 @@ func testNotesViewModelFiltering() throws {
     }
 }
 
+/// Drives the real `VimNSTextView.keyDown` path for `/watch⏎`, exactly as the
+/// app routes live keystrokes — regression test for "/ search does nothing".
+func testVimSlashSearchViaKeyDown() throws {
+    try MainActor.assumeIsolated {
+    _ = NSApplication.shared
+    let engine = VimEngine()
+    let parent = VimTextView(
+        initialText: "",
+        initialRTFData: Data(),
+        onContentChange: nil,
+        vimEngine: engine,
+        findController: nil,
+        onSave: nil,
+        font: NSFont.systemFont(ofSize: 14)
+    )
+    let coordinator = VimTextView.Coordinator(parent)
+    let textView = VimNSTextView()
+    textView.vimEngine = engine
+    textView.coordinator = coordinator
+    coordinator.textView = textView
+    textView.string = "alpha\nbravo watch\ncharlie watch"
+    textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+    func press(_ chars: String, code: UInt16) throws {
+        guard let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, characters: chars,
+            charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code
+        ) else { throw SmokeTestFailure.failed("could not synthesize key event for \(chars)") }
+        textView.keyDown(with: event)
+    }
+
+    try press("/", code: 44)
+    try expect(engine.mode == .command, "/ should enter command mode")
+    try expect(engine.isSearchMode, "/ should arm search mode")
+    try expect(engine.showCommandLine, "/ should show the command line")
+
+    for ch in "watch" { try press(String(ch), code: 0) }
+    try expectEqual(engine.commandLineText, "watch", "typed term should accumulate in the command line")
+
+    try press("\r", code: 36)
+    try expect(engine.mode == .normal, "Enter should return to normal mode")
+    try expectEqual(textView.selectedRange().location, 12, "cursor should land on the first match")
+    try expectEqual(engine.searchTerm, "watch", "search register should hold the term for n/N")
+
+    // n should jump to the next match (second "watch", after wrap-forward).
+    try press("n", code: 45)
+    try expectEqual(textView.selectedRange().location, 26, "n should advance to the next match")
+    }
+}
+
 func testVimCommandExecution() throws {
     let engine = VimEngine()
     try expectEqual(engine.executeCommand("42"), [.goToLine(42)], ":42 should go to line 42")
@@ -605,6 +657,7 @@ let tests: [(String, () throws -> Void)] = [
     ("Storage image assets", testStorageImageAssets),
     ("Notes view-model filtering", testNotesViewModelFiltering),
     ("Vim command execution", testVimCommandExecution),
+    ("Vim / search via keyDown", testVimSlashSearchViaKeyDown),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
     ("Command Palette search matching", testCommandPaletteSearchMatching)

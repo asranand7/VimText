@@ -496,7 +496,7 @@ class VimNSTextView: NSTextView {
         }
 
         let isEsc = event.keyCode == 53
-        let isReturn = event.keyCode == 36
+        let isReturn = event.keyCode == 36 || event.keyCode == 76 // Return / keypad Enter
         let isBackspace = event.keyCode == 51
         let isTab = event.keyCode == 48
 
@@ -525,7 +525,12 @@ class VimNSTextView: NSTextView {
                     engine.commandLineText.removeLast()
                 }
             } else if let chars = event.characters {
-                engine.commandLineText += chars
+                // Arrow/function keys carry invisible F700-range characters
+                // that would silently corrupt the search term — drop them.
+                let printable = chars.unicodeScalars.filter {
+                    !(0xF700...0xF8FF).contains(Int($0.value)) && $0 != "\u{7F}"
+                }
+                engine.commandLineText += String(String.UnicodeScalarView(printable))
             }
             return
         }
