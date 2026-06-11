@@ -466,120 +466,63 @@ struct NoteEditorView: View {
         max(1, Int(ceil(Double(wordCount) / 200.0)))
     }
 
-    private var paperStyleIconName: String {
-        switch paperStyle {
-        case "dotted": return "grid"
-        case "lined": return "list.bullet.indent"
-        default: return "doc.text"
-        }
-    }
-
-    private var paperStyleDisplayName: String {
-        switch paperStyle {
-        case "dotted": return "Dotted"
-        case "lined": return "Lined"
-        default: return "Plain"
-        }
-    }
-
+    // Calm statusline: quiet text everywhere, color only for state changes.
+    // NORMAL (the default 95% of the time) is muted; the mode only becomes a
+    // colored pill when you LEAVE normal mode — that's the signal worth ink.
     private var statusBar: some View {
-        HStack(spacing: 8) {
-            // Mode Pill
+        HStack(spacing: 14) {
             modeIndicator
 
-            // Locked pill — the persistent hint that the note is read-only.
+            // Locked hint — quiet text; the lock glyph carries the meaning.
             if isLocked {
                 HStack(spacing: 4) {
                     Image(systemName: "lock.fill")
-                        .font(.system(size: 10))
-                    Text("Locked")
-                        .font(.system(.caption, design: .default).weight(.semibold))
+                        .font(.system(size: 9))
+                    Text("locked")
+                        .font(.system(.caption, design: .default).weight(.medium))
                 }
-                .foregroundStyle(theme.accent)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 3)
-                .background(theme.accent.opacity(theme.isDark ? 0.16 : 0.10), in: Capsule())
-                .overlay(Capsule().strokeBorder(theme.accent.opacity(0.3), lineWidth: 0.5))
+                .foregroundStyle(theme.secondaryText.opacity(0.8))
                 .help("This note is read-only and can't be deleted. Click the lock in the toolbar to unlock.")
             }
 
             // Save status only surfaces when something is happening — a
-            // permanent "Saved ✓" pill is noise (Apple-style: silence = saved).
+            // permanent "Saved ✓" indicator is noise (silence = saved).
             if viewModel.saveState != .saved {
                 HStack(spacing: 4) {
                     Image(systemName: saveStateIconName)
                         .font(.system(size: 10))
                         .foregroundStyle(saveStateColor)
                     Text(viewModel.saveState.displayText)
-                        .font(.system(.caption, design: .default).weight(.semibold))
+                        .font(.system(.caption, design: .default).weight(.medium))
+                        .foregroundStyle(theme.secondaryText)
                 }
-                .foregroundStyle(theme.secondaryText)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 3)
-                .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
-                .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
                 .help(saveStateHelp)
             }
 
             if !vimEngine.statusMessage.isEmpty {
-                HStack(spacing: 4) {
-                    Image(systemName: "terminal")
-                        .font(.system(size: 10))
-                    Text(vimEngine.statusMessage)
-                        .font(.system(.caption, design: .monospaced).weight(.medium))
-                        .lineLimit(1)
-                }
-                .foregroundStyle(theme.secondaryText)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 3)
-                .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
-                .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
-                .frame(maxWidth: 260, alignment: .leading)
-            }
-            
-            Spacer()
-            
-            // Word-count pill (reading time lives in the tooltip)
-            HStack(spacing: 4) {
-                Image(systemName: "text.alignleft")
-                    .font(.system(size: 10))
-                Text("\(wordCount.formatted()) words")
-                    .font(.system(.caption, design: .default).weight(.semibold))
-            }
-            .foregroundStyle(theme.secondaryText)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 3)
-            .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
-            .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
-            .help("\(readingTime) min read")
-
-            // Paper Style pill — only when a non-default paper is active.
-            if paperStyle != "plain" {
-                HStack(spacing: 4) {
-                    Image(systemName: paperStyleIconName)
-                        .font(.system(size: 10))
-                    Text(paperStyleDisplayName)
-                        .font(.system(.caption, design: .default).weight(.medium))
-                }
-                .foregroundStyle(theme.secondaryText)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 3)
-                .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
-                .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
-            }
-            
-            // Cursor Coordinates Pill
-            HStack(spacing: 4) {
-                Image(systemName: "scope")
-                    .font(.system(size: 10))
-                Text(cursorInfo)
+                Text(vimEngine.statusMessage)
                     .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(theme.secondaryText)
+                    .lineLimit(1)
+                    .frame(maxWidth: 280, alignment: .leading)
             }
-            .foregroundStyle(theme.secondaryText)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 3)
-            .background(theme.text.opacity(theme.isDark ? 0.08 : 0.04), in: Capsule())
-            .overlay(Capsule().strokeBorder(theme.separator.opacity(0.3), lineWidth: 0.5))
+
+            Spacer()
+
+            // Counts as one quiet trailing line: "48 words · 7:31"
+            // (reading time in the words tooltip, Vim-style ruler for Ln:Col).
+            HStack(spacing: 7) {
+                Text("\(wordCount.formatted()) words")
+                    .font(.system(.caption, design: .default))
+                    .help("\(readingTime) min read")
+                Text("·")
+                    .font(.system(.caption, design: .default))
+                    .opacity(0.6)
+                Text("\(vimEngine.cursorLine):\(vimEngine.cursorCol)")
+                    .font(.system(.caption, design: .monospaced))
+                    .help("Line \(vimEngine.cursorLine), column \(vimEngine.cursorCol)")
+            }
+            .foregroundStyle(theme.secondaryText.opacity(0.85))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -673,19 +616,30 @@ struct NoteEditorView: View {
         .help("Theme")
     }
 
+    @ViewBuilder
     private var modeIndicator: some View {
-        Text(vimEngine.mode.displayName)
-            .font(.system(.caption, design: .default).weight(.bold))
-            .foregroundStyle(modeTextColor)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 3)
-            .background(modeFillColor, in: Capsule())
-            .overlay(
-                Capsule()
-                    .strokeBorder(modeStrokeColor, lineWidth: 0.6)
-            )
-            .shadow(color: modeFillColor.opacity(theme.isMonochrome ? 0.12 : 0.35), radius: 3, y: 1)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: vimEngine.mode)
+        if vimEngine.mode == .normal {
+            // The default state looks default: quiet uppercase text. A
+            // permanently-lit pill carries no information.
+            Text("NORMAL")
+                .font(.system(size: 10.5, weight: .semibold))
+                .kerning(0.6)
+                .foregroundStyle(theme.secondaryText.opacity(0.65))
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: vimEngine.mode)
+        } else {
+            Text(vimEngine.mode.displayName)
+                .font(.system(.caption, design: .default).weight(.bold))
+                .foregroundStyle(modeTextColor)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 3)
+                .background(modeFillColor, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(modeStrokeColor, lineWidth: 0.6)
+                )
+                .shadow(color: modeFillColor.opacity(theme.isMonochrome ? 0.12 : 0.35), radius: 3, y: 1)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: vimEngine.mode)
+        }
     }
 
     private var saveStateIconName: String {
@@ -757,10 +711,6 @@ struct NoteEditorView: View {
             .keyboardShortcut("-", modifiers: .command)
         Button("Reset Font Size") { fontSize = EditorPreferences.resetFontSize() }
             .keyboardShortcut("0", modifiers: .command)
-    }
-
-    private var cursorInfo: String {
-        "Ln \(vimEngine.cursorLine), Col \(vimEngine.cursorCol)"
     }
 
     private func loadNote() {
