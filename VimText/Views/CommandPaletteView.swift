@@ -93,7 +93,7 @@ class CommandPaletteState: ObservableObject {
         }
 
         let work = DispatchWorkItem { [weak self] in
-            let matched = CommandPaletteState.matchingNotes(notes, query: query)
+            let matched = CommandPaletteState.matchingNotes(notes, query: query, recentIds: recentIds)
             DispatchQueue.main.async {
                 guard let self, gen == self.searchGeneration else { return }
                 self.results = self.buildItems(matched: matched, query: query, recentIds: recentIds, themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
@@ -103,33 +103,72 @@ class CommandPaletteState: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
-    static func matchingNotes(_ notes: [Note], query: String) -> [Note] {
+    /// Ranked search: notes are scored (see `scoreNote`) and returned best
+    /// first, instead of filtered in storage order.
+    static func matchingNotes(_ notes: [Note], query: String, recentIds: [UUID] = []) -> [Note] {
         if query.isEmpty { return notes }
+        var recencyRank: [UUID: Int] = [:]
+        for (i, id) in recentIds.enumerated() { recencyRank[id] = i }
+
         let count = notes.count
+        var scored: [(note: Note, score: Int)]
         if count < 200 {
-            return notes.filter {
-                $0.title.localizedCaseInsensitiveContains(query) || $0.content.localizedCaseInsensitiveContains(query)
+            scored = notes.compactMap { note in
+                scoreNote(note, query: query, recencyRank: recencyRank).map { (note, $0) }
             }
-        }
-        let cores = min(ProcessInfo.processInfo.activeProcessorCount, count)
-        let chunk = (count + cores - 1) / cores
-        var buckets = [[Note]](repeating: [], count: cores)
-        buckets.withUnsafeMutableBufferPointer { buf in
-            DispatchQueue.concurrentPerform(iterations: cores) { k in
-                let lo = k * chunk
-                let hi = min(lo + chunk, count)
-                guard lo < hi else { return }
-                var local: [Note] = []
-                for i in lo..<hi {
-                    let n = notes[i]
-                    if n.title.localizedCaseInsensitiveContains(query) || n.content.localizedCaseInsensitiveContains(query) {
-                        local.append(n)
+        } else {
+            let cores = min(ProcessInfo.processInfo.activeProcessorCount, count)
+            let chunk = (count + cores - 1) / cores
+            var buckets = [[(note: Note, score: Int)]](repeating: [], count: cores)
+            buckets.withUnsafeMutableBufferPointer { buf in
+                DispatchQueue.concurrentPerform(iterations: cores) { k in
+                    let lo = k * chunk
+                    let hi = min(lo + chunk, count)
+                    guard lo < hi else { return }
+                    var local: [(note: Note, score: Int)] = []
+                    for i in lo..<hi {
+                        if let s = scoreNote(notes[i], query: query, recencyRank: recencyRank) {
+                            local.append((notes[i], s))
+                        }
                     }
+                    buf[k] = local
                 }
-                buf[k] = local
             }
+            scored = buckets.flatMap { $0 }
         }
-        return buckets.flatMap { $0 }
+        return scored
+            .sorted { $0.score != $1.score ? $0.score > $1.score : $0.note.modifiedAt > $1.note.modifiedAt }
+            .map(\.note)
+    }
+
+    /// Relevance score for one note, or nil if the query doesn't match it.
+    /// Weights: title substring (with a prefix bonus) ≫ fuzzy title match ≫
+    /// content substring, plus flat boosts for pinned and recently opened
+    /// notes. The weights only need to preserve that ordering — their exact
+    /// values are taste, not science.
+    static func scoreNote(_ note: Note, query: String, recencyRank: [UUID: Int]) -> Int? {
+        var score = 0
+        var matched = false
+        // Folding lets a straight-quote query match smart-quote note text.
+        let query = query.searchFolded
+        let title = note.displayTitle.searchFolded
+        if let r = title.range(of: query, options: .caseInsensitive) {
+            matched = true
+            score += 100
+            if r.lowerBound == title.startIndex { score += 30 }
+        }
+        if let fuzzy = FuzzySearch.match(query, in: title), fuzzy.score > 0 {
+            matched = true
+            score += fuzzy.score * 2
+        }
+        if note.content.searchFolded.range(of: query, options: .caseInsensitive) != nil {
+            matched = true
+            score += 40
+        }
+        guard matched else { return nil }
+        if note.isPinned { score += 25 }
+        if let rank = recencyRank[note.id] { score += max(0, 30 - rank * 4) }
+        return score
     }
 
     func buildItems(matched: [Note], query: String, recentIds: [UUID], themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteItem] {
@@ -148,13 +187,26 @@ class CommandPaletteState: ObservableObject {
             recentNoteIdSet = Set(recents.map(\.id))
             for note in recents { items.append(.note(note)) }
             for note in rest { items.append(.note(note)) }
-        } else {
+        } else if query.isEmpty {
             recentNoteIdSet = []
             for note in matched where note.isPinned { items.append(.note(note)) }
             for note in matched where !note.isPinned { items.append(.note(note)) }
+        } else {
+            // Query active: `matched` is already in relevance order (pinned is
+            // a score boost, not a section), so keep it intact.
+            recentNoteIdSet = []
+            for note in matched { items.append(.note(note)) }
         }
-        let filteredCommands = getCommands(themeManager: themeManager, viewModel: viewModel, dismiss: dismiss).filter { cmd in
-            query.isEmpty || cmd.name.localizedCaseInsensitiveContains(query)
+        let commands = getCommands(themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
+        let filteredCommands: [PaletteCommand]
+        if query.isEmpty {
+            filteredCommands = commands
+        } else {
+            filteredCommands = commands
+                .compactMap { cmd in FuzzySearch.match(query, in: cmd.name).map { (cmd, $0.score) } }
+                .filter { $0.1 > 0 }
+                .sorted { $0.1 > $1.1 }
+                .map { $0.0 }
         }
         for cmd in filteredCommands { items.append(.command(cmd)) }
         return items
@@ -388,7 +440,7 @@ struct CommandPaletteView: View {
     private func paletteNoteRow(note: Note, index: Int, isSelected: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
-                Text(highlightedText(note.displayTitle, query: state.searchText))
+                Text(highlightedText(note.displayTitle, query: state.searchText, fuzzyFallback: true))
                     .font(.system(.body, design: .default).weight(.semibold))
                     .foregroundStyle(theme.text)
                 Spacer()
@@ -438,7 +490,7 @@ struct CommandPaletteView: View {
                 .foregroundStyle(isSelected ? theme.accent : theme.secondaryText)
                 .frame(width: 20, height: 20)
             
-            Text(highlightedText(cmd.name, query: state.searchText))
+            Text(highlightedText(cmd.name, query: state.searchText, fuzzyFallback: true))
                 .font(.system(.body, design: .default).weight(.medium))
                 .foregroundStyle(theme.text)
 
@@ -525,6 +577,9 @@ struct CommandPaletteView: View {
             if !state.recentNoteIdSet.isEmpty {
                 return state.recentNoteIdSet.contains(p.id) != state.recentNoteIdSet.contains(c.id)
             }
+            // Ranked results interleave pinned and unpinned notes; splitting
+            // them into sections would imply an ordering that isn't there.
+            if !state.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
             return p.isPinned != c.isPinned
         case (.note, .command):
             return true
@@ -541,6 +596,7 @@ struct CommandPaletteView: View {
             if !state.recentNoteIdSet.isEmpty {
                 return state.recentNoteIdSet.contains(note.id) ? "RECENT" : "NOTES"
             }
+            if !state.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "NOTES" }
             return note.isPinned ? "PINNED" : "NOTES"
         case .command:
             return "COMMANDS"
@@ -587,20 +643,45 @@ struct CommandPaletteView: View {
         }
     }
     
-    private func highlightedText(_ text: String, query: String) -> AttributedString {
+    /// `fuzzyFallback` marks the fuzzy-matched characters when no contiguous
+    /// substring run exists (e.g. "sgs" → **S**hreya **G**ifting **S**trategy).
+    /// Only titles/command names opt in — scattered per-character highlights
+    /// read as noise in preview text.
+    private func highlightedText(_ text: String, query: String, fuzzyFallback: Bool = false) -> AttributedString {
         var attr = AttributedString(text)
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return attr }
-        var searchStart = text.startIndex
-        while let r = text.range(of: q, options: .caseInsensitive, range: searchStart..<text.endIndex) {
-            if let lo = AttributedString.Index(r.lowerBound, within: attr),
-               let hi = AttributedString.Index(r.upperBound, within: attr) {
+        var didHighlight = false
+        // Match against folded text (so "don't" finds "don't"), then map each
+        // range back to the original via UTF-16 offsets — folding is 1:1, so
+        // the offsets line up.
+        let foldedText = text.searchFolded
+        let foldedQuery = q.searchFolded
+        var searchStart = foldedText.startIndex
+        while let r = foldedText.range(of: foldedQuery, options: .caseInsensitive, range: searchStart..<foldedText.endIndex) {
+            if let orig = Range(NSRange(r, in: foldedText), in: text),
+               let lo = AttributedString.Index(orig.lowerBound, within: attr),
+               let hi = AttributedString.Index(orig.upperBound, within: attr) {
                 attr[lo..<hi].backgroundColor = theme.accent.opacity(0.3)
                 attr[lo..<hi].foregroundColor = theme.text
                 attr[lo..<hi].inlinePresentationIntent = .stronglyEmphasized
+                didHighlight = true
             }
-            if r.upperBound >= text.endIndex { break }
+            if r.upperBound >= foldedText.endIndex { break }
             searchStart = r.upperBound
+        }
+        if fuzzyFallback, !didHighlight, let match = FuzzySearch.match(q, in: text) {
+            let charIndices = Array(text.indices)
+            for offset in match.matchedOffsets where offset < charIndices.count {
+                let lo = charIndices[offset]
+                let hi = text.index(after: lo)
+                if let alo = AttributedString.Index(lo, within: attr),
+                   let ahi = AttributedString.Index(hi, within: attr) {
+                    attr[alo..<ahi].backgroundColor = theme.accent.opacity(0.3)
+                    attr[alo..<ahi].foregroundColor = theme.text
+                    attr[alo..<ahi].inlinePresentationIntent = .stronglyEmphasized
+                }
+            }
         }
         return attr
     }

@@ -648,6 +648,63 @@ func testCommandPaletteSearchMatching() throws {
     try expectEqual(emptyQueryMatch.count, 4, "Empty query should return all notes")
 }
 
+func testFuzzySearchAndRanking() throws {
+    // Subsequence matching: initials find the note, missing letters don't.
+    let initials = FuzzySearch.match("sgs", in: "Shreya Gifting Strategy")
+    try expect(initials != nil, "Initials 'sgs' should fuzzy-match 'Shreya Gifting Strategy'")
+    try expectEqual(initials!.matchedOffsets, [0, 7, 15], "Fuzzy match should land on the word starts")
+    try expect(FuzzySearch.match("xyz", in: "Shreya Gifting Strategy") == nil,
+               "Out-of-order/missing letters must not match")
+    try expect(FuzzySearch.match("", in: "anything")?.score == 0, "Empty query matches with zero score")
+
+    // Word-prefix matches outrank mid-word ones; tight beats scattered.
+    let prefix = FuzzySearch.match("gift", in: "Gifting ideas")!.score
+    let midWord = FuzzySearch.match("gift", in: "Regifting")!.score
+    try expect(prefix > midWord, "Word-prefix match should outscore mid-word match")
+    let tight = FuzzySearch.match("note", in: "notes")!.score
+    let scattered = FuzzySearch.match("note", in: "no quote either")!.score
+    try expect(tight > scattered, "Consecutive match should outscore scattered match")
+
+    // Note ranking: title hits beat content hits; recency boosts ties.
+    let titleHit = Note(title: "Wifi password home", content: "air67996")
+    let contentHit = Note(title: "Random scribbles", content: "the wifi here is slow")
+    let ranked = CommandPaletteState.matchingNotes([contentHit, titleHit], query: "wifi")
+    try expectEqual(ranked.first?.id, titleHit.id, "Title match should rank above content match")
+
+    let a = Note(title: "Meeting notes A", content: "")
+    let b = Note(title: "Meeting notes B", content: "")
+    let recentFirst = CommandPaletteState.matchingNotes([a, b], query: "meeting", recentIds: [b.id])
+    try expectEqual(recentFirst.first?.id, b.id, "Recently opened note should win a score tie")
+
+    let noMatch = CommandPaletteState.matchingNotes([titleHit, contentHit], query: "qqqq")
+    try expectEqual(noMatch.count, 0, "Unmatchable query should return nothing")
+}
+
+func testSearchQuoteFolding() throws {
+    // The folding itself: typographic punctuation → ASCII, 1:1 in UTF-16
+    // (the find/highlight paths rely on offsets staying valid).
+    try expectEqual("don\u{2019}t".searchFolded, "don't", "Curly apostrophe should fold to straight")
+    try expectEqual("\u{201C}hi\u{201D} \u{2014} ok".searchFolded, "\"hi\" - ok", "Smart quotes and em dash should fold")
+    try expectEqual("plain text".searchFolded, "plain text", "ASCII text should be untouched")
+    try expectEqual(
+        ("a\u{2019}b\u{201C}c" as NSString).length,
+        ("a\u{2019}b\u{201C}c".searchFolded as NSString).length,
+        "Folding must preserve UTF-16 length"
+    )
+
+    // End to end: a straight-quote query finds smart-quote note text in both
+    // the palette scorer and the sidebar filter.
+    let smartNote = Note(title: "Gift ideas", content: "Bluetooth earphones \u{2014} you don\u{2019}t use them")
+    let palette = CommandPaletteState.matchingNotes([smartNote], query: "don't")
+    try expectEqual(palette.count, 1, "Palette: straight-quote query should match smart-quote content")
+    let sidebar = MainActor.assumeIsolated {
+        NotesViewModel.computeFilteredNotes(
+            notes: [smartNote], showAllNotes: true, selectedFolderId: nil, searchText: "don't"
+        )
+    }
+    try expectEqual(sidebar.count, 1, "Sidebar: straight-quote query should match smart-quote content")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("Note model derived text", testNoteModelDerivedText),
     ("Editor preferences font sizing", testEditorPreferencesFontSizing),
@@ -668,7 +725,9 @@ let tests: [(String, () throws -> Void)] = [
     ("Vim / search via keyDown", testVimSlashSearchViaKeyDown),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
-    ("Command Palette search matching", testCommandPaletteSearchMatching)
+    ("Command Palette search matching", testCommandPaletteSearchMatching),
+    ("Fuzzy search and palette ranking", testFuzzySearchAndRanking),
+    ("Search smart-quote folding", testSearchQuoteFolding)
 ]
 
 do {

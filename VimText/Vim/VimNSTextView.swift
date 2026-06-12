@@ -72,7 +72,10 @@ class VimNSTextView: NSTextView {
     /// Scans for `term` and highlights all matches. Used by the Vim `/` search.
     func highlightAllMatches(term: String) {
         guard !term.isEmpty else { clearSearchHighlights(); return }
-        let nsString = self.string as NSString
+        // Folded so straight-quote queries match smart-quote text; folding is
+        // 1:1 in UTF-16, so the highlight ranges are valid in the original.
+        let term = term.searchFolded
+        let nsString = self.string.searchFolded as NSString
         let length = nsString.length
         guard length > 0 else { clearSearchHighlights(); return }
 

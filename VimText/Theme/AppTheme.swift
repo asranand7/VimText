@@ -107,6 +107,16 @@ extension AppTheme {
         editorBg: "282828", surfaceBg: "3C3836", textColor: "EBDBB2",
         secondaryColor: "A89984", accentColor: "FE8019", separatorColor: "504945"
     )
+    static let anthropic = AppTheme(
+        id: "anthropic", name: "Anthropic", isDark: false,
+        editorBg: "FAF9F5", surfaceBg: "F0EEE6", textColor: "141413",
+        secondaryColor: "87867F", accentColor: "D97757", separatorColor: "E8E6DC"
+    )
+    static let anthropicDark = AppTheme(
+        id: "anthropic-dark", name: "Anthropic Dark", isDark: true,
+        editorBg: "262624", surfaceBg: "30302E", textColor: "F0EEE6",
+        secondaryColor: "A6A39A", accentColor: "D97757", separatorColor: "3E3D3A"
+    )
     static let solarizedDark = AppTheme(
         id: "solarized-dark", name: "Solarized Dark", isDark: true,
         editorBg: "002B36", surfaceBg: "073642", textColor: "93A1A1",
@@ -115,8 +125,8 @@ extension AppTheme {
 
     static let all: [AppTheme] = [
         indigo, sageGreen, graphite, lavender, sand, oceanBlue,
-        light, dark, ink, gray, catppuccinLatte, catppuccinMocha,
-        nord, dracula, gruvbox, solarizedDark
+        anthropic, anthropicDark, light, dark, ink, gray,
+        catppuccinLatte, catppuccinMocha, nord, dracula, gruvbox, solarizedDark
     ]
 
     static func theme(id: String) -> AppTheme {

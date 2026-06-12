@@ -92,9 +92,11 @@ final class NotesViewModel: ObservableObject {
         }
 
         if !searchText.isEmpty {
+            // Folded so a straight-quote query matches smart-quote note text.
+            let query = searchText.searchFolded
             result = result.filter {
-                $0.title.range(of: searchText, options: .caseInsensitive) != nil ||
-                $0.content.range(of: searchText, options: .caseInsensitive) != nil
+                $0.title.searchFolded.range(of: query, options: .caseInsensitive) != nil ||
+                $0.content.searchFolded.range(of: query, options: .caseInsensitive) != nil
             }
         }
 

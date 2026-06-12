@@ -123,7 +123,11 @@ extension VimTextView {
                 return
             }
 
-            let nsString = textView.string as NSString
+            // Search the folded text so straight quotes match smart quotes;
+            // folding is 1:1 in UTF-16, so the ranges are valid in the
+            // live text storage.
+            let query = query.searchFolded
+            let nsString = textView.string.searchFolded as NSString
             let length = nsString.length
             var searchRange = NSRange(location: 0, length: length)
 
@@ -1729,7 +1733,10 @@ extension VimTextView {
         }
 
         private func searchAndMoveCursor(term: String, forward: Bool, in textView: VimNSTextView) {
-            let nsString = textView.string as NSString
+            // Folded so `/don't` typed with a straight quote finds the smart
+            // quotes the editor inserts; offsets stay valid in the original.
+            let term = term.searchFolded
+            let nsString = textView.string.searchFolded as NSString
             let length = nsString.length
             guard length > 0, !term.isEmpty else { return }
 
