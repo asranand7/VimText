@@ -255,6 +255,7 @@ extension VimTextView {
             notifyContentChange()
 
             textView.restyleCodeBlocks(baseFont: parent.font)
+            textView.refreshLinkHighlights()
 
             // Re-scan find matches if the find bar is open
             if parent.findController?.isVisible == true,
@@ -1353,6 +1354,13 @@ extension VimTextView {
             case .clearSearchHighlight:
                 searchHighlightTimer?.cancel()
                 textView.clearSearchHighlights()
+
+            case .openLinkUnderCursor:
+                if let hit = textView.link(at: cursorPos) {
+                    textView.openLink(hit.url)
+                } else {
+                    parent.vimEngine.statusMessage = "No link under cursor"
+                }
 
             case .centerCursor(let alignment):
                 scrollCursorToPosition(alignment: alignment, in: textView)

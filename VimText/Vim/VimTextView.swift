@@ -144,6 +144,7 @@ struct VimTextView: NSViewRepresentable {
         }
         textView.restyleCodeBlocks(baseFont: font)
         textView.renderImageAttachments()
+        textView.refreshLinkHighlights()
         context.coordinator.latestText = initialText
         context.coordinator.latestRTF = initialRTFData
 
@@ -183,6 +184,7 @@ struct VimTextView: NSViewRepresentable {
                 .backgroundColor: accentColor.withAlphaComponent(0.28)
             ]
             textView.applyTextColor(textColor)
+            textView.refreshLinkHighlights()
             var attrs = textView.typingAttributes
             attrs[.foregroundColor] = textColor
             textView.typingAttributes = attrs

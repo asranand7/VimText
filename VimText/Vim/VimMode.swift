@@ -102,6 +102,8 @@ public enum VimAction: Equatable {
     case jumpToMark(Character, exact: Bool)
     /// `:noh` — clear search highlighting.
     case clearSearchHighlight
+    /// `gd` — open the link under the cursor in the default browser.
+    case openLinkUnderCursor
     case repeatLastChange
     case none
     

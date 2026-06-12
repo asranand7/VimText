@@ -102,6 +102,98 @@ class VimNSTextView: NSTextView {
         }
     }
 
+    // MARK: - Links
+
+    /// Links currently detected in the document. Refreshed on load, on theme
+    /// change, and when typing pauses (the deferred-work pass) — so between
+    /// refreshes the ranges can briefly lag the text by one edit burst.
+    private(set) var detectedLinks: [LinkDetection.Link] = []
+
+    /// Detects URLs and styles them via temporary layout-manager attributes —
+    /// the same display-only mechanism as search highlights, so link styling
+    /// is never serialized into the note's content or RTF.
+    func refreshLinkHighlights() {
+        guard let layoutManager = self.layoutManager else { return }
+        let length = (self.string as NSString).length
+        // Full-range removal is safe: links are the only temporary
+        // foreground/underline users (search highlights use .backgroundColor).
+        if !detectedLinks.isEmpty, length > 0 {
+            let fullRange = NSRange(location: 0, length: length)
+            layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
+            layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: fullRange)
+        }
+        detectedLinks = LinkDetection.links(in: self.string)
+        guard !detectedLinks.isEmpty else {
+            window?.invalidateCursorRects(for: self)
+            return
+        }
+        for link in detectedLinks {
+            let safe = NSIntersectionRange(link.range, NSRange(location: 0, length: length))
+            guard safe.length > 0 else { continue }
+            layoutManager.addTemporaryAttribute(.foregroundColor, value: accentColor, forCharacterRange: safe)
+            layoutManager.addTemporaryAttribute(
+                .underlineStyle,
+                value: NSUnderlineStyle.single.rawValue,
+                forCharacterRange: safe
+            )
+        }
+        window?.invalidateCursorRects(for: self)
+    }
+
+    /// The detected link containing `characterIndex`, if any.
+    func link(at characterIndex: Int) -> LinkDetection.Link? {
+        detectedLinks.first { NSLocationInRange(characterIndex, $0.range) }
+    }
+
+    private func link(atPoint point: NSPoint) -> LinkDetection.Link? {
+        guard !detectedLinks.isEmpty else { return nil }
+        let index = characterIndexForInsertion(at: point)
+        // The insertion index sits between characters; check both neighbors so
+        // clicks land anywhere on the link's glyphs.
+        return link(at: index) ?? (index > 0 ? link(at: index - 1) : nil)
+    }
+
+    func openLink(_ url: URL) {
+        NSWorkspace.shared.open(url)
+    }
+
+    func copyLinkToPasteboard(_ url: URL) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.absoluteString, forType: .string)
+        vimEngine?.statusMessage = "Link copied"
+    }
+
+    @objc private func openLinkMenuItem(_ sender: NSMenuItem) {
+        if let url = sender.representedObject as? URL { openLink(url) }
+    }
+
+    @objc private func copyLinkMenuItem(_ sender: NSMenuItem) {
+        if let url = sender.representedObject as? URL { copyLinkToPasteboard(url) }
+    }
+
+    /// Right-clicking a link gets Open/Copy items on top of the normal menu.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        let point = convert(event.locationInWindow, from: nil)
+        guard let hit = link(atPoint: point) else { return menu }
+        let result = menu ?? NSMenu()
+        let open = NSMenuItem(title: "Open Link", action: #selector(openLinkMenuItem(_:)), keyEquivalent: "")
+        open.target = self
+        open.representedObject = hit.url
+        let copy = NSMenuItem(title: "Copy Link", action: #selector(copyLinkMenuItem(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.representedObject = hit.url
+        if result.items.isEmpty {
+            result.addItem(open)
+            result.addItem(copy)
+        } else {
+            result.insertItem(.separator(), at: 0)
+            result.insertItem(copy, at: 0)
+            result.insertItem(open, at: 0)
+        }
+        return result
+    }
+
     // MARK: - Rich Text Formatting
 
     func toggleBoldFormatting() {
@@ -793,6 +885,13 @@ class VimNSTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
 
+        // 0) ⌘-click on a link opens it (plain click just moves the cursor,
+        //    as a Vim editor should).
+        if event.modifierFlags.contains(.command), let hit = link(atPoint: point) {
+            openLink(hit.url)
+            return
+        }
+
         // 1) Dragging a handle of the already-selected image resizes precisely.
         if let selected = selectedImageAttachment,
            let rect = rect(for: selected),
@@ -822,6 +921,18 @@ class VimNSTextView: NSTextView {
         super.resetCursorRects()
         for (_, rect) in imageAttachmentRects() {
             addCursorRect(rect, cursor: .resizeLeftRight)
+        }
+        // Pointing hand over links — restricted to the visible character
+        // range so this never forces layout of a huge note's tail.
+        if !detectedLinks.isEmpty, let layoutManager, let textContainer {
+            let visibleGlyphs = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
+            let visibleChars = layoutManager.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
+            for link in detectedLinks where NSIntersectionRange(link.range, visibleChars).length > 0 {
+                let glyphRange = layoutManager.glyphRange(forCharacterRange: link.range, actualCharacterRange: nil)
+                let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+                    .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+                addCursorRect(rect, cursor: .pointingHand)
+            }
         }
     }
 

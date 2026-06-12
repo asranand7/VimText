@@ -705,6 +705,30 @@ func testSearchQuoteFolding() throws {
     try expectEqual(sidebar.count, 1, "Sidebar: straight-quote query should match smart-quote content")
 }
 
+func testLinkDetectionAndGx() throws {
+    // Detection: https, bare www, and email, with correct UTF-16 ranges.
+    let text = "See https://example.com/a?b=1 and www.apple.com or mail me@test.org done"
+    let links = LinkDetection.links(in: text)
+    try expectEqual(links.count, 3, "Should detect URL, www host, and email")
+    try expectEqual(links[0].url.absoluteString, "https://example.com/a?b=1", "Full URL should parse")
+    let ns = text as NSString
+    try expectEqual(ns.substring(with: links[0].range), "https://example.com/a?b=1", "Range should cover the URL text")
+    try expectEqual(ns.substring(with: links[1].range), "www.apple.com", "Range should cover the www link")
+    try expect(links[1].url.absoluteString.contains("apple.com"), "www link should resolve to a URL")
+    try expect(links[2].url.absoluteString.hasPrefix("mailto:"), "Email should become a mailto URL")
+
+    try expectEqual(LinkDetection.links(in: "no links here").count, 0, "Plain text has no links")
+    try expectEqual(LinkDetection.links(in: "").count, 0, "Empty text has no links")
+
+    // Vim: `gd` parses to openLinkUnderCursor; `gg` still goes to start.
+    let engine = VimEngine()
+    engine.mode = .normal
+    let gd = feed(engine, "g", "d")
+    try expectEqual(gd, [.openLinkUnderCursor], "gd should produce openLinkUnderCursor")
+    let gg = feed(engine, "g", "g")
+    try expectEqual(gg, [.moveCursor(.documentStart)], "gg must still jump to document start")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("Note model derived text", testNoteModelDerivedText),
     ("Editor preferences font sizing", testEditorPreferencesFontSizing),
@@ -727,7 +751,8 @@ let tests: [(String, () throws -> Void)] = [
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
     ("Command Palette search matching", testCommandPaletteSearchMatching),
     ("Fuzzy search and palette ranking", testFuzzySearchAndRanking),
-    ("Search smart-quote folding", testSearchQuoteFolding)
+    ("Search smart-quote folding", testSearchQuoteFolding),
+    ("Link detection and gd", testLinkDetectionAndGx)
 ]
 
 do {

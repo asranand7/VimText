@@ -439,6 +439,10 @@ public final class VimEngine: ObservableObject {
                 return Array(repeating: .moveCursor(.wordEndBackward), count: count)
             } else if key == "E" {
                 return Array(repeating: .moveCursor(.bigWordEndBackward), count: count)
+            } else if key == "d" {
+                // `gd` opens the link under the cursor (this app's take on
+                // Vim's `gx`; there are no definitions to go to in notes).
+                return [.openLinkUnderCursor]
             }
             return [.none]
 
