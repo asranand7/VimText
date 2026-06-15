@@ -8,6 +8,7 @@ A native macOS notes app with broad Vim keybinding support. Think Apple Notes, b
 
 ### Notes Management
 - **Sidebar with note list** — browse all your notes in a clean sidebar
+- **Keyboard list navigation** — `⌘L` hands focus to the sidebar so you can drive it Vim-style: `j`/`k` (or `↑`/`↓`) move the cursor, `gg`/`G` jump to the first/last note, `Enter`/`o` open the highlighted note and return focus to the editor, `dd` deletes (with confirmation), `/` jumps to search, and `Esc`/`q` returns to the editor without changing the selection. A bold cursor ring on the highlighted row and a footer indicator show while you're navigating; `dd` on a locked note shows a "locked — unlock to delete" hint instead of deleting.
 - **Pinned notes** — pin important notes to the top
 - **Search across notes** — `Cmd+Shift+F` to search all notes by title/content, navigate results with arrow keys, press Enter to open
 - **Context menus** — right-click notes for rename, pin, delete

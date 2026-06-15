@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct NoteListView: View {
     @ObservedObject var viewModel: NotesViewModel
@@ -15,6 +16,16 @@ struct NoteListView: View {
     @State private var isSearchHovered = false
     @State private var collapsedSections: Set<String> = []
     @State private var noteToDelete: Note? = nil
+    /// True while the sidebar list (not the editor) owns keyboard focus and is
+    /// being driven with Vim keys. Mirrors the NavKeyCatcher's first-responder
+    /// state, so it flips back to false the moment the editor, search field, or
+    /// command palette takes focus.
+    @State private var listNavActive = false
+    /// Flipped to ask NavKeyCatcher to grab first responder (enter list nav).
+    @State private var listNavFocusTrigger = false
+    /// Transient footer message for list-nav feedback (e.g. a locked note that
+    /// can't be `dd`-deleted). Auto-clears after a couple of seconds.
+    @State private var navMessage: String? = nil
 
     private var sidebarTintBinding: Binding<Color> {
         Binding(
@@ -25,6 +36,74 @@ struct NoteListView: View {
 
     private var allSelected: Bool {
         !viewModel.filteredNotes.isEmpty && selectedNoteIds.count == viewModel.filteredNotes.count
+    }
+
+    private var searchActive: Bool { !viewModel.searchText.isEmpty }
+
+    /// The notes the keyboard cursor can land on, in the exact top-to-bottom
+    /// order they're rendered. While searching, that's the flat result list;
+    /// otherwise it's pinned-then-date-sections, skipping any collapsed
+    /// section (which isn't on screen to land on).
+    private var navigableNotes: [Note] {
+        let notes = viewModel.filteredNotes
+        if searchActive { return notes }
+        var out: [Note] = []
+        let pinned = notes.filter { $0.isPinned }
+        if !pinned.isEmpty && !collapsedSections.contains("Pinned") {
+            out.append(contentsOf: pinned)
+        }
+        let unpinned = notes.filter { !$0.isPinned }
+        for section in dateSections(unpinned) where !collapsedSections.contains(section.title) {
+            out.append(contentsOf: section.notes)
+        }
+        return out
+    }
+
+    /// note id → its index within `navigableNotes`, so each row can tell
+    /// whether it's the highlighted one without re-scanning the list.
+    private var navIndexByID: [UUID: Int] {
+        var map: [UUID: Int] = [:]
+        for (index, note) in navigableNotes.enumerated() { map[note.id] = index }
+        return map
+    }
+
+    /// The list `highlightedIndex` indexes into for the current context.
+    private var currentNavList: [Note] {
+        searchActive ? viewModel.filteredNotes : navigableNotes
+    }
+
+    /// Footer text: a transient nav message takes priority, then a "you're
+    /// driving the list with the keyboard" indicator while list nav is active,
+    /// otherwise the plain note count.
+    @ViewBuilder
+    private var footerStatus: some View {
+        if let navMessage {
+            HStack(spacing: 5) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 9.5))
+                Text(navMessage)
+                    .lineLimit(1)
+            }
+            .font(.system(.caption2, design: .default).weight(.semibold))
+            .foregroundStyle(theme.accent)
+            .transition(.opacity)
+        } else if listNavActive {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(themeManager.sidebarTint)
+                    .frame(width: 6, height: 6)
+                Text("Navigating · j/k move · ⏎ open · esc exit")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .font(.system(.caption2, design: .default).weight(.semibold))
+            .foregroundStyle(themeManager.sidebarTint)
+            .transition(.opacity)
+        } else {
+            Text("\(viewModel.filteredNotes.count) notes")
+                .font(.system(.caption2, design: .default))
+                .foregroundStyle(.secondary.opacity(0.7))
+        }
     }
 
     private var searchBarFill: Color {
@@ -396,9 +475,7 @@ struct NoteListView: View {
                 .foregroundStyle(theme.separator.opacity(0.5))
 
             HStack {
-                Text("\(viewModel.filteredNotes.count) notes")
-                    .font(.system(.caption2, design: .default))
-                    .foregroundStyle(.secondary.opacity(0.7))
+                footerStatus
                 Spacer()
 
                 if isSelectionMode && !selectedNoteIds.isEmpty {
@@ -465,6 +542,7 @@ struct NoteListView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
+        .background(navKeyCatcher)
         .background(glassBackground)
         .animation(.easeInOut(duration: 0.28), value: theme.id)
         .confirmationDialog(
@@ -532,6 +610,18 @@ struct NoteListView: View {
                 highlightedIndex = viewModel.filteredNotes.isEmpty ? nil : 0
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .focusNoteList)) { _ in
+            activateListNav()
+        }
+        .onChange(of: viewModel.filteredNotes.count) {
+            guard listNavActive else { return }
+            let count = navigableNotes.count
+            if count == 0 {
+                highlightedIndex = nil
+            } else if let index = highlightedIndex {
+                highlightedIndex = min(max(index, 0), count - 1)
+            }
+        }
     }
 
     private func changeNotesDirectory() {
@@ -573,7 +663,7 @@ struct NoteListView: View {
                             collapsibleSectionHeader("Pinned", count: pinned.count)
                             if !collapsedSections.contains("Pinned") {
                                 ForEach(pinned) { note in
-                                    noteRow(note: note, flatIndex: 0, isSearching: false)
+                                    noteRow(note: note, flatIndex: navIndexByID[note.id] ?? -1, isSearching: false)
                                 }
                             }
                         }
@@ -582,7 +672,7 @@ struct NoteListView: View {
                             collapsibleSectionHeader(section.title, count: section.notes.count)
                             if !collapsedSections.contains(section.title) {
                                 ForEach(section.notes) { note in
-                                    noteRow(note: note, flatIndex: 0, isSearching: false)
+                                    noteRow(note: note, flatIndex: navIndexByID[note.id] ?? -1, isSearching: false)
                                 }
                             }
                         }
@@ -613,7 +703,12 @@ struct NoteListView: View {
 
     @ViewBuilder
     private func noteRow(note: Note, flatIndex: Int, isSearching: Bool) -> some View {
-        let isHighlighted = isSearching && highlightedIndex == flatIndex
+        let isOnCursor = highlightedIndex == flatIndex
+        // The faint search highlight and the bold list-nav keyboard cursor are
+        // visually distinct: search just tints the row, nav draws a clear ring
+        // so you can see where focus is as you j/k around.
+        let isHighlighted = isSearching && isOnCursor
+        let isNavCursor = !isSearching && listNavActive && isOnCursor
         let isSelected = !isSearching && viewModel.selectedNoteId == note.id
 
         // Hover state lives inside NoteRowListItem so moving the mouse only
@@ -622,6 +717,7 @@ struct NoteListView: View {
             note: note,
             isSelected: isSelected,
             isHighlighted: isHighlighted,
+            isNavCursor: isNavCursor,
             onCopyPath: { copyPath(for: note) },
             onTogglePin: {
                 withAnimation(DS.snappy) { viewModel.togglePin(note) }
@@ -645,7 +741,7 @@ struct NoteListView: View {
     }
 
     private func moveHighlight(down: Bool) {
-        let count = viewModel.filteredNotes.count
+        let count = currentNavList.count
         guard count > 0 else { return }
 
         if let current = highlightedIndex {
@@ -660,7 +756,7 @@ struct NoteListView: View {
     }
 
     private func selectHighlighted() {
-        let notes = viewModel.filteredNotes
+        let notes = currentNavList
         guard !notes.isEmpty else { return }
 
         if let idx = highlightedIndex, idx < notes.count {
@@ -676,6 +772,90 @@ struct NoteListView: View {
     private func dismissSearch() {
         highlightedIndex = nil
         viewModel.searchText = ""
+    }
+
+    // MARK: - Keyboard list navigation (⌘L)
+
+    /// Invisible focus sink that turns Vim keys into list navigation while the
+    /// sidebar — not the editor — holds focus. Lives as a full-size background
+    /// so it's reliably in the window; it draws nothing and ignores the mouse.
+    private var navKeyCatcher: some View {
+        NavKeyCatcher(
+            focusTrigger: $listNavFocusTrigger,
+            onFocusChange: { active in
+                withAnimation(DS.snappy) { listNavActive = active }
+                if !active {
+                    if !searchActive { highlightedIndex = nil }
+                    navMessage = nil
+                }
+            },
+            onMove: { down in moveHighlight(down: down) },
+            onTop: { if !currentNavList.isEmpty { highlightedIndex = 0 } },
+            onBottom: { if !currentNavList.isEmpty { highlightedIndex = currentNavList.count - 1 } },
+            onOpen: { openHighlightedFromNav() },
+            onExit: { exitListNav() },
+            onDelete: { deleteHighlightedFromNav() },
+            onFocusSearch: {
+                highlightedIndex = nil
+                searchFocusTrigger.toggle()
+            }
+        )
+    }
+
+    /// Enter list navigation (or leave it again if already active — ⌘L toggles).
+    private func activateListNav() {
+        guard !isSelectionMode else { return }
+        if listNavActive { exitListNav(); return }
+        let list = navigableNotes
+        guard !list.isEmpty else { return }
+        if let selected = viewModel.selectedNoteId,
+           let index = list.firstIndex(where: { $0.id == selected }) {
+            highlightedIndex = index
+        } else {
+            highlightedIndex = 0
+        }
+        listNavFocusTrigger.toggle()
+    }
+
+    private func openHighlightedFromNav() {
+        let list = navigableNotes
+        if let index = highlightedIndex, index >= 0, index < list.count {
+            withAnimation(DS.spring) {
+                viewModel.selectedNoteId = list[index].id
+            }
+        }
+        highlightedIndex = nil
+        NotificationCenter.default.post(name: .refocusEditor, object: nil)
+    }
+
+    private func exitListNav() {
+        highlightedIndex = nil
+        NotificationCenter.default.post(name: .refocusEditor, object: nil)
+    }
+
+    private func deleteHighlightedFromNav() {
+        let list = navigableNotes
+        guard let index = highlightedIndex, index >= 0, index < list.count else { return }
+        let note = list[index]
+        if note.isLocked {
+            NSSound.beep()
+            showNavMessage("“\(note.displayTitle)” is locked — unlock to delete")
+            return
+        }
+        // Reuse the same confirmation dialog as the row trash button, so a
+        // keyboard `dd` is exactly as safe (and undoable-by-cancel) as a click.
+        noteToDelete = note
+    }
+
+    /// Show a transient message in the sidebar footer, then clear it (unless a
+    /// newer message replaced it in the meantime).
+    private func showNavMessage(_ text: String) {
+        withAnimation(DS.snappy) { navMessage = text }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            if navMessage == text {
+                withAnimation(DS.snappy) { navMessage = nil }
+            }
+        }
     }
 
     @ViewBuilder
@@ -750,6 +930,7 @@ private struct NoteRowListItem: View {
     let note: Note
     let isSelected: Bool
     let isHighlighted: Bool
+    var isNavCursor: Bool = false
     let onCopyPath: () -> Void
     let onTogglePin: () -> Void
     let onToggleLock: () -> Void
@@ -763,23 +944,26 @@ private struct NoteRowListItem: View {
 
     var body: some View {
         let tint = themeManager.sidebarTint
-        let rowFill = Self.fill(theme: theme, isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
-        let rowStroke = Self.stroke(theme: theme, isSelected: isSelected, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
+        // The keyboard cursor (list nav) reads as "emphasized" like the open
+        // note, but adds a bold ring on top so it's obvious where focus is.
+        let emphasized = isSelected || isNavCursor
+        let rowFill = Self.fill(theme: theme, emphasized: emphasized, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
+        let rowStroke = Self.stroke(theme: theme, emphasized: emphasized, isHighlighted: isHighlighted, isHovered: isHovered, tint: tint)
 
-        let rowShadowOpacity = isSelected
+        let rowShadowOpacity = emphasized
             ? (theme.isDark ? 0.18 : 0.05)
             : (isHovered ? (theme.isDark ? 0.12 : 0.03) : 0)
-        let rowShadowRadius: CGFloat = isSelected ? 6 : (isHovered ? 4 : 0)
-        let rowShadowY: CGFloat = isSelected ? 2 : (isHovered ? 1.5 : 0)
+        let rowShadowRadius: CGFloat = emphasized ? 6 : (isHovered ? 4 : 0)
+        let rowShadowY: CGFloat = emphasized ? 2 : (isHovered ? 1.5 : 0)
         // Note: don't scale or offset on hover. Even a 1pt vertical shift can
         // race with `.onHover`'s tracking install on the top row of the list,
         // leaving it visually unresponsive to the cursor.
-        let rowScale: CGFloat = isSelected ? 1.01 : 1.0
+        let rowScale: CGFloat = emphasized ? 1.01 : 1.0
 
         return NoteRowView(
             note: note,
             isHovered: isHovered,
-            isSelected: isSelected || isHighlighted,
+            isSelected: emphasized || isHighlighted,
             onCopyPath: onCopyPath,
             onTogglePin: onTogglePin,
             onToggleLock: onToggleLock,
@@ -792,15 +976,23 @@ private struct NoteRowListItem: View {
                     .fill(rowFill)
                     .overlay(
                         RoundedRectangle(cornerRadius: 15, style: .continuous)
-                            .fill(isSelected && theme.isDark ? Color.white.opacity(0.03) : Color.clear)
+                            .fill(emphasized && theme.isDark ? Color.white.opacity(0.03) : Color.clear)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 15, style: .continuous)
                             .strokeBorder(rowStroke, lineWidth: 0.5)
                     )
             )
+            // Bold accent ring = the keyboard cursor. Drawn over the row so it
+            // stays crisp and clearly travels with j/k, distinct from both the
+            // faint hover/search tint and the filled "open note" selection.
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .strokeBorder(tint.opacity(isNavCursor ? (theme.isDark ? 0.95 : 0.8) : 0),
+                                  lineWidth: isNavCursor ? 2 : 0)
+            )
             .overlay(alignment: .leading) {
-                if isSelected {
+                if emphasized {
                     Capsule()
                         .fill(tint)
                         .frame(width: 3.0, height: 32)
@@ -817,10 +1009,11 @@ private struct NoteRowListItem: View {
             }
             .onTapGesture(perform: onTap)
             .animation(DS.spring, value: isSelected)
+            .animation(DS.snappy, value: isNavCursor)
     }
 
-    private static func fill(theme: AppTheme, isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
-        if isSelected {
+    private static func fill(theme: AppTheme, emphasized: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
+        if emphasized {
             return theme.isDark
                 ? tint.opacity(theme.isMonochrome ? 0.11 : 0.15)
                 : tint.opacity(theme.isMonochrome ? 0.05 : 0.08)
@@ -830,8 +1023,8 @@ private struct NoteRowListItem: View {
         return Color.clear
     }
 
-    private static func stroke(theme: AppTheme, isSelected: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
-        if isSelected { return tint.opacity(theme.isMonochrome ? (theme.isDark ? 0.20 : 0.12) : (theme.isDark ? 0.26 : 0.14)) }
+    private static func stroke(theme: AppTheme, emphasized: Bool, isHighlighted: Bool, isHovered: Bool, tint: Color) -> Color {
+        if emphasized { return tint.opacity(theme.isMonochrome ? (theme.isDark ? 0.20 : 0.12) : (theme.isDark ? 0.26 : 0.14)) }
         if isHighlighted { return tint.opacity(0.14) }
         if isHovered { return Color.primary.opacity(0.06) }
         return Color.clear
@@ -968,5 +1161,139 @@ struct SearchField: NSViewRepresentable {
             }
             return false
         }
+    }
+}
+
+/// An invisible, focusable view that turns Vim-style keys into note-list
+/// navigation when the *sidebar* (not the editor) holds focus. Because a view
+/// only receives `keyDown` while it is first responder, there's no global key
+/// monitor to gate: focus is handed over explicitly (⌘L → `focusTrigger`) and
+/// handed back by posting `.refocusEditor`. First-responder changes are
+/// mirrored out through `onFocusChange` so the list can show/hide its cursor.
+struct NavKeyCatcher: NSViewRepresentable {
+    @Binding var focusTrigger: Bool
+    var onFocusChange: (Bool) -> Void
+    var onMove: (Bool) -> Void
+    var onTop: () -> Void
+    var onBottom: () -> Void
+    var onOpen: () -> Void
+    var onExit: () -> Void
+    var onDelete: () -> Void
+    var onFocusSearch: () -> Void
+
+    func makeNSView(context: Context) -> NavKeyView {
+        let view = NavKeyView()
+        wire(view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NavKeyView, context: Context) {
+        wire(nsView)
+        if focusTrigger != context.coordinator.lastTriggerValue {
+            context.coordinator.lastTriggerValue = focusTrigger
+            DispatchQueue.main.async {
+                nsView.window?.makeFirstResponder(nsView)
+            }
+        }
+    }
+
+    private func wire(_ view: NavKeyView) {
+        view.onFocusChange = onFocusChange
+        view.onMove = onMove
+        view.onTop = onTop
+        view.onBottom = onBottom
+        view.onOpen = onOpen
+        view.onExit = onExit
+        view.onDelete = onDelete
+        view.onFocusSearch = onFocusSearch
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var lastTriggerValue = false
+    }
+}
+
+final class NavKeyView: NSView {
+    var onFocusChange: ((Bool) -> Void)?
+    var onMove: ((Bool) -> Void)?
+    var onTop: (() -> Void)?
+    var onBottom: (() -> Void)?
+    var onOpen: (() -> Void)?
+    var onExit: (() -> Void)?
+    var onDelete: (() -> Void)?
+    var onFocusSearch: (() -> Void)?
+
+    private var pendingG = false
+    private var pendingD = false
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { onFocusChange?(true) }
+        return ok
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok {
+            resetPending()
+            onFocusChange?(false)
+        }
+        return ok
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // Let ⌘/⌃/⌥ combos fall through so menu shortcuts (⌘N, ⌘K, ⌘L…) still
+        // work while the list is focused. Plain keys and Shift+key are ours.
+        if !flags.subtracting(.shift).isEmpty {
+            super.keyDown(with: event)
+            return
+        }
+
+        switch event.keyCode {
+        case 125: onMove?(true); resetPending(); return    // ↓
+        case 126: onMove?(false); resetPending(); return   // ↑
+        case 36, 76: leave(open: true); return             // Return / Enter
+        case 53: leave(open: false); return                // Esc
+        default: break
+        }
+
+        switch event.charactersIgnoringModifiers {
+        case "j": onMove?(true); resetPending()
+        case "k": onMove?(false); resetPending()
+        case "G": onBottom?(); resetPending()
+        case "g":
+            if pendingG { onTop?(); pendingG = false } else { pendingG = true; pendingD = false }
+        case "d":
+            if pendingD { onDelete?(); pendingD = false } else { pendingD = true; pendingG = false }
+        case "l", "o": leave(open: true)
+        case "q": leave(open: false)
+        case "/": onFocusSearch?(); resetPending()
+        default: resetPending()   // swallow stray keys so there's no system beep
+        }
+    }
+
+    /// Open the highlighted note (or just exit), then make sure focus actually
+    /// leaves: `onOpen`/`onExit` post `.refocusEditor`, which focuses the editor
+    /// when one exists; if none does (empty detail), we resign so the catcher
+    /// stops swallowing keys.
+    private func leave(open: Bool) {
+        resetPending()
+        if open { onOpen?() } else { onExit?() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.window?.firstResponder === self {
+                self.window?.makeFirstResponder(nil)
+            }
+        }
+    }
+
+    private func resetPending() {
+        pendingG = false
+        pendingD = false
     }
 }

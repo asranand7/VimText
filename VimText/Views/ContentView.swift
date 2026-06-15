@@ -35,6 +35,7 @@ public struct ContentView: View {
                 shortcutColumn(title: "App", shortcuts: [
                     ("⌘N", "New note"),
                     ("⌘K", "Quick open"),
+                    ("⌘L", "Focus note list"),
                     ("⌘F", "Find in note"),
                     ("⌘⇧F", "Search all notes"),
                     ("⌘⌥B", "Toggle sidebar")
@@ -146,6 +147,10 @@ public struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .focusNoteSearch)) { _ in
             guard !isSidebarVisible else { return }
             showSidebarAndReplay(.focusNoteSearch)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .focusNoteList)) { _ in
+            guard !isSidebarVisible else { return }
+            showSidebarAndReplay(.focusNoteList)
         }
         // Note: opening a note from ⌘K must NOT force the sidebar open. When the
         // sidebar is visible, NoteListView's own .revealNoteInSidebar handler

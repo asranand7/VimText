@@ -63,6 +63,11 @@ struct VimTextApp: App {
                     NotificationCenter.default.post(name: .openCommandPalette, object: nil)
                 }
                 .keyboardShortcut("k", modifiers: .command)
+
+                Button("Focus Note List") {
+                    NotificationCenter.default.post(name: .focusNoteList, object: nil)
+                }
+                .keyboardShortcut("l", modifiers: .command)
             }
 
             CommandMenu("Vim") {
@@ -76,6 +81,9 @@ struct VimTextApp: App {
                 Text("Save: :w or ⌘S")
                 Text("Motions: h j k l w b e W B E 0 $ gg G")
                 Text("Operations: d y c p")
+                Divider()
+                Text("Note list (⌘L): j k gg G to move")
+                Text("Enter/o open · dd delete · / search · esc back")
             }
         }
     }

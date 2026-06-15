@@ -4,6 +4,10 @@ public extension Notification.Name {
     static let createNewNote = Notification.Name("createNewNote")
     static let duplicateCurrentNote = Notification.Name("duplicateCurrentNote")
     static let focusNoteSearch = Notification.Name("focusNoteSearch")
+    /// Posted to hand keyboard focus to the sidebar note list so it can be
+    /// driven with Vim keys (j/k/gg/G/Enter/dd). Toggling ⌘L re-posts this;
+    /// the list itself decides whether to enter or leave navigation.
+    static let focusNoteList = Notification.Name("focusNoteList")
     static let findInNote = Notification.Name("findInNote")
     static let openCommandPalette = Notification.Name("openCommandPalette")
     static let toggleSidebar = Notification.Name("toggleSidebar")

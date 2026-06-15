@@ -51,6 +51,9 @@ class CommandPaletteState: ObservableObject {
             PaletteCommand(id: "toggle_sidebar", name: "Toggle Sidebar", icon: "sidebar.leading", shortcut: "⌘⌥B") {
                 NotificationCenter.default.post(name: .toggleSidebar, object: nil)
             },
+            PaletteCommand(id: "focus_note_list", name: "Focus Note List (j/k to navigate)", icon: "list.bullet", shortcut: "⌘L") {
+                NotificationCenter.default.post(name: .focusNoteList, object: nil)
+            },
             PaletteCommand(id: "change_location", name: "Change Notes Location…", icon: "folder.badge.gearshape") {
                 NotificationCenter.default.post(name: .openChangeLocationPanel, object: nil)
             },
