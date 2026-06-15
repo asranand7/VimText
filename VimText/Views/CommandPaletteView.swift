@@ -1,12 +1,35 @@
 import SwiftUI
 import AppKit
 
+/// What the palette shows. `.notesOnly` is the ⌘K note quick-opener (notes,
+/// nothing else); `.commandsOnly` is the ⌘P command palette — every action,
+/// grouped by category, no notes.
+enum PaletteMode: Equatable {
+    case notesOnly
+    case commandsOnly
+}
+
 struct PaletteCommand: Identifiable {
     let id: String
     let name: String
     let icon: String
     var shortcut: String? = nil
+    /// Section this command groups under in the ⌘P commands list (e.g. "Notes",
+    /// "Appearance"). Ignored in ⌘K mode, where commands are one flat section.
+    var category: String? = nil
     let action: () -> Void
+}
+
+/// Snapshot of the current note's state, captured on the main actor by the
+/// view and handed to `getCommands` so it can gate/label note commands without
+/// touching the main-actor-isolated view model off-thread.
+struct PaletteNoteContext {
+    let hasNote: Bool
+    let isPinned: Bool
+    let isLocked: Bool
+    let hasCustomLocation: Bool
+
+    static let empty = PaletteNoteContext(hasNote: false, isPinned: false, isLocked: false, hasCustomLocation: false)
 }
 
 enum PaletteItem: Identifiable {
@@ -35,63 +58,123 @@ class CommandPaletteState: ObservableObject {
     private var searchGeneration = 0
     private var debounceItem: DispatchWorkItem?
 
-    func getCommands(themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteCommand] {
-        return [
-            PaletteCommand(id: "new_note", name: "Create New Note", icon: "square.and.pencil", shortcut: "⌘N") {
-                Task { @MainActor in
-                    viewModel.createNote()
-                }
-            },
-            PaletteCommand(id: "duplicate_note", name: "Duplicate Current Note", icon: "plus.square.on.square", shortcut: "⌘D") {
+    func getCommands(noteContext: PaletteNoteContext, themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteCommand] {
+        let hasNote = noteContext.hasNote
+        var commands: [PaletteCommand] = []
+
+        // MARK: Notes
+        commands.append(PaletteCommand(id: "new_note", name: "Create New Note", icon: "square.and.pencil", shortcut: "⌘N", category: "Notes") {
+            Task { @MainActor in viewModel.createNote() }
+        })
+        if hasNote {
+            commands.append(PaletteCommand(id: "duplicate_note", name: "Duplicate Note", icon: "plus.square.on.square", shortcut: "⌘D", category: "Notes") {
                 NotificationCenter.default.post(name: .duplicateCurrentNote, object: nil)
-            },
-            PaletteCommand(id: "find_in_note", name: "Find in Note", icon: "magnifyingglass", shortcut: "⌘F") {
-                NotificationCenter.default.post(name: .findInNote, object: nil)
-            },
-            PaletteCommand(id: "toggle_sidebar", name: "Toggle Sidebar", icon: "sidebar.leading", shortcut: "⌘⌥B") {
-                NotificationCenter.default.post(name: .toggleSidebar, object: nil)
-            },
-            PaletteCommand(id: "focus_note_list", name: "Focus Note List (j/k to navigate)", icon: "list.bullet", shortcut: "⌘L") {
-                NotificationCenter.default.post(name: .focusNoteList, object: nil)
-            },
-            PaletteCommand(id: "change_location", name: "Change Notes Location…", icon: "folder.badge.gearshape") {
-                NotificationCenter.default.post(name: .openChangeLocationPanel, object: nil)
-            },
-            PaletteCommand(id: "theme_light", name: "Switch to Light Theme", icon: "sun.max") {
-                themeManager.themeID = AppTheme.light.id
-            },
-            PaletteCommand(id: "theme_dark", name: "Switch to Dark Theme", icon: "moon") {
-                themeManager.themeID = AppTheme.dark.id
-            },
-            PaletteCommand(id: "theme_nord", name: "Switch to Nord Theme", icon: "desktopcomputer") {
-                themeManager.themeID = AppTheme.nord.id
-            },
-            PaletteCommand(id: "toggle_line_numbers", name: "Toggle Line Numbers", icon: "list.number") {
-                UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "showLineNumbers"), forKey: "showLineNumbers")
-            },
-            PaletteCommand(id: "toggle_monospace", name: "Toggle Monospaced Font", icon: "textformat") {
-                UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "useMonospacedFont"), forKey: "useMonospacedFont")
-            },
-            PaletteCommand(id: "paper_plain", name: "Paper: Plain", icon: "doc") {
-                UserDefaults.standard.set("plain", forKey: "editorPaperStyle")
-            },
-            PaletteCommand(id: "paper_dotted", name: "Paper: Dotted Grid", icon: "ellipsis") {
-                UserDefaults.standard.set("dotted", forKey: "editorPaperStyle")
-            },
-            PaletteCommand(id: "paper_lined", name: "Paper: Lined", icon: "line.horizontal.3") {
-                UserDefaults.standard.set("lined", forKey: "editorPaperStyle")
-            }
-        ]
+            })
+            commands.append(PaletteCommand(id: "pin_note", name: noteContext.isPinned ? "Unpin Note" : "Pin Note", icon: noteContext.isPinned ? "pin.slash" : "pin", category: "Notes") {
+                Task { @MainActor in if let note = viewModel.selectedNote { viewModel.togglePin(note) } }
+            })
+            commands.append(PaletteCommand(id: "lock_note", name: noteContext.isLocked ? "Unlock Note" : "Lock Note", icon: noteContext.isLocked ? "lock.open" : "lock", category: "Notes") {
+                Task { @MainActor in if let note = viewModel.selectedNote { viewModel.toggleLock(note) } }
+            })
+            commands.append(PaletteCommand(id: "reveal_note", name: "Reveal Note in Finder", icon: "folder", category: "Notes") {
+                Task { @MainActor in
+                    if let note = viewModel.selectedNote {
+                        NSWorkspace.shared.activateFileViewerSelecting([StorageManager.shared.fileURL(for: note)])
+                    }
+                }
+            })
+            commands.append(PaletteCommand(id: "copy_note_path", name: "Copy Note File Path", icon: "doc.on.doc", category: "Notes") {
+                Task { @MainActor in
+                    if let note = viewModel.selectedNote {
+                        let pb = NSPasteboard.general
+                        pb.clearContents()
+                        pb.setString(StorageManager.shared.fileURL(for: note).path, forType: .string)
+                    }
+                }
+            })
+            commands.append(PaletteCommand(id: "delete_note", name: "Delete Note…", icon: "trash", category: "Notes") {
+                NotificationCenter.default.post(name: .requestDeleteCurrentNote, object: nil)
+            })
+        }
+
+        // MARK: View & navigation
+        commands.append(PaletteCommand(id: "quick_open", name: "Quick Open Note…", icon: "magnifyingglass.circle", shortcut: "⌘K", category: "View") {
+            NotificationCenter.default.post(name: .openCommandPalette, object: nil)
+        })
+        commands.append(PaletteCommand(id: "focus_note_list", name: "Focus Note List (j/k to navigate)", icon: "list.bullet", shortcut: "⌘L", category: "View") {
+            NotificationCenter.default.post(name: .focusNoteList, object: nil)
+        })
+        commands.append(PaletteCommand(id: "find_in_note", name: "Find in Note", icon: "magnifyingglass", shortcut: "⌘F", category: "View") {
+            NotificationCenter.default.post(name: .findInNote, object: nil)
+        })
+        commands.append(PaletteCommand(id: "search_all_notes", name: "Search All Notes", icon: "text.magnifyingglass", shortcut: "⌘⇧F", category: "View") {
+            NotificationCenter.default.post(name: .focusNoteSearch, object: nil)
+        })
+        commands.append(PaletteCommand(id: "toggle_sidebar", name: "Toggle Sidebar", icon: "sidebar.leading", shortcut: "⌘⌥B", category: "View") {
+            NotificationCenter.default.post(name: .toggleSidebar, object: nil)
+        })
+
+        // MARK: Editor
+        commands.append(PaletteCommand(id: "toggle_line_numbers", name: "Toggle Line Numbers", icon: "list.number", category: "Editor") {
+            UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "showLineNumbers"), forKey: "showLineNumbers")
+        })
+        commands.append(PaletteCommand(id: "toggle_monospace", name: "Toggle Monospaced Font", icon: "textformat", category: "Editor") {
+            UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "useMonospacedFont"), forKey: "useMonospacedFont")
+        })
+        commands.append(PaletteCommand(id: "toggle_smart_lists", name: "Toggle Smart Lists", icon: "list.bullet.indent", category: "Editor") {
+            // Smart lists default to on, so read with that default before flipping.
+            let current = UserDefaults.standard.object(forKey: "smartLists") as? Bool ?? true
+            UserDefaults.standard.set(!current, forKey: "smartLists")
+        })
+        commands.append(PaletteCommand(id: "font_increase", name: "Increase Font Size", icon: "textformat.size.larger", shortcut: "⌘+", category: "Editor") {
+            EditorPreferences.increaseFontSize()
+        })
+        commands.append(PaletteCommand(id: "font_decrease", name: "Decrease Font Size", icon: "textformat.size.smaller", shortcut: "⌘-", category: "Editor") {
+            EditorPreferences.decreaseFontSize()
+        })
+        commands.append(PaletteCommand(id: "font_reset", name: "Reset Font Size", icon: "arrow.counterclockwise", shortcut: "⌘0", category: "Editor") {
+            EditorPreferences.resetFontSize()
+        })
+        commands.append(PaletteCommand(id: "paper_plain", name: "Paper: Plain", icon: "doc", category: "Editor") {
+            UserDefaults.standard.set("plain", forKey: "editorPaperStyle")
+        })
+        commands.append(PaletteCommand(id: "paper_dotted", name: "Paper: Dotted Grid", icon: "circle.grid.3x3", category: "Editor") {
+            UserDefaults.standard.set("dotted", forKey: "editorPaperStyle")
+        })
+        commands.append(PaletteCommand(id: "paper_lined", name: "Paper: Lined", icon: "line.horizontal.3", category: "Editor") {
+            UserDefaults.standard.set("lined", forKey: "editorPaperStyle")
+        })
+
+        // MARK: Appearance — one command per theme.
+        for appTheme in AppTheme.all {
+            commands.append(PaletteCommand(id: "theme_\(appTheme.id)", name: "Theme: \(appTheme.name)", icon: appTheme.isDark ? "moon.stars" : "sun.max", category: "Appearance") {
+                themeManager.themeID = appTheme.id
+            })
+        }
+
+        // MARK: Storage
+        commands.append(PaletteCommand(id: "change_location", name: "Change Notes Location…", icon: "folder.badge.gearshape", category: "Storage") {
+            NotificationCenter.default.post(name: .openChangeLocationPanel, object: nil)
+        })
+        if noteContext.hasCustomLocation {
+            commands.append(PaletteCommand(id: "use_default_location", name: "Use Default Notes Location", icon: "arrow.uturn.backward", category: "Storage") {
+                Task { @MainActor in viewModel.changeDirectoryPath(to: nil) }
+            })
+        }
+
+        return commands
     }
     
-    func scheduleSearch(notes: [Note], recentIds: [UUID], themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) {
+    func scheduleSearch(notes: [Note], recentIds: [UUID], includeNotes: Bool = true, includeCommands: Bool = true, noteContext: PaletteNoteContext, themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) {
         debounceItem?.cancel()
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         searchGeneration &+= 1
         let gen = searchGeneration
 
-        if query.isEmpty {
-            results = buildItems(matched: notes, query: "", recentIds: recentIds, themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
+        // Commands-only mode (and any empty query) builds synchronously — there's
+        // no expensive note scoring to push off the main thread.
+        if query.isEmpty || !includeNotes {
+            results = buildItems(matched: includeNotes ? notes : [], query: query, recentIds: includeNotes ? recentIds : [], includeNotes: includeNotes, includeCommands: includeCommands, noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
             return
         }
 
@@ -99,7 +182,7 @@ class CommandPaletteState: ObservableObject {
             let matched = CommandPaletteState.matchingNotes(notes, query: query, recentIds: recentIds)
             DispatchQueue.main.async {
                 guard let self, gen == self.searchGeneration else { return }
-                self.results = self.buildItems(matched: matched, query: query, recentIds: recentIds, themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
+                self.results = self.buildItems(matched: matched, query: query, recentIds: recentIds, includeNotes: true, includeCommands: includeCommands, noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
             }
         }
         debounceItem = work
@@ -174,9 +257,12 @@ class CommandPaletteState: ObservableObject {
         return score
     }
 
-    func buildItems(matched: [Note], query: String, recentIds: [UUID], themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteItem] {
+    func buildItems(matched: [Note], query: String, recentIds: [UUID], includeNotes: Bool = true, includeCommands: Bool = true, noteContext: PaletteNoteContext, themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) -> [PaletteItem] {
         var items: [PaletteItem] = []
-        if query.isEmpty, !recentIds.isEmpty {
+        if !includeNotes {
+            // Commands-only (⌘P): no notes at all.
+            recentNoteIdSet = []
+        } else if query.isEmpty, !recentIds.isEmpty {
             // Empty query: recently opened notes first (recency order), then
             // the rest by last modified. Section headers key off this set.
             var byId = Dictionary(matched.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -200,7 +286,8 @@ class CommandPaletteState: ObservableObject {
             recentNoteIdSet = []
             for note in matched { items.append(.note(note)) }
         }
-        let commands = getCommands(themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
+        guard includeCommands else { return items }
+        let commands = getCommands(noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
         let filteredCommands: [PaletteCommand]
         if query.isEmpty {
             filteredCommands = commands
@@ -219,7 +306,8 @@ class CommandPaletteState: ObservableObject {
 struct CommandPaletteView: View {
     @ObservedObject var viewModel: NotesViewModel
     @Binding var isPresented: Bool
-    
+    var mode: PaletteMode = .notesOnly
+
     @StateObject private var state = CommandPaletteState()
     @FocusState private var isFieldFocused: Bool
     @StateObject private var keyboardMonitor = KeyboardMonitor()
@@ -236,6 +324,18 @@ struct CommandPaletteView: View {
     private var items: [PaletteItem] {
         state.results
     }
+
+    /// Captured on the main actor here (the view) and passed into command
+    /// building so note commands can gate/label without an off-thread read.
+    private var noteContext: PaletteNoteContext {
+        let note = viewModel.selectedNote
+        return PaletteNoteContext(
+            hasNote: note != nil,
+            isPinned: note?.isPinned == true,
+            isLocked: note?.isLocked == true,
+            hasCustomLocation: StorageManager.shared.customDirectoryPath != nil
+        )
+    }
     
     private var searchFieldRow: some View {
         HStack(spacing: 12) {
@@ -243,7 +343,7 @@ struct CommandPaletteView: View {
                 .font(.title3)
                 .foregroundStyle(theme.secondaryText.opacity(0.8))
             
-            TextField("Search notes or type commands…", text: $state.searchText)
+            TextField(mode == .commandsOnly ? "Search commands…" : "Search notes…", text: $state.searchText)
                 .textFieldStyle(.plain)
                 .font(.system(.title3, design: .default))
                 .focused($isFieldFocused)
@@ -420,12 +520,18 @@ struct CommandPaletteView: View {
             startWidth = width
             startHeight = height
             setupKeyboardMonitor()
-            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
+            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, includeNotes: mode == .notesOnly, includeCommands: mode == .commandsOnly, noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
         }
         .onChange(of: state.searchText) {
             state.selectionCameFromHover = false
             state.selectedIndex = 0
-            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
+            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, includeNotes: mode == .notesOnly, includeCommands: mode == .commandsOnly, noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
+        }
+        .onChange(of: mode) {
+            // Switching ⌘K ⇄ ⌘P while the palette is already open: rebuild for
+            // the new mode and reset the cursor to the top.
+            state.selectedIndex = 0
+            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, includeNotes: mode == .notesOnly, includeCommands: mode == .commandsOnly, noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
         }
     }
     
@@ -588,11 +694,15 @@ struct CommandPaletteView: View {
             return true
         case (.command, .note):
             return true
-        case (.command, .command):
+        case (.command(let p), .command(let c)):
+            // In the ⌘P commands list, group by category (Notes / View / …).
+            if mode == .commandsOnly && state.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return p.category != c.category
+            }
             return false
         }
     }
-    
+
     private func sectionHeaderTitle(for item: PaletteItem) -> String {
         switch item {
         case .note(let note):
@@ -601,7 +711,10 @@ struct CommandPaletteView: View {
             }
             if !state.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "NOTES" }
             return note.isPinned ? "PINNED" : "NOTES"
-        case .command:
+        case .command(let cmd):
+            if mode == .commandsOnly && state.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (cmd.category ?? "Commands").uppercased()
+            }
             return "COMMANDS"
         }
     }

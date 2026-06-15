@@ -10,6 +10,13 @@ public extension Notification.Name {
     static let focusNoteList = Notification.Name("focusNoteList")
     static let findInNote = Notification.Name("findInNote")
     static let openCommandPalette = Notification.Name("openCommandPalette")
+    /// Opens the command palette in commands-only mode (⌘P): every action the
+    /// app can do, browsable and searchable, with no notes mixed in.
+    static let openCommandList = Notification.Name("openCommandList")
+    /// Asks the open editor to delete the current note via its (locked-aware)
+    /// confirmation dialog — so a palette "Delete Note" is as safe as the
+    /// header trash button.
+    static let requestDeleteCurrentNote = Notification.Name("requestDeleteCurrentNote")
     static let toggleSidebar = Notification.Name("toggleSidebar")
     static let openChangeLocationPanel = Notification.Name("openChangeLocationPanel")
     static let refocusEditor = Notification.Name("refocusEditor")

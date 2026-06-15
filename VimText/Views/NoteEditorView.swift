@@ -226,6 +226,7 @@ struct NoteEditorView: View {
                     viewModel.deleteNote(note)
                 }
             }
+            .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Are you sure you want to permanently delete this note?")
@@ -265,6 +266,15 @@ struct NoteEditorView: View {
                 findController.isVisible = true
             }
             findController.focusTrigger += 1
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .requestDeleteCurrentNote)) { _ in
+            // Same locked-aware path as the header trash button, so a palette
+            // "Delete Note" goes through the confirmation dialog too.
+            if isLocked {
+                vimEngine.statusMessage = "Note is locked — unlock to delete"
+            } else {
+                showDeleteConfirm = true
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             commitPendingWorkEagerly()

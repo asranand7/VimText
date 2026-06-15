@@ -9,6 +9,7 @@ A native macOS notes app with broad Vim keybinding support. Think Apple Notes, b
 ### Notes Management
 - **Sidebar with note list** — browse all your notes in a clean sidebar
 - **Keyboard list navigation** — `⌘L` hands focus to the sidebar so you can drive it Vim-style: `j`/`k` (or `↑`/`↓`) move the cursor, `gg`/`G` jump to the first/last note, `Enter`/`o` open the highlighted note and return focus to the editor, `dd` deletes (with confirmation), `/` jumps to search, and `Esc`/`q` returns to the editor without changing the selection. A bold cursor ring on the highlighted row and a footer indicator show while you're navigating; `dd` on a locked note shows a "locked — unlock to delete" hint instead of deleting.
+- **Command palette** — `⌘P` opens a searchable palette of **every** command (notes, view, editor, appearance, storage), grouped by category; `⌘K` is the dedicated note quick-opener (fuzzy, recency-ranked, notes only).
 - **Pinned notes** — pin important notes to the top
 - **Search across notes** — `Cmd+Shift+F` to search all notes by title/content, navigate results with arrow keys, press Enter to open
 - **Context menus** — right-click notes for rename, pin, delete
@@ -17,7 +18,7 @@ A native macOS notes app with broad Vim keybinding support. Think Apple Notes, b
 - **Local storage** — notes are stored locally in `~/Library/Application Support/VimText/`
 
 ### Visual & Customization Options
-- **Paper Styles** — Toggle between **Plain**, **Dotted Grid**, and **Lined Paper** editor backgrounds (aligned to text baselines) via the settings menu or `⌘K` Command Palette.
+- **Paper Styles** — Toggle between **Plain**, **Dotted Grid**, and **Lined Paper** editor backgrounds (aligned to text baselines) via the settings menu or `⌘P` Command Palette.
 - **Line Numbers** — Toggle editor line numbers from the format menu.
 - **Modern Monochromatic Icon** — A sleek, minimalist black-and-white macOS dock icon designed for modern setups.
 - **Multiple Editor Themes** — Support for premium themes including Catppuccin, Nord, Dracula, Gruvbox, and Solarized.
@@ -216,7 +217,7 @@ VimText/
 │   ├── NoteListView.swift      # Sidebar note list & search
 │   ├── NoteEditorView.swift    # Editor chrome (header, find bar, status bar)
 │   ├── NoteRowView.swift       # Individual note row
-│   ├── CommandPaletteView.swift# ⌘K command palette
+│   ├── CommandPaletteView.swift# ⌘K note quick-open / ⌘P command palette
 │   └── SidebarView.swift       # (legacy folder list, currently unused)
 ├── Vim/                        # Editor core — see ARCHITECTURE.md
 │   ├── VimMode.swift           # Mode/action/motion/text-object enums (+ word-under-cursor)

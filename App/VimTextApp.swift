@@ -64,6 +64,11 @@ struct VimTextApp: App {
                 }
                 .keyboardShortcut("k", modifiers: .command)
 
+                Button("Command Palette…") {
+                    NotificationCenter.default.post(name: .openCommandList, object: nil)
+                }
+                .keyboardShortcut("p", modifiers: .command)
+
                 Button("Focus Note List") {
                     NotificationCenter.default.post(name: .focusNoteList, object: nil)
                 }

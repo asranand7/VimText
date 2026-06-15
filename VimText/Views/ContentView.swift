@@ -9,6 +9,7 @@ public struct ContentView: View {
     private var theme: AppTheme { themeManager.theme }
 
     @State private var showCommandPalette = false
+    @State private var paletteMode: PaletteMode = .notesOnly
 
     private var clampedSidebarWidth: CGFloat {
         CGFloat(SidebarLayout.clampedWidth(sidebarWidth))
@@ -34,7 +35,8 @@ public struct ContentView: View {
             HStack(alignment: .top, spacing: 40) {
                 shortcutColumn(title: "App", shortcuts: [
                     ("⌘N", "New note"),
-                    ("⌘K", "Quick open"),
+                    ("⌘K", "Quick open note"),
+                    ("⌘P", "Command palette"),
                     ("⌘L", "Focus note list"),
                     ("⌘F", "Find in note"),
                     ("⌘⇧F", "Search all notes"),
@@ -113,7 +115,7 @@ public struct ContentView: View {
             .disabled(showCommandPalette)
 
             if showCommandPalette {
-                CommandPaletteView(viewModel: viewModel, isPresented: $showCommandPalette)
+                CommandPaletteView(viewModel: viewModel, isPresented: $showCommandPalette, mode: paletteMode)
                     .zIndex(10)
             }
         }
@@ -137,9 +139,10 @@ public struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openCommandPalette)) { _ in
-            withAnimation(.spring(response: 0.22, dampingFraction: 0.75)) {
-                showCommandPalette.toggle()
-            }
+            togglePalette(.notesOnly)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openCommandList)) { _ in
+            togglePalette(.commandsOnly)
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in
             toggleSidebar()
@@ -211,6 +214,21 @@ public struct ContentView: View {
         }
         if isSidebarVisible {
             revealSelectedNoteAfterSidebarAppears()
+        }
+    }
+
+    /// ⌘K (`.notesOnly`) and ⌘P (`.commandsOnly`) share one overlay. Pressing the
+    /// same opener again closes it; pressing the other switches mode in place.
+    private func togglePalette(_ mode: PaletteMode) {
+        if showCommandPalette && paletteMode == mode {
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.75)) {
+                showCommandPalette = false
+            }
+        } else {
+            paletteMode = mode
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.75)) {
+                showCommandPalette = true
+            }
         }
     }
 
