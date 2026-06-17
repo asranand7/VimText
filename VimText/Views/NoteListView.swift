@@ -43,27 +43,50 @@ struct NoteListView: View {
     /// The notes the keyboard cursor can land on, in the exact top-to-bottom
     /// order they're rendered. While searching, that's the flat result list;
     /// otherwise it's pinned-then-date-sections, skipping any collapsed
-    /// section (which isn't on screen to land on).
+    /// section (which isn't on screen to land on). Used by the action handlers
+    /// (open/delete/clamp), which run once per action — `notesList` builds its
+    /// own copy once per render so rows don't each recompute it.
     private var navigableNotes: [Note] {
         let notes = viewModel.filteredNotes
         if searchActive { return notes }
-        var out: [Note] = []
         let pinned = notes.filter { $0.isPinned }
-        if !pinned.isEmpty && !collapsedSections.contains("Pinned") {
-            out.append(contentsOf: pinned)
-        }
         let unpinned = notes.filter { !$0.isPinned }
-        for section in dateSections(unpinned) where !collapsedSections.contains(section.title) {
-            out.append(contentsOf: section.notes)
-        }
-        return out
+        return navigationOrder(
+            isSearching: false,
+            notes: notes,
+            pinned: pinned,
+            pinnedVisible: !pinned.isEmpty && !collapsedSections.contains("Pinned"),
+            sections: dateSections(unpinned)
+        )
     }
 
-    /// note id → its index within `navigableNotes`, so each row can tell
-    /// whether it's the highlighted one without re-scanning the list.
-    private var navIndexByID: [UUID: Int] {
+    /// Count of navigable rows, cheaply. The hot j/k path only needs a count to
+    /// clamp the cursor; with nothing collapsed every filtered note is
+    /// navigable, so we skip rebuilding the Calendar-heavy date sections.
+    private var navigableCount: Int {
+        if searchActive { return viewModel.filteredNotes.count }
+        if collapsedSections.isEmpty { return viewModel.filteredNotes.count }
+        return navigableNotes.count
+    }
+
+    /// Flattens the on-screen order (pinned, then non-collapsed date sections)
+    /// into the cursor's navigable list.
+    private func navigationOrder(isSearching: Bool, notes: [Note], pinned: [Note], pinnedVisible: Bool, sections: [(title: String, notes: [Note])]) -> [Note] {
+        if isSearching { return notes }
+        var order: [Note] = []
+        order.reserveCapacity(notes.count)
+        if pinnedVisible { order.append(contentsOf: pinned) }
+        for section in sections where !collapsedSections.contains(section.title) {
+            order.append(contentsOf: section.notes)
+        }
+        return order
+    }
+
+    /// id → row index over the navigable order, built once per render.
+    private func indexMap(for order: [Note]) -> [UUID: Int] {
         var map: [UUID: Int] = [:]
-        for (index, note) in navigableNotes.enumerated() { map[note.id] = index }
+        map.reserveCapacity(order.count)
+        for (index, note) in order.enumerated() { map[note.id] = index }
         return map
     }
 
@@ -642,6 +665,17 @@ struct NoteListView: View {
         let notes = viewModel.filteredNotes
         let isSearching = !viewModel.searchText.isEmpty
 
+        // Compute the on-screen layout and the cursor index map ONCE per render.
+        // Previously each row read `navIndexByID`, which rebuilt the whole map
+        // (and the Calendar-heavy date sections) on every access — O(n²) per
+        // keystroke, which is what made j/k crawl with many notes.
+        let pinned = isSearching ? [] : notes.filter { $0.isPinned }
+        let unpinned = isSearching ? [] : notes.filter { !$0.isPinned }
+        let sections = isSearching ? [] : dateSections(unpinned)
+        let pinnedVisible = !pinned.isEmpty && !collapsedSections.contains("Pinned")
+        let navOrder = navigationOrder(isSearching: isSearching, notes: notes, pinned: pinned, pinnedVisible: pinnedVisible, sections: sections)
+        let navIndex = indexMap(for: navOrder)
+
         ScrollViewReader { proxy in
             ScrollView {
                 // VStack (not LazyVStack): LazyVStack's deferred row
@@ -656,23 +690,20 @@ struct NoteListView: View {
                             noteRow(note: note, flatIndex: idx, isSearching: true)
                         }
                     } else {
-                        let pinned = notes.filter { $0.isPinned }
-                        let unpinned = notes.filter { !$0.isPinned }
-
                         if !pinned.isEmpty {
                             collapsibleSectionHeader("Pinned", count: pinned.count)
-                            if !collapsedSections.contains("Pinned") {
+                            if pinnedVisible {
                                 ForEach(pinned) { note in
-                                    noteRow(note: note, flatIndex: navIndexByID[note.id] ?? -1, isSearching: false)
+                                    noteRow(note: note, flatIndex: navIndex[note.id] ?? -1, isSearching: false)
                                 }
                             }
                         }
 
-                        ForEach(dateSections(unpinned), id: \.title) { section in
+                        ForEach(sections, id: \.title) { section in
                             collapsibleSectionHeader(section.title, count: section.notes.count)
                             if !collapsedSections.contains(section.title) {
                                 ForEach(section.notes) { note in
-                                    noteRow(note: note, flatIndex: navIndexByID[note.id] ?? -1, isSearching: false)
+                                    noteRow(note: note, flatIndex: navIndex[note.id] ?? -1, isSearching: false)
                                 }
                             }
                         }
@@ -683,8 +714,12 @@ struct NoteListView: View {
             }
             .scrollIndicators(.never)
             .onChange(of: highlightedIndex) {
-                if let idx = highlightedIndex, idx < notes.count {
-                    proxy.scrollTo(notes[idx].id, anchor: .center)
+                // Keep the cursor visible with the minimum scroll (no full
+                // re-centre on every keystroke). Index into the navigable
+                // order — not filteredNotes, which differs once notes regroup
+                // into date sections.
+                if let idx = highlightedIndex, idx >= 0, idx < navOrder.count {
+                    proxy.scrollTo(navOrder[idx].id)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .revealNoteInSidebar)) { notification in
@@ -741,7 +776,9 @@ struct NoteListView: View {
     }
 
     private func moveHighlight(down: Bool) {
-        let count = currentNavList.count
+        // navigableCount avoids rebuilding the navigable list (and its date
+        // sections) on every j/k — the hot path only needs a count to clamp.
+        let count = navigableCount
         guard count > 0 else { return }
 
         if let current = highlightedIndex {
