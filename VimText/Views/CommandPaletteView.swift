@@ -238,10 +238,12 @@ class CommandPaletteState: ObservableObject {
     static func scoreNote(_ note: Note, query: String, recencyRank: [UUID: Int], foldedContent: String? = nil) -> Int? {
         var score = 0
         var matched = false
-        // Folding lets a straight-quote query match smart-quote note text.
-        let query = query.searchFolded
-        let title = note.displayTitle.searchFolded
-        if let r = title.range(of: query, options: .caseInsensitive) {
+        // Normalized (folded + lowercased) on both sides so a straight-quote
+        // query matches smart-quote text and the membership scans are literal
+        // (case-insensitive without the slow `.caseInsensitive` option).
+        let query = query.searchNormalized
+        let title = note.displayTitle.searchNormalized
+        if let r = title.range(of: query) {
             matched = true
             score += 100
             if r.lowerBound == title.startIndex { score += 30 }
@@ -250,8 +252,8 @@ class CommandPaletteState: ObservableObject {
             matched = true
             score += fuzzy.score * 2
         }
-        let content = foldedContent ?? note.content.searchFolded
-        if content.range(of: query, options: .caseInsensitive) != nil {
+        let content = foldedContent ?? note.content.searchNormalized
+        if content.range(of: query) != nil {
             matched = true
             score += 40
         }

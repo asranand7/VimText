@@ -27,6 +27,11 @@ let package = Package(
             name: "VimTextSmokeTests",
             dependencies: ["VimTextCore"],
             path: "Tests/VimTextSmokeTests"
+        ),
+        .executableTarget(
+            name: "VimTextBench",
+            dependencies: ["VimTextCore"],
+            path: "Tests/VimTextBench"
         )
     ]
 )

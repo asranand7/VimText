@@ -17,6 +17,16 @@ public extension String {
         return String(view)
     }
 
+    /// Folded **and** lowercased, for case-insensitive membership scans. Pre-
+    /// normalizing both haystack and query this way lets the filter use a plain
+    /// literal `range(of:)` instead of the much slower `.caseInsensitive`
+    /// option, whose worst case (no match → full scan of every note) dominated
+    /// sidebar/⌘K search at scale. Not 1:1 in UTF-16, so it must NOT be used
+    /// where folded ranges are mapped back to the original string (highlighting).
+    var searchNormalized: String {
+        searchFolded.lowercased()
+    }
+
     private static func foldedScalar(_ scalar: Unicode.Scalar) -> Unicode.Scalar {
         switch scalar {
         case "\u{2018}", "\u{2019}", "\u{02BC}": return "'"   // ‘ ’ ʼ

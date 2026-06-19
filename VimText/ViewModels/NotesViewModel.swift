@@ -98,7 +98,7 @@ final class NotesViewModel: ObservableObject {
     /// Sets all three per-note caches from a freshly-known title/content pair.
     private func indexNote(id: UUID, title: String, content: String) {
         searchIndex[id] = Self.searchHaystack(title: title, content: content)
-        searchContentByID[id] = content.searchFolded
+        searchContentByID[id] = content.searchNormalized
         previewByID[id] = Note.makePreview(content: content)
     }
 
@@ -120,7 +120,7 @@ final class NotesViewModel: ObservableObject {
         var preview = [UUID: String](minimumCapacity: notes.count)
         for note in notes {
             haystack[note.id] = searchHaystack(for: note)
-            content[note.id] = note.content.searchFolded
+            content[note.id] = note.content.searchNormalized
             preview[note.id] = Note.makePreview(content: note.content)
         }
         return (haystack, content, preview)
@@ -140,13 +140,13 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    /// The folded search haystack for a note: title and content joined (so one
-    /// scan covers both fields) and run through `searchFolded` (so a
-    /// straight-quote query matches smart-quote text). Folding maps scalars 1:1,
-    /// so folding the join equals joining the folds — this matches exactly the
-    /// queries the old per-field `title`/`content` `searchFolded` checks did.
+    /// The search haystack for a note: title and content joined (so one scan
+    /// covers both fields) and run through `searchNormalized` (folded so a
+    /// straight-quote query matches smart-quote text, and lowercased so the
+    /// filter can scan literally instead of via the slow `.caseInsensitive`
+    /// option). Used only for boolean membership, never for range mapping.
     nonisolated static func searchHaystack(title: String, content: String) -> String {
-        (title + "\n" + content).searchFolded
+        (title + "\n" + content).searchNormalized
     }
 
     nonisolated static func searchHaystack(for note: Note) -> String {
@@ -171,11 +171,13 @@ final class NotesViewModel: ObservableObject {
         }
 
         if !searchText.isEmpty {
-            // Folded so a straight-quote query matches smart-quote note text.
-            let query = searchText.searchFolded
+            // Normalized (folded + lowercased) on both sides so a literal scan
+            // is case-insensitive without the costly `.caseInsensitive` option,
+            // whose no-match full scan dominated this filter at scale.
+            let query = searchText.searchNormalized
             result = result.filter { note in
                 let haystack = searchIndex[note.id] ?? searchHaystack(for: note)
-                return haystack.range(of: query, options: .caseInsensitive) != nil
+                return haystack.range(of: query) != nil
             }
         }
 
