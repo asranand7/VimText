@@ -177,26 +177,35 @@ struct NoteListView: View {
         theme.isMonochrome ? 0.0 : 0.02
     }
 
-    private func dateGroup(_ date: Date) -> (order: Int, title: String) {
+    /// Groups notes into the sidebar's date buckets (Today, Yesterday, Previous
+    /// 7/30 Days, then per-month). The day boundaries are computed once up front
+    /// instead of per note: the old per-note `Calendar.isDateInToday`/
+    /// `date(byAdding:)` calls were most of the cost of running this over
+    /// hundreds of notes on every sidebar render.
+    private func dateSections(_ notes: [Note]) -> [(title: String, notes: [Note])] {
         let cal = Calendar.current
         let now = Date()
-        if cal.isDateInToday(date) { return (0, "Today") }
-        if cal.isDateInYesterday(date) { return (1, "Yesterday") }
-        if let d7 = cal.date(byAdding: .day, value: -7, to: now), date > d7 { return (2, "Previous 7 Days") }
-        if let d30 = cal.date(byAdding: .day, value: -30, to: now), date > d30 { return (3, "Previous 30 Days") }
-        let comps = cal.dateComponents([.year, .month], from: date)
-        let df = comps.year == cal.component(.year, from: now)
-            ? AppDateFormatters.month
-            : AppDateFormatters.monthYear
-        let ym = (comps.year ?? 0) * 12 + (comps.month ?? 0)
-        return (10_000_000 - ym, df.string(from: date))
-    }
+        let startOfToday = cal.startOfDay(for: now)
+        let startOfYesterday = cal.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
+        let weekAgo = cal.date(byAdding: .day, value: -7, to: startOfToday) ?? startOfToday
+        let monthAgo = cal.date(byAdding: .day, value: -30, to: startOfToday) ?? startOfToday
+        let currentYear = cal.component(.year, from: now)
 
-    private func dateSections(_ notes: [Note]) -> [(title: String, notes: [Note])] {
+        func group(_ date: Date) -> (order: Int, title: String) {
+            if date >= startOfToday { return (0, "Today") }
+            if date >= startOfYesterday { return (1, "Yesterday") }
+            if date >= weekAgo { return (2, "Previous 7 Days") }
+            if date >= monthAgo { return (3, "Previous 30 Days") }
+            let comps = cal.dateComponents([.year, .month], from: date)
+            let df = comps.year == currentYear ? AppDateFormatters.month : AppDateFormatters.monthYear
+            let ym = (comps.year ?? 0) * 12 + (comps.month ?? 0)
+            return (10_000_000 - ym, df.string(from: date))
+        }
+
         var groups: [Int: (String, [Note])] = [:]
         var orderSeen: [Int] = []
         for note in notes {
-            let key = dateGroup(note.modifiedAt)
+            let key = group(note.modifiedAt)
             if groups[key.order] == nil { groups[key.order] = (key.title, []); orderSeen.append(key.order) }
             groups[key.order]?.1.append(note)
         }
@@ -753,6 +762,8 @@ struct NoteListView: View {
             isSelected: isSelected,
             isHighlighted: isHighlighted,
             isNavCursor: isNavCursor,
+            themeID: themeManager.theme.id,
+            sidebarTint: themeManager.sidebarTint,
             onCopyPath: { copyPath(for: note) },
             onTogglePin: {
                 withAnimation(DS.snappy) { viewModel.togglePin(note) }
@@ -769,6 +780,12 @@ struct NoteListView: View {
                 viewModel.searchText = ""
             }
         )
+        // Equatable so a j/k cursor move re-renders only the two rows whose
+        // highlight actually changed — not every row in the (non-lazy) list.
+        // Without this each keystroke rebuilt hundreds of row bodies (each
+        // doing Calendar date math), so the cursor and scroll couldn't keep up
+        // with key-repeat and only caught up once the key was released.
+        .equatable()
         .id(note.id)
         .contextMenu {
             noteContextMenu(for: note)
@@ -963,11 +980,18 @@ struct NoteListView: View {
 /// mouse only invalidates the row being entered/left, instead of the parent
 /// list (which would re-run folder lookups, fills, and date formatting for
 /// every row on every mouse move).
-private struct NoteRowListItem: View {
+private struct NoteRowListItem: View, Equatable {
     let note: Note
     let isSelected: Bool
     let isHighlighted: Bool
     var isNavCursor: Bool = false
+    /// Theme identity, threaded in so `==` can detect a theme or sidebar-tint
+    /// change. `theme.id` fully determines the row's styling (isDark /
+    /// isMonochrome / colors all derive from it); the tint is a separate user
+    /// setting. Everything else `==` deliberately ignores — closures and the
+    /// injected environment — which is what lets unchanged rows be skipped.
+    let themeID: String
+    let sidebarTint: Color
     let onCopyPath: () -> Void
     let onTogglePin: () -> Void
     let onToggleLock: () -> Void
@@ -978,6 +1002,24 @@ private struct NoteRowListItem: View {
     @State private var isHovered = false
 
     private var theme: AppTheme { themeManager.theme }
+
+    /// Two rows compare equal — and so skip re-rendering — when nothing that
+    /// affects their appearance has changed. `modifiedAt` is bumped on every
+    /// content / title / pin edit, so comparing it (with the lock & pin flags
+    /// and the selection / cursor state) catches every visible change without
+    /// comparing note bodies. Hover lives in `@State`, which invalidates the
+    /// body independently of this check.
+    static func == (lhs: NoteRowListItem, rhs: NoteRowListItem) -> Bool {
+        lhs.note.id == rhs.note.id &&
+        lhs.note.modifiedAt == rhs.note.modifiedAt &&
+        lhs.note.isPinned == rhs.note.isPinned &&
+        lhs.note.isLocked == rhs.note.isLocked &&
+        lhs.isSelected == rhs.isSelected &&
+        lhs.isHighlighted == rhs.isHighlighted &&
+        lhs.isNavCursor == rhs.isNavCursor &&
+        lhs.themeID == rhs.themeID &&
+        lhs.sidebarTint == rhs.sidebarTint
+    }
 
     var body: some View {
         let tint = themeManager.sidebarTint
