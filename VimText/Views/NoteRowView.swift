@@ -2,6 +2,10 @@ import SwiftUI
 
 struct NoteRowView: View {
     let note: Note
+    /// Precomputed preview text (cached by the view model). When nil it's
+    /// derived from `note` — the multi-select rows pass nil; the main list
+    /// passes the cache to avoid re-deriving it for every row each render.
+    var preview: String? = nil
     var isHovered: Bool = false
     var isSelected: Bool = false
     var onCopyPath: (() -> Void)? = nil
@@ -144,7 +148,7 @@ struct NoteRowView: View {
                     .foregroundStyle(theme.secondaryText.opacity(isSelected ? 0.9 : 0.72))
                     .fixedSize()
 
-                Text(note.preview.isEmpty ? "No additional text" : note.preview)
+                Text((preview ?? note.preview).isEmpty ? "No additional text" : (preview ?? note.preview))
                     .font(.system(size: 12, weight: .regular, design: .default))
                     .foregroundStyle(theme.secondaryText.opacity(isSelected ? 0.82 : 0.62))
                     .lineLimit(2)

@@ -53,7 +53,13 @@ public struct Note: Identifiable, Codable, Hashable {
         return trimmed.isEmpty ? "New Note" : trimmed
     }
 
-    public var preview: String {
+    public var preview: String { Self.makePreview(content: content) }
+
+    /// Pure derivation of a sidebar/palette preview from raw note content.
+    /// Exposed as a static so the view model can cache the result per note id
+    /// (keyed off content changes) instead of re-deriving it in the render hot
+    /// path — the non-lazy sidebar list builds every row on each filter change.
+    public static func makePreview(content: String) -> String {
         // Only the first 3 lines after the title (capped to 120 chars) are
         // ever shown, so split just the head of the content. The first line
         // of `content` is also the source of `title`, so it's dropped here

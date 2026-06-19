@@ -759,6 +759,7 @@ struct NoteListView: View {
         // re-renders the row entered/left — not the whole list.
         NoteRowListItem(
             note: note,
+            preview: viewModel.preview(for: note.id) ?? note.preview,
             isSelected: isSelected,
             isHighlighted: isHighlighted,
             isNavCursor: isNavCursor,
@@ -982,6 +983,9 @@ struct NoteListView: View {
 /// every row on every mouse move).
 private struct NoteRowListItem: View, Equatable {
     let note: Note
+    /// Cached preview text (see NoteRowView.preview). Not part of `==`: it only
+    /// changes when content changes, which already bumps `note.modifiedAt`.
+    let preview: String
     let isSelected: Bool
     let isHighlighted: Bool
     var isNavCursor: Bool = false
@@ -1041,6 +1045,7 @@ private struct NoteRowListItem: View, Equatable {
 
         return NoteRowView(
             note: note,
+            preview: preview,
             isHovered: isHovered,
             isSelected: emphasized || isHighlighted,
             onCopyPath: onCopyPath,

@@ -219,25 +219,37 @@ public final class StorageManager {
     struct NotesSnapshot {
         let notes: [Note]
         let urlsByID: [UUID: URL]
+        /// Whether each note has an in-sync `.rtf` sidecar on disk. Recorded
+        /// even when the bytes aren't loaded (`loadRTF: false`) so a lazy caller
+        /// knows which notes can be hydrated on demand.
+        let rtfInSyncByID: [UUID: Bool]
     }
 
     /// Reads notes from disk **without** mutating `urlsByID`. Safe to call
     /// off the main thread; pair with `apply(_:)` on the main thread.
-    func readNotesSnapshot() -> NotesSnapshot {
+    ///
+    /// `loadRTF: false` skips reading the (potentially multi-MB, image-heavy)
+    /// `.rtf` sidecars — content always comes from the `.txt` — leaving
+    /// `rtfData` nil and deferring the read to `loadRTFData(for:)` when a note
+    /// is actually opened. This keeps launch I/O and resident memory
+    /// proportional to notes the user opens, not the whole library.
+    func readNotesSnapshot(loadRTF: Bool = true) -> NotesSnapshot {
         guard let files = try? fileManager.contentsOfDirectory(at: notesURL, includingPropertiesForKeys: nil) else {
-            return NotesSnapshot(notes: [], urlsByID: [:])
+            return NotesSnapshot(notes: [], urlsByID: [:], rtfInSyncByID: [:])
         }
 
         var notes: [Note] = []
         var urlMap: [UUID: URL] = [:]
+        var rtfSync: [UUID: Bool] = [:]
         for url in files where url.pathExtension == "json" {
             guard let data = try? Data(contentsOf: url) else { continue }
             let (txtURL, rtfURL) = sidecars(for: url)
             if fileManager.fileExists(atPath: txtURL.path) {
                 guard let meta = try? decoder.decode(NoteMetadata.self, from: data),
                       let content = try? String(contentsOf: txtURL, encoding: .utf8) else { continue }
+                let hasRTF = meta.rtfInSync && fileManager.fileExists(atPath: rtfURL.path)
                 var rtf: Data? = nil
-                if meta.rtfInSync, fileManager.fileExists(atPath: rtfURL.path) {
+                if hasRTF, loadRTF {
                     rtf = try? Data(contentsOf: rtfURL)
                 }
                 let note = Note(
@@ -252,13 +264,31 @@ public final class StorageManager {
                     isLocked: meta.isLocked ?? false
                 )
                 urlMap[note.id] = url
+                rtfSync[note.id] = hasRTF
                 notes.append(note)
             } else if let note = try? decoder.decode(Note.self, from: data) {
+                // Legacy single-file format embeds rtfData in the JSON; it's
+                // already in memory, so keep it (no extra I/O to defer).
                 urlMap[note.id] = url
+                rtfSync[note.id] = !(note.rtfData?.isEmpty ?? true)
                 notes.append(note)
             }
         }
-        return NotesSnapshot(notes: notes, urlsByID: urlMap)
+        return NotesSnapshot(notes: notes, urlsByID: urlMap, rtfInSyncByID: rtfSync)
+    }
+
+    /// Reads a single note's `.rtf` sidecar on demand (the lazy counterpart of
+    /// `readNotesSnapshot(loadRTF: false)`). Returns nil if the note has no
+    /// in-sync sidecar. Safe to call from the main thread — it's one file read,
+    /// paid only when a note is opened.
+    func loadRTFData(for id: UUID) -> Data? {
+        lock.lock()
+        let url = urlsByID[id]
+        lock.unlock()
+        guard let url else { return nil }
+        let (_, rtfURL) = sidecars(for: url)
+        guard fileManager.fileExists(atPath: rtfURL.path) else { return nil }
+        return try? Data(contentsOf: rtfURL)
     }
 
     /// Applies a previously-read snapshot's url map. Must be called from the

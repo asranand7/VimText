@@ -217,17 +217,22 @@ extension VimTextView {
             syncCursorPosition()
         }
 
+        /// Serializes the document to RTF, or returns empty `Data` when it has
+        /// no rich formatting worth preserving — a plain-prose or code-only note
+        /// is fully reconstructible from the `.txt`, so we skip the (whole-
+        /// document, O(length)) RTF encode entirely for the common case.
+        private func serializedRTF() -> Data {
+            guard let storage = textView?.textStorage,
+                  storage.length > 0,
+                  textView?.hasRichTextFormatting == true else { return Data() }
+            let flattened = ImageAttachments.flattened(storage)
+            let range = NSRange(location: 0, length: flattened.length)
+            return (try? flattened.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])) ?? Data()
+        }
+
         private func serializeRTFIfStale() {
-            guard rtfStale, let textView = textView else { return }
-            if let textStorage = textView.textStorage, textStorage.length > 0 {
-                let flattened = ImageAttachments.flattened(textStorage)
-                let range = NSRange(location: 0, length: flattened.length)
-                if let data = try? flattened.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
-                    latestRTF = data
-                }
-            } else {
-                latestRTF = Data()
-            }
+            guard rtfStale else { return }
+            latestRTF = serializedRTF()
             rtfStale = false
             notifyContentChange()
         }
@@ -268,32 +273,21 @@ extension VimTextView {
         /// both content (Markdown, with the new `|width`) and RTF so the size
         /// persists.
         func imageDidResize() {
-            guard let textView = textView, let storage = textView.textStorage else { return }
+            guard let storage = textView?.textStorage else { return }
             var synced = ImageAttachments.markdownString(from: storage)
             synced.makeContiguousUTF8()
             latestText = synced
-            if storage.length > 0 {
-                let flattened = ImageAttachments.flattened(storage)
-                let range = NSRange(location: 0, length: flattened.length)
-                if let data = try? flattened.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
-                    latestRTF = data
-                }
-            }
+            latestRTF = serializedRTF()
             rtfStale = false
             notifyContentChange()
         }
 
         func formattingDidChange() {
             // Formatting changes (bold/italic/underline toggle) are explicit
-            // user actions — serialize RTF immediately so it persists.
-            guard let textView = textView else { return }
-            if let textStorage = textView.textStorage, textStorage.length > 0 {
-                let flattened = ImageAttachments.flattened(textStorage)
-                let range = NSRange(location: 0, length: flattened.length)
-                if let data = try? flattened.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
-                    latestRTF = data
-                }
-            }
+            // user actions — serialize RTF immediately so it persists. If the
+            // toggle just removed the last formatting, serializedRTF() returns
+            // empty and the now-plain note drops its sidecar.
+            latestRTF = serializedRTF()
             rtfStale = false
             notifyContentChange()
         }

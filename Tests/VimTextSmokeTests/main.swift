@@ -588,6 +588,25 @@ func testStorageRoundTripRenameCollisionAndRTF() throws {
         let rtfURL = manager.fileURL(for: note).deletingPathExtension().appendingPathExtension("rtf")
         try expect(!FileManager.default.fileExists(atPath: rtfURL.path), "nil RTF should remove sidecar")
     }
+
+    // Lazy RTF: readNotesSnapshot(loadRTF: false) defers the (potentially huge)
+    // sidecar read but still records that it's in sync, and loadRTFData fetches
+    // the bytes on demand when a note is actually opened.
+    try withTemporaryStorage { manager, _ in
+        let rtf = Data("{\\rtf1\\ansi world}".utf8)
+        let rich = Note(title: "Rich", content: "world", rtfData: rtf)
+        try expectSuccess(manager.saveNote(rich, rtfInSync: true), "rich note should save")
+        let plain = Note(title: "Plain", content: "just text")
+        try expectSuccess(manager.saveNote(plain), "plain note should save")
+
+        let lazy = manager.readNotesSnapshot(loadRTF: false)
+        let lazyRichRTF = lazy.notes.first { $0.id == rich.id }?.rtfData
+        try expect(lazyRichRTF == nil, "lazy snapshot should not read RTF bytes")
+        try expect(lazy.rtfInSyncByID[rich.id] == true, "rich note should be flagged in-sync")
+        try expect(lazy.rtfInSyncByID[plain.id] == false, "plain note should be flagged not-in-sync")
+        try expect(manager.loadRTFData(for: rich.id) == rtf, "on-demand load returns the sidecar bytes")
+        try expect(manager.loadRTFData(for: plain.id) == nil, "plain note has no sidecar to load")
+    }
 }
 
 func testStorageMalformedFilesAndWriteErrors() throws {

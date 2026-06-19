@@ -165,7 +165,7 @@ class CommandPaletteState: ObservableObject {
         return commands
     }
     
-    func scheduleSearch(notes: [Note], recentIds: [UUID], includeNotes: Bool = true, includeCommands: Bool = true, noteContext: PaletteNoteContext, themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) {
+    func scheduleSearch(notes: [Note], recentIds: [UUID], contentIndex: [UUID: String] = [:], includeNotes: Bool = true, includeCommands: Bool = true, noteContext: PaletteNoteContext, themeManager: ThemeManager, viewModel: NotesViewModel, dismiss: @escaping () -> Void) {
         debounceItem?.cancel()
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         searchGeneration &+= 1
@@ -179,7 +179,7 @@ class CommandPaletteState: ObservableObject {
         }
 
         let work = DispatchWorkItem { [weak self] in
-            let matched = CommandPaletteState.matchingNotes(notes, query: query, recentIds: recentIds)
+            let matched = CommandPaletteState.matchingNotes(notes, query: query, recentIds: recentIds, contentIndex: contentIndex)
             DispatchQueue.main.async {
                 guard let self, gen == self.searchGeneration else { return }
                 self.results = self.buildItems(matched: matched, query: query, recentIds: recentIds, includeNotes: true, includeCommands: includeCommands, noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: dismiss)
@@ -191,7 +191,7 @@ class CommandPaletteState: ObservableObject {
 
     /// Ranked search: notes are scored (see `scoreNote`) and returned best
     /// first, instead of filtered in storage order.
-    static func matchingNotes(_ notes: [Note], query: String, recentIds: [UUID] = []) -> [Note] {
+    static func matchingNotes(_ notes: [Note], query: String, recentIds: [UUID] = [], contentIndex: [UUID: String]? = nil) -> [Note] {
         if query.isEmpty { return notes }
         var recencyRank: [UUID: Int] = [:]
         for (i, id) in recentIds.enumerated() { recencyRank[id] = i }
@@ -200,7 +200,7 @@ class CommandPaletteState: ObservableObject {
         var scored: [(note: Note, score: Int)]
         if count < 200 {
             scored = notes.compactMap { note in
-                scoreNote(note, query: query, recencyRank: recencyRank).map { (note, $0) }
+                scoreNote(note, query: query, recencyRank: recencyRank, foldedContent: contentIndex?[note.id]).map { (note, $0) }
             }
         } else {
             let cores = min(ProcessInfo.processInfo.activeProcessorCount, count)
@@ -213,7 +213,7 @@ class CommandPaletteState: ObservableObject {
                     guard lo < hi else { return }
                     var local: [(note: Note, score: Int)] = []
                     for i in lo..<hi {
-                        if let s = scoreNote(notes[i], query: query, recencyRank: recencyRank) {
+                        if let s = scoreNote(notes[i], query: query, recencyRank: recencyRank, foldedContent: contentIndex?[notes[i].id]) {
                             local.append((notes[i], s))
                         }
                     }
@@ -232,7 +232,10 @@ class CommandPaletteState: ObservableObject {
     /// content substring, plus flat boosts for pinned and recently opened
     /// notes. The weights only need to preserve that ordering — their exact
     /// values are taste, not science.
-    static func scoreNote(_ note: Note, query: String, recencyRank: [UUID: Int]) -> Int? {
+    /// `foldedContent`, when supplied, is the note's precomputed folded content
+    /// (from the view model's cache) — passing it avoids re-folding the full
+    /// body on every keystroke. When nil it's folded inline (e.g. from tests).
+    static func scoreNote(_ note: Note, query: String, recencyRank: [UUID: Int], foldedContent: String? = nil) -> Int? {
         var score = 0
         var matched = false
         // Folding lets a straight-quote query match smart-quote note text.
@@ -247,7 +250,8 @@ class CommandPaletteState: ObservableObject {
             matched = true
             score += fuzzy.score * 2
         }
-        if note.content.searchFolded.range(of: query, options: .caseInsensitive) != nil {
+        let content = foldedContent ?? note.content.searchFolded
+        if content.range(of: query, options: .caseInsensitive) != nil {
             matched = true
             score += 40
         }
@@ -520,18 +524,18 @@ struct CommandPaletteView: View {
             startWidth = width
             startHeight = height
             setupKeyboardMonitor()
-            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, includeNotes: mode == .notesOnly, includeCommands: mode == .commandsOnly, noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
+            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, contentIndex: viewModel.searchContentByID, includeNotes: mode == .notesOnly, includeCommands: mode == .commandsOnly, noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
         }
         .onChange(of: state.searchText) {
             state.selectionCameFromHover = false
             state.selectedIndex = 0
-            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, includeNotes: mode == .notesOnly, includeCommands: mode == .commandsOnly, noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
+            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, contentIndex: viewModel.searchContentByID, includeNotes: mode == .notesOnly, includeCommands: mode == .commandsOnly, noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
         }
         .onChange(of: mode) {
             // Switching ⌘K ⇄ ⌘P while the palette is already open: rebuild for
             // the new mode and reset the cursor to the top.
             state.selectedIndex = 0
-            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, includeNotes: mode == .notesOnly, includeCommands: mode == .commandsOnly, noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
+            state.scheduleSearch(notes: viewModel.notes, recentIds: viewModel.recentNoteIds, contentIndex: viewModel.searchContentByID, includeNotes: mode == .notesOnly, includeCommands: mode == .commandsOnly, noteContext: noteContext, themeManager: themeManager, viewModel: viewModel, dismiss: { dismiss() })
         }
     }
     
@@ -547,6 +551,7 @@ struct CommandPaletteView: View {
     
     @ViewBuilder
     private func paletteNoteRow(note: Note, index: Int, isSelected: Bool) -> some View {
+        let preview = viewModel.preview(for: note.id) ?? note.preview
         VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text(highlightedText(note.displayTitle, query: state.searchText, fuzzyFallback: true))
@@ -563,7 +568,7 @@ struct CommandPaletteView: View {
                     .foregroundStyle(theme.secondaryText.opacity(0.8))
             }
             
-            Text(highlightedText(note.preview.isEmpty ? "No additional text" : note.preview, query: state.searchText))
+            Text(highlightedText(preview.isEmpty ? "No additional text" : preview, query: state.searchText))
                 .font(.caption)
                 .foregroundStyle(theme.secondaryText.opacity(0.8))
                 .lineLimit(1)

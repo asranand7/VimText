@@ -23,7 +23,11 @@ final class NotesViewModel: ObservableObject {
     @Published var folders: [NoteFolder] = []
     @Published var selectedNoteId: UUID? {
         didSet {
-            if let id = selectedNoteId, id != oldValue { recordRecentNote(id) }
+            if let id = selectedNoteId, id != oldValue {
+                recordRecentNote(id)
+                // Load this note's RTF before the editor (re)builds and reads it.
+                hydrateRTFIfNeeded(id)
+            }
         }
     }
 
@@ -61,6 +65,9 @@ final class NotesViewModel: ObservableObject {
     private let storage = StorageManager.shared
     private var autoSaveTimer: Timer?
     private var pendingSaves: [UUID: Note] = [:]
+    /// Whether each note's on-disk `.rtf` sidecar is in sync with its content.
+    /// Seeded at load (so lazy RTF hydration knows which notes have a sidecar)
+    /// and updated on every edit.
     private var rtfInSyncByID: [UUID: Bool] = [:]
     private var cancellables = Set<AnyCancellable>()
 
@@ -72,6 +79,53 @@ final class NotesViewModel: ObservableObject {
     /// it in lockstep with `notes`.
     private var searchIndex: [UUID: String] = [:]
 
+    /// Per-note folded *content* (no title), keyed by note id. The ⌘K command
+    /// palette scores title and content with different weights, so it needs the
+    /// content fold on its own — previously it re-folded every note's full body
+    /// on every keystroke. Kept in lockstep with `searchIndex`.
+    private(set) var searchContentByID: [UUID: String] = [:]
+
+    /// Per-note cached sidebar/palette preview text, keyed by note id. Avoids
+    /// re-deriving `Note.preview` (prefix + line split) for every row on every
+    /// filter change in the non-lazy sidebar list. Kept in lockstep with
+    /// `searchIndex`.
+    private(set) var previewByID: [UUID: String] = [:]
+
+    /// The cached preview for a note, or nil if not yet indexed (callers fall
+    /// back to `note.preview`).
+    func preview(for id: UUID) -> String? { previewByID[id] }
+
+    /// Sets all three per-note caches from a freshly-known title/content pair.
+    private func indexNote(id: UUID, title: String, content: String) {
+        searchIndex[id] = Self.searchHaystack(title: title, content: content)
+        searchContentByID[id] = content.searchFolded
+        previewByID[id] = Note.makePreview(content: content)
+    }
+
+    private func indexNote(_ note: Note) {
+        indexNote(id: note.id, title: note.title, content: note.content)
+    }
+
+    /// Drops a note from all per-note caches.
+    private func unindexNote(_ id: UUID) {
+        searchIndex[id] = nil
+        searchContentByID[id] = nil
+        previewByID[id] = nil
+    }
+
+    /// The three per-note caches built together (off the main thread at launch).
+    nonisolated static func buildIndexes(_ notes: [Note]) -> (haystack: [UUID: String], content: [UUID: String], preview: [UUID: String]) {
+        var haystack = [UUID: String](minimumCapacity: notes.count)
+        var content = [UUID: String](minimumCapacity: notes.count)
+        var preview = [UUID: String](minimumCapacity: notes.count)
+        for note in notes {
+            haystack[note.id] = searchHaystack(for: note)
+            content[note.id] = note.content.searchFolded
+            preview[note.id] = Note.makePreview(content: note.content)
+        }
+        return (haystack, content, preview)
+    }
+
     var selectedNote: Note? {
         get {
             guard let id = selectedNoteId else { return nil }
@@ -79,7 +133,7 @@ final class NotesViewModel: ObservableObject {
         }
         set {
             if let note = newValue, let index = notes.firstIndex(where: { $0.id == note.id }) {
-                searchIndex[note.id] = Self.searchHaystack(for: note)
+                indexNote(note)
                 notes[index] = note
                 applySaveResult(storage.saveNote(note))
             }
@@ -91,18 +145,12 @@ final class NotesViewModel: ObservableObject {
     /// straight-quote query matches smart-quote text). Folding maps scalars 1:1,
     /// so folding the join equals joining the folds — this matches exactly the
     /// queries the old per-field `title`/`content` `searchFolded` checks did.
-    static func searchHaystack(title: String, content: String) -> String {
+    nonisolated static func searchHaystack(title: String, content: String) -> String {
         (title + "\n" + content).searchFolded
     }
 
-    static func searchHaystack(for note: Note) -> String {
+    nonisolated static func searchHaystack(for note: Note) -> String {
         searchHaystack(title: note.title, content: note.content)
-    }
-
-    private static func buildSearchIndex(_ notes: [Note]) -> [UUID: String] {
-        notes.reduce(into: [UUID: String](minimumCapacity: notes.count)) {
-            $0[$1.id] = searchHaystack(for: $1)
-        }
     }
 
     /// Pure filter+sort used by the Combine pipeline. `searchIndex` supplies the
@@ -186,11 +234,20 @@ final class NotesViewModel: ObservableObject {
         // StorageManager.urlsByID there — that map is also written by
         // saveNote/deleteNote on the main thread, and a concurrent write
         // can corrupt the dictionary (manifesting as lost row clicks).
-        let (snapshot, loadedFolders) = await Task.detached(priority: .userInitiated) {
-            (StorageManager.shared.readNotesSnapshot(), StorageManager.shared.loadFolders())
+        // Skip reading the .rtf sidecars at launch (loadRTF: false) and build
+        // the search/preview caches on the background thread too, so the main
+        // thread only assigns the finished results.
+        let (snapshot, loadedFolders, indexes) = await Task.detached(priority: .userInitiated) {
+            let snapshot = StorageManager.shared.readNotesSnapshot(loadRTF: false)
+            let folders = StorageManager.shared.loadFolders()
+            let indexes = NotesViewModel.buildIndexes(snapshot.notes)
+            return (snapshot, folders, indexes)
         }.value
         storage.apply(snapshot)
-        searchIndex = Self.buildSearchIndex(snapshot.notes)
+        searchIndex = indexes.haystack
+        searchContentByID = indexes.content
+        previewByID = indexes.preview
+        rtfInSyncByID = snapshot.rtfInSyncByID
         notes = snapshot.notes
         folders = loadedFolders
         storage.makeLaunchBackup()
@@ -206,9 +263,30 @@ final class NotesViewModel: ObservableObject {
     }
 
 
+    /// Loads a note's `.rtf` sidecar into the resident note on demand — RTF is
+    /// not read at launch (see `loadAsync`), so it's pulled in the first time a
+    /// note is opened. This MUST run before the editor reads `note.rtfData` and
+    /// before any save of the note: an unhydrated nil `rtfData` reaching
+    /// `performSaveNote` would delete the note's formatting/image sidecar.
+    /// Idempotent and cheap once hydrated (the guard short-circuits).
+    private func hydrateRTFIfNeeded(_ id: UUID) {
+        guard rtfInSyncByID[id] == true,
+              let index = notes.firstIndex(where: { $0.id == id }),
+              notes[index].rtfData == nil else { return }
+        if let data = storage.loadRTFData(for: id), !data.isEmpty {
+            notes[index].rtfData = data
+        }
+    }
+
     func load() {
         let loaded = storage.loadNotes()
-        searchIndex = Self.buildSearchIndex(loaded)
+        let indexes = Self.buildIndexes(loaded)
+        searchIndex = indexes.haystack
+        searchContentByID = indexes.content
+        previewByID = indexes.preview
+        // loadNotes() is eager (rtfData present), but reset the in-sync flags to
+        // match the freshly loaded set so later metadata saves stay correct.
+        rtfInSyncByID = loaded.reduce(into: [:]) { $0[$1.id] = !($1.rtfData?.isEmpty ?? true) }
         notes = loaded
         folders = storage.loadFolders()
         if notes.isEmpty {
@@ -248,7 +326,7 @@ final class NotesViewModel: ObservableObject {
             title: "Welcome to VimText",
             content: welcomeContent
         )
-        searchIndex[note.id] = Self.searchHaystack(for: note)
+        indexNote(note)
         notes.insert(note, at: 0)
         applySaveResult(storage.saveNote(note))
         selectedNoteId = note.id
@@ -260,7 +338,7 @@ final class NotesViewModel: ObservableObject {
             content: "",
             folderId: showAllNotes ? nil : selectedFolderId
         )
-        searchIndex[note.id] = Self.searchHaystack(for: note)
+        indexNote(note)
         notes.insert(note, at: 0)
         applySaveResult(storage.saveNote(note))
         selectedNoteId = note.id
@@ -270,16 +348,20 @@ final class NotesViewModel: ObservableObject {
     /// and selects it. Returns the new note's id.
     @discardableResult
     func duplicateNote(_ note: Note) -> UUID? {
-        guard notes.contains(where: { $0.id == note.id }) else { return nil }
+        guard let srcIndex = notes.firstIndex(where: { $0.id == note.id }) else { return nil }
+        // Hydrate the source's RTF (lazy-loaded) so the copy inherits its
+        // formatting and images rather than a stale nil.
+        hydrateRTFIfNeeded(note.id)
+        let source = notes[srcIndex]
         let copy = Note(
-            title: note.title,
-            content: note.content,
-            rtfData: note.rtfData,
-            folderId: note.folderId
+            title: source.title,
+            content: source.content,
+            rtfData: source.rtfData,
+            folderId: source.folderId
         )
-        let insertIndex = notes.firstIndex(where: { $0.id == note.id }).map { $0 + 1 } ?? 0
-        searchIndex[copy.id] = Self.searchHaystack(for: copy)
-        notes.insert(copy, at: insertIndex)
+        indexNote(copy)
+        rtfInSyncByID[copy.id] = !(copy.rtfData?.isEmpty ?? true)
+        notes.insert(copy, at: srcIndex + 1)
         applySaveResult(storage.saveNote(copy))
         selectedNoteId = copy.id
         return copy.id
@@ -292,7 +374,7 @@ final class NotesViewModel: ObservableObject {
         pendingSaves.removeValue(forKey: note.id)
         storage.deleteNote(note, remainingNotes: notes.filter { $0.id != note.id })
         notes.removeAll { $0.id == note.id }
-        searchIndex[note.id] = nil
+        unindexNote(note.id)
         if selectedNoteId == note.id {
             selectedNoteId = filteredNotes.first?.id
         }
@@ -313,7 +395,10 @@ final class NotesViewModel: ObservableObject {
         for note in notes where !note.isLocked {
             storage.deleteNote(note, remainingNotes: locked)
         }
-        searchIndex = Self.buildSearchIndex(locked)
+        let indexes = Self.buildIndexes(locked)
+        searchIndex = indexes.haystack
+        searchContentByID = indexes.content
+        previewByID = indexes.preview
         notes = locked
         selectedNoteId = filteredNotes.first?.id
     }
@@ -333,7 +418,7 @@ final class NotesViewModel: ObservableObject {
         for note in toDelete {
             storage.deleteNote(note, remainingNotes: remaining)
             notes.removeAll { $0.id == note.id }
-            searchIndex[note.id] = nil
+            unindexNote(note.id)
         }
         if let sel = selectedNoteId, ids.contains(sel) {
             selectedNoteId = filteredNotes.first?.id
@@ -344,6 +429,8 @@ final class NotesViewModel: ObservableObject {
         guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
         // Flush any in-flight edit first so locking can't race a pending save.
         flushPendingSavesSynchronously()
+        // Saving writes all sidecars; hydrate RTF first so we don't drop it.
+        hydrateRTFIfNeeded(note.id)
         notes[index].isLocked.toggle()
         applySaveResult(storage.saveNote(notes[index]))
     }
@@ -351,6 +438,7 @@ final class NotesViewModel: ObservableObject {
     func togglePin(_ note: Note) {
         guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
         pendingSaves.removeValue(forKey: note.id)
+        hydrateRTFIfNeeded(note.id)
         notes[index].isPinned.toggle()
         notes[index].modifiedAt = Date()
         applySaveResult(storage.saveNote(notes[index]))
@@ -370,10 +458,10 @@ final class NotesViewModel: ObservableObject {
         } else if contentChanged {
             rtfInSyncByID[id] = false
         }
-        // Refresh the cached search haystack before mutating `notes` — the
-        // mutation re-fires the filter pipeline, which must see the new text.
+        // Refresh the cached search/preview indexes before mutating `notes` —
+        // the mutation re-fires the filter pipeline, which must see the new text.
         if titleChanged || contentChanged {
-            searchIndex[id] = Self.searchHaystack(title: title, content: content)
+            indexNote(id: id, title: title, content: content)
         }
         notes[index].title = title
         notes[index].content = content
@@ -473,6 +561,7 @@ final class NotesViewModel: ObservableObject {
     func moveNote(_ note: Note, to folderId: UUID?) {
         guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
         pendingSaves.removeValue(forKey: note.id)
+        hydrateRTFIfNeeded(note.id)
         notes[index].folderId = folderId
         notes[index].modifiedAt = Date()
         applySaveResult(storage.saveNote(notes[index]))
@@ -492,6 +581,7 @@ final class NotesViewModel: ObservableObject {
 
     func deleteFolder(_ folder: NoteFolder) {
         for i in notes.indices where notes[i].folderId == folder.id {
+            hydrateRTFIfNeeded(notes[i].id)
             notes[i].folderId = nil
             applySaveResult(storage.saveNote(notes[i]))
         }
