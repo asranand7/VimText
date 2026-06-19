@@ -13,6 +13,9 @@ class VimNSTextView: NSTextView {
     var codeBlockRanges: [NSRange] = []
     private var copyButtons: [NSButton] = []
     private var blockCursorLayer: CALayer?
+    /// Set while a coalesced block-cursor redraw is already queued for this
+    /// runloop turn, so several selection changes in one turn schedule just one.
+    private var blockCursorRedrawScheduled = false
     var visualCursorOverride: Int? = nil
     /// The image currently showing its Google-Docs-style selection box/handles.
     weak var selectedImageAttachment: ImageTextAttachment?
@@ -113,6 +116,32 @@ class VimNSTextView: NSTextView {
     /// the same display-only mechanism as search highlights, so link styling
     /// is never serialized into the note's content or RTF.
     func refreshLinkHighlights() {
+        applyLinkHighlights(LinkDetection.links(in: self.string))
+    }
+
+    /// Re-detects links off the main thread, then applies the result back on
+    /// it. NSDataDetector over a multi-MB note is too slow to run on the main
+    /// thread on every typing pause, so the per-edit path uses this; the apply
+    /// is skipped if the text length changed since the snapshot, so a stale
+    /// scan never paints ranges that no longer line up. NSDataDetector (an
+    /// NSRegularExpression subclass) is documented thread-safe for concurrent
+    /// use, and the highlights are display-only temporary attributes, so doing
+    /// the detection off-main is safe.
+    func refreshLinkHighlightsDeferred() {
+        let snapshot = self.string
+        let length = (snapshot as NSString).length
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let links = LinkDetection.links(in: snapshot)
+            DispatchQueue.main.async {
+                guard let self, (self.string as NSString).length == length else { return }
+                self.applyLinkHighlights(links)
+            }
+        }
+    }
+
+    /// Applies already-detected `links` as display-only temporary attributes,
+    /// replacing whatever was applied before. Must run on the main thread.
+    private func applyLinkHighlights(_ links: [LinkDetection.Link]) {
         guard let layoutManager = self.layoutManager else { return }
         let length = (self.string as NSString).length
         // Full-range removal is safe: links are the only temporary
@@ -122,7 +151,7 @@ class VimNSTextView: NSTextView {
             layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
             layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: fullRange)
         }
-        detectedLinks = LinkDetection.links(in: self.string)
+        detectedLinks = links
         guard !detectedLinks.isEmpty else {
             window?.invalidateCursorRects(for: self)
             return
@@ -1200,12 +1229,24 @@ class VimNSTextView: NSTextView {
         }
     }
 
+    /// Coalesces block-cursor redraws. A single Vim command can call
+    /// `setSelectedRange` several times in one runloop turn, and each redraw
+    /// runs glyph layout; this collapses them into one redraw of the final
+    /// state (the only state the user ever sees).
+    private func scheduleBlockCursorRedraw() {
+        guard !blockCursorRedrawScheduled else { return }
+        blockCursorRedrawScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.blockCursorRedrawScheduled = false
+            self.drawBlockCursor()
+        }
+    }
+
     override func setSelectedRange(_ charRange: NSRange) {
         super.setSelectedRange(charRange)
         if let engine = vimEngine, !engine.mode.isEditing {
-            DispatchQueue.main.async { [weak self] in
-                self?.drawBlockCursor()
-            }
+            scheduleBlockCursorRedraw()
         }
     }
 
@@ -1213,9 +1254,7 @@ class VimNSTextView: NSTextView {
         super.didChangeText()
         enclosingScrollView?.verticalRulerView?.needsDisplay = true
         if let engine = vimEngine, !engine.mode.isEditing {
-            DispatchQueue.main.async { [weak self] in
-                self?.drawBlockCursor()
-            }
+            scheduleBlockCursorRedraw()
         }
     }
 

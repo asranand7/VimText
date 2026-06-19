@@ -255,7 +255,7 @@ extension VimTextView {
             notifyContentChange()
 
             textView.restyleCodeBlocks(baseFont: parent.font)
-            textView.refreshLinkHighlights()
+            textView.refreshLinkHighlightsDeferred()
 
             // Re-scan find matches if the find bar is open
             if parent.findController?.isVisible == true,

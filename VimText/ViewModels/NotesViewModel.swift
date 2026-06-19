@@ -64,6 +64,14 @@ final class NotesViewModel: ObservableObject {
     private var rtfInSyncByID: [UUID: Bool] = [:]
     private var cancellables = Set<AnyCancellable>()
 
+    /// Per-note folded search haystack (`title\ncontent`, run through
+    /// `searchFolded`), keyed by note id. Lets the sidebar filter test a note
+    /// without re-folding its full content on every keystroke — the fold is
+    /// done once here and refreshed only when the note's title/content changes.
+    /// `computeFilteredNotes` reads it; the create/update/delete/load paths keep
+    /// it in lockstep with `notes`.
+    private var searchIndex: [UUID: String] = [:]
+
     var selectedNote: Note? {
         get {
             guard let id = selectedNoteId else { return nil }
@@ -71,19 +79,42 @@ final class NotesViewModel: ObservableObject {
         }
         set {
             if let note = newValue, let index = notes.firstIndex(where: { $0.id == note.id }) {
+                searchIndex[note.id] = Self.searchHaystack(for: note)
                 notes[index] = note
                 applySaveResult(storage.saveNote(note))
             }
         }
     }
 
-    /// Pure filter+sort used by the Combine pipeline. Kept static so the
-    /// pipeline closure captures nothing.
+    /// The folded search haystack for a note: title and content joined (so one
+    /// scan covers both fields) and run through `searchFolded` (so a
+    /// straight-quote query matches smart-quote text). Folding maps scalars 1:1,
+    /// so folding the join equals joining the folds — this matches exactly the
+    /// queries the old per-field `title`/`content` `searchFolded` checks did.
+    static func searchHaystack(title: String, content: String) -> String {
+        (title + "\n" + content).searchFolded
+    }
+
+    static func searchHaystack(for note: Note) -> String {
+        searchHaystack(title: note.title, content: note.content)
+    }
+
+    private static func buildSearchIndex(_ notes: [Note]) -> [UUID: String] {
+        notes.reduce(into: [UUID: String](minimumCapacity: notes.count)) {
+            $0[$1.id] = searchHaystack(for: $1)
+        }
+    }
+
+    /// Pure filter+sort used by the Combine pipeline. `searchIndex` supplies the
+    /// precomputed folded haystack per note id; when an entry is missing (direct
+    /// callers, e.g. tests) it falls back to folding the note inline, so the
+    /// result is identical either way — only cheaper when the cache is warm.
     static func computeFilteredNotes(
         notes: [Note],
         showAllNotes: Bool,
         selectedFolderId: UUID?,
-        searchText: String
+        searchText: String,
+        searchIndex: [UUID: String] = [:]
     ) -> [Note] {
         var result = notes
 
@@ -94,9 +125,9 @@ final class NotesViewModel: ObservableObject {
         if !searchText.isEmpty {
             // Folded so a straight-quote query matches smart-quote note text.
             let query = searchText.searchFolded
-            result = result.filter {
-                $0.title.searchFolded.range(of: query, options: .caseInsensitive) != nil ||
-                $0.content.searchFolded.range(of: query, options: .caseInsensitive) != nil
+            result = result.filter { note in
+                let haystack = searchIndex[note.id] ?? searchHaystack(for: note)
+                return haystack.range(of: query, options: .caseInsensitive) != nil
             }
         }
 
@@ -114,12 +145,13 @@ final class NotesViewModel: ObservableObject {
     init() {
         // Recompute filteredNotes whenever any input changes.
         Publishers.CombineLatest4($notes, $showAllNotes, $selectedFolderId, $searchText)
-            .map { notes, showAll, folderId, search in
+            .map { [weak self] notes, showAll, folderId, search in
                 Self.computeFilteredNotes(
                     notes: notes,
                     showAllNotes: showAll,
                     selectedFolderId: folderId,
-                    searchText: search
+                    searchText: search,
+                    searchIndex: self?.searchIndex ?? [:]
                 )
             }
             .assign(to: &$filteredNotes)
@@ -158,6 +190,7 @@ final class NotesViewModel: ObservableObject {
             (StorageManager.shared.readNotesSnapshot(), StorageManager.shared.loadFolders())
         }.value
         storage.apply(snapshot)
+        searchIndex = Self.buildSearchIndex(snapshot.notes)
         notes = snapshot.notes
         folders = loadedFolders
         storage.makeLaunchBackup()
@@ -174,7 +207,9 @@ final class NotesViewModel: ObservableObject {
 
 
     func load() {
-        notes = storage.loadNotes()
+        let loaded = storage.loadNotes()
+        searchIndex = Self.buildSearchIndex(loaded)
+        notes = loaded
         folders = storage.loadFolders()
         if notes.isEmpty {
             createWelcomeNote()
@@ -213,6 +248,7 @@ final class NotesViewModel: ObservableObject {
             title: "Welcome to VimText",
             content: welcomeContent
         )
+        searchIndex[note.id] = Self.searchHaystack(for: note)
         notes.insert(note, at: 0)
         applySaveResult(storage.saveNote(note))
         selectedNoteId = note.id
@@ -224,6 +260,7 @@ final class NotesViewModel: ObservableObject {
             content: "",
             folderId: showAllNotes ? nil : selectedFolderId
         )
+        searchIndex[note.id] = Self.searchHaystack(for: note)
         notes.insert(note, at: 0)
         applySaveResult(storage.saveNote(note))
         selectedNoteId = note.id
@@ -241,6 +278,7 @@ final class NotesViewModel: ObservableObject {
             folderId: note.folderId
         )
         let insertIndex = notes.firstIndex(where: { $0.id == note.id }).map { $0 + 1 } ?? 0
+        searchIndex[copy.id] = Self.searchHaystack(for: copy)
         notes.insert(copy, at: insertIndex)
         applySaveResult(storage.saveNote(copy))
         selectedNoteId = copy.id
@@ -254,6 +292,7 @@ final class NotesViewModel: ObservableObject {
         pendingSaves.removeValue(forKey: note.id)
         storage.deleteNote(note, remainingNotes: notes.filter { $0.id != note.id })
         notes.removeAll { $0.id == note.id }
+        searchIndex[note.id] = nil
         if selectedNoteId == note.id {
             selectedNoteId = filteredNotes.first?.id
         }
@@ -274,6 +313,7 @@ final class NotesViewModel: ObservableObject {
         for note in notes where !note.isLocked {
             storage.deleteNote(note, remainingNotes: locked)
         }
+        searchIndex = Self.buildSearchIndex(locked)
         notes = locked
         selectedNoteId = filteredNotes.first?.id
     }
@@ -293,6 +333,7 @@ final class NotesViewModel: ObservableObject {
         for note in toDelete {
             storage.deleteNote(note, remainingNotes: remaining)
             notes.removeAll { $0.id == note.id }
+            searchIndex[note.id] = nil
         }
         if let sel = selectedNoteId, ids.contains(sel) {
             selectedNoteId = filteredNotes.first?.id
@@ -328,6 +369,11 @@ final class NotesViewModel: ObservableObject {
             rtfInSyncByID[id] = true
         } else if contentChanged {
             rtfInSyncByID[id] = false
+        }
+        // Refresh the cached search haystack before mutating `notes` — the
+        // mutation re-fires the filter pipeline, which must see the new text.
+        if titleChanged || contentChanged {
+            searchIndex[id] = Self.searchHaystack(title: title, content: content)
         }
         notes[index].title = title
         notes[index].content = content
