@@ -1036,7 +1036,30 @@ class VimNSTextView: NSTextView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        drawPlaceholderIfNeeded()
         drawImageSelectionChrome()
+    }
+
+    /// Faint prompt shown in an empty, editable note so a blank canvas doesn't
+    /// look broken. Drawn where the first typed character would land; clears
+    /// itself the moment any text exists (the guard fails and the redraw on
+    /// textDidChange repaints).
+    private func drawPlaceholderIfNeeded() {
+        guard isEditable, (string as NSString).length == 0 else { return }
+        let baseColor = (typingAttributes[.foregroundColor] as? NSColor) ?? .labelColor
+        let placeholderFont = (typingAttributes[.font] as? NSFont)
+            ?? font
+            ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: placeholderFont,
+            .foregroundColor: baseColor.withAlphaComponent(0.3)
+        ]
+        let origin = textContainerOrigin
+        let pad = textContainer?.lineFragmentPadding ?? 5
+        ("Start writing…" as NSString).draw(
+            at: NSPoint(x: origin.x + pad, y: origin.y),
+            withAttributes: attrs
+        )
     }
 
     /// Draws the Google-Docs-style blue bounding box and eight square handles

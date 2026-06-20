@@ -19,6 +19,10 @@ enum LinkFolding {
         /// fixed-width control glyph that reserves on-screen room for the link
         /// icon just before the domain. nil when the URL has no prefix to hide.
         let iconSlotIndex: Int?
+        /// True when the link directly abuts a non-space character (e.g. `panda
+        /// :https://…`). The chip then reserves extra leading width so it never
+        /// visually hugs the preceding `:`/word.
+        let precededByNonSpace: Bool
     }
 
     /// Builds the fold list for `links`, leaving `activeLinkRange` (the link the
@@ -69,7 +73,21 @@ enum LinkFolding {
         // Nothing to hide → it's already a bare domain; don't draw a chip.
         guard !hidden.isEmpty else { return nil }
 
-        return Fold(linkRange: safeRange, visibleRange: visibleRange, hiddenRanges: hidden, iconSlotIndex: iconSlot)
+        // Does a non-space character sit immediately before the link?
+        let before = safeRange.location - 1
+        var precededByNonSpace = false
+        if before >= 0 {
+            let ch = text.character(at: before)
+            precededByNonSpace = !(ch == 0x20 || ch == 0x09 || ch == 0x0A || ch == 0x0D)
+        }
+
+        return Fold(
+            linkRange: safeRange,
+            visibleRange: visibleRange,
+            hiddenRanges: hidden,
+            iconSlotIndex: iconSlot,
+            precededByNonSpace: precededByNonSpace
+        )
     }
 
     /// The host shown in the chip: the URL host minus a leading `www.`. Returns
@@ -112,6 +130,11 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     private var iconGap: CGFloat { 5 }
     /// On-screen width reserved before the domain: the icon plus a small gap.
     private var iconBoxWidth: CGFloat { iconSize + iconGap }
+    /// Extra leading width when the chip directly follows a non-space character,
+    /// so it doesn't visually hug the preceding `:`/word.
+    private var chipLeadingGap: CGFloat { 7 }
+    /// Per-slot reserved width (icon box, plus the leading gap where needed).
+    private var slotWidths: [Int: CGFloat] = [:]
 
     override init() {
         super.init()
@@ -138,6 +161,11 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         hiddenStarts = ranges.map { $0.location }
         hiddenEnds = ranges.map { $0.location + $0.length }
         iconSlots = Set(folds.compactMap { $0.iconSlotIndex })
+        slotWidths = [:]
+        for fold in folds {
+            guard let slot = fold.iconSlotIndex else { continue }
+            slotWidths[slot] = iconBoxWidth + (fold.precededByNonSpace ? chipLeadingGap : 0)
+        }
 
         guard let affected, affected.length > 0 else { return }
         let docLength = textStorage?.length ?? 0
@@ -229,7 +257,7 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         glyphPosition: NSPoint,
         characterIndex charIndex: Int
     ) -> NSRect {
-        NSRect(x: glyphPosition.x, y: proposedRect.minY, width: iconBoxWidth, height: proposedRect.height)
+        NSRect(x: glyphPosition.x, y: proposedRect.minY, width: slotWidths[charIndex] ?? iconBoxWidth, height: proposedRect.height)
     }
 
     // MARK: Chip background drawing
