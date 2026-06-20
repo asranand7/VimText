@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-class VimNSTextView: NSTextView {
+class VimNSTextView: NSTextView, NSViewToolTipOwner {
     var vimEngine: VimEngine?
     weak var coordinator: VimTextView.Coordinator?
     var accentColor: NSColor = .systemOrange
@@ -178,6 +178,7 @@ class VimNSTextView: NSTextView {
     func updateLinkFolds() {
         guard let foldingLM = layoutManager as? FoldingLayoutManager else { return }
         foldingLM.chipFillColor = accentColor.withAlphaComponent(0.12)
+        foldingLM.chipHoverFillColor = accentColor.withAlphaComponent(0.26)
         foldingLM.chipStrokeColor = accentColor.withAlphaComponent(0.24)
         foldingLM.chipIconColor = accentColor
         foldingLM.chipTextHeight = layoutManager?.defaultLineHeight(for: font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)) ?? 18
@@ -1097,18 +1098,70 @@ class VimNSTextView: NSTextView {
         for (_, rect) in imageAttachmentRects() {
             addCursorRect(rect, cursor: .resizeLeftRight)
         }
-        // Pointing hand over links — restricted to the visible character
-        // range so this never forces layout of a huge note's tail.
-        if !detectedLinks.isEmpty, let layoutManager, let textContainer {
-            let visibleGlyphs = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
-            let visibleChars = layoutManager.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
-            for link in detectedLinks where NSIntersectionRange(link.range, visibleChars).length > 0 {
-                let glyphRange = layoutManager.glyphRange(forCharacterRange: link.range, actualCharacterRange: nil)
-                let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
-                    .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
-                addCursorRect(rect, cursor: .pointingHand)
-            }
+        // Pointing hand + full-URL tooltip over links — restricted to the
+        // visible character range so this never forces layout of a huge note's
+        // tail. Tooltips are rebuilt here (rather than in their own pass) so
+        // they refresh on the same triggers as the cursor rects: scrolling,
+        // fold changes, and link re-detection.
+        removeAllToolTips()
+        guard !detectedLinks.isEmpty, let layoutManager, let textContainer else { return }
+        let visibleGlyphs = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
+        let visibleChars = layoutManager.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
+        for link in detectedLinks where NSIntersectionRange(link.range, visibleChars).length > 0 {
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: link.range, actualCharacterRange: nil)
+            let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+                .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+            addCursorRect(rect, cursor: .pointingHand)
+            addToolTip(rect, owner: self, userData: nil)
         }
+    }
+
+    /// Full URL shown when hovering a folded chip (or any link) — restores the
+    /// destination that folding hides from view.
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        link(atPoint: point)?.url.absoluteString ?? ""
+    }
+
+    // MARK: - Link chip hover
+
+    private var linkHoverTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area = linkHoverTrackingArea { removeTrackingArea(area) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        linkHoverTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        setHoveredLinkRange(link(atPoint: convert(event.locationInWindow, from: nil))?.range)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        setHoveredLinkRange(nil)
+    }
+
+    /// Tells the layout manager which folded chip the pointer is over so it draws
+    /// the darker hover fill. Redraws only when the hovered link actually changes.
+    private func setHoveredLinkRange(_ range: NSRange?) {
+        guard let foldingLM = layoutManager as? FoldingLayoutManager else { return }
+        let changed: Bool
+        switch (foldingLM.hoveredLinkRange, range) {
+        case let (current?, new?): changed = !NSEqualRanges(current, new)
+        case (nil, nil): changed = false
+        default: changed = true
+        }
+        guard changed else { return }
+        foldingLM.hoveredLinkRange = range
+        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {

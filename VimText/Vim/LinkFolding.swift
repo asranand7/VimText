@@ -114,8 +114,11 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     private var hiddenEnds: [Int] = []
 
     var chipFillColor: NSColor = NSColor.systemBlue.withAlphaComponent(0.12)
+    var chipHoverFillColor: NSColor = NSColor.systemBlue.withAlphaComponent(0.24)
     var chipStrokeColor: NSColor = NSColor.systemBlue.withAlphaComponent(0.22)
     var chipIconColor: NSColor = NSColor.systemBlue
+    /// The link range currently under the pointer, drawn with the darker fill.
+    var hoveredLinkRange: NSRange?
     /// Text line height used to size the chip so it hugs the domain rather than
     /// filling the full (line-spaced) line fragment.
     var chipTextHeight: CGFloat = 18
@@ -329,7 +332,8 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                 height: chipHeight
             )
             let path = NSBezierPath(roundedRect: pill, xRadius: 5, yRadius: 5)
-            chipFillColor.setFill()
+            let isHovered = hoveredLinkRange.map { NSEqualRanges($0, fold.linkRange) } ?? false
+            (isHovered ? chipHoverFillColor : chipFillColor).setFill()
             path.fill()
             chipStrokeColor.setStroke()
             path.lineWidth = 0.75
