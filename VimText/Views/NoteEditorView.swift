@@ -532,10 +532,12 @@ struct NoteEditorView: View {
                     .font(.system(.caption, design: .monospaced))
                     .help("Line \(vimEngine.cursorLine), column \(vimEngine.cursorCol)")
             }
-            .foregroundStyle(theme.secondaryText.opacity(0.85))
+            // Lighter: the counts are reference info, not something to read on
+            // every glance — let them recede below the mode indicator.
+            .foregroundStyle(theme.secondaryText.opacity(0.62))
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
         .background(editorPaperFill)
     }
 

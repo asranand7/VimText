@@ -34,9 +34,11 @@ struct NoteRowView: View {
     }
 
     private var lockStatusGlyph: some View {
+        // Muted: the lock is a quiet status marker, not something that should
+        // out-weigh the note title next to it. A lighter gray recedes.
         Image(systemName: "lock.fill")
             .font(.system(size: 10))
-            .foregroundStyle(theme.secondaryText.opacity(0.75))
+            .foregroundStyle(theme.secondaryText.opacity(0.5))
             .help("Locked — read-only, can't be deleted")
     }
 

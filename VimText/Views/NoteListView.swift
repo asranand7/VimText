@@ -259,9 +259,10 @@ struct NoteListView: View {
     private func sectionHeader(_ title: String) -> some View {
         HStack {
             Text(title)
-                .font(.system(.caption, design: .default).weight(.bold))
-                .foregroundStyle(themeManager.sidebarTint)
-                .textCase(nil)
+                .font(.system(size: 11, weight: .semibold, design: .default))
+                .kerning(0.7)
+                .foregroundStyle(themeManager.sidebarTint.opacity(0.9))
+                .textCase(.uppercase)
             Spacer()
         }
         .padding(.horizontal, 12)
@@ -289,12 +290,13 @@ struct NoteListView: View {
                     .foregroundStyle(themeManager.sidebarTint.opacity(0.8))
                     .rotationEffect(.degrees(isCollapsed ? 0 : 90))
                 Text(title)
-                    .font(.system(.caption, design: .default).weight(.bold))
-                    .foregroundStyle(themeManager.sidebarTint)
-                    .textCase(nil)
+                    .font(.system(size: 11, weight: .semibold, design: .default))
+                    .kerning(0.7)
+                    .foregroundStyle(themeManager.sidebarTint.opacity(0.9))
+                    .textCase(.uppercase)
                 Text("· \(count)")
-                    .font(.system(.caption2, design: .default).weight(.semibold))
-                    .foregroundStyle(themeManager.sidebarTint.opacity(0.55))
+                    .font(.system(size: 10.5, weight: .semibold, design: .default))
+                    .foregroundStyle(themeManager.sidebarTint.opacity(0.5))
                 Spacer()
             }
             .padding(.horizontal, 12)
@@ -1075,14 +1077,6 @@ private struct NoteRowListItem: View, Equatable {
                     .strokeBorder(tint.opacity(isNavCursor ? (theme.isDark ? 0.95 : 0.8) : 0),
                                   lineWidth: isNavCursor ? 2 : 0)
             )
-            .overlay(alignment: .leading) {
-                if emphasized {
-                    Capsule()
-                        .fill(tint)
-                        .frame(width: 3.0, height: 32)
-                        .padding(.leading, 5.5)
-                }
-            }
             .shadow(color: Color.black.opacity(rowShadowOpacity),
                     radius: rowShadowRadius,
                     y: rowShadowY)

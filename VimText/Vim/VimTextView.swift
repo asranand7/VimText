@@ -73,6 +73,13 @@ struct VimTextView: NSViewRepresentable {
         scrollView.verticalScrollElasticity = .automatic
 
         let textView = VimNSTextView()
+        // Swap in the folding layout manager so long URLs render as domain
+        // chips. Done before content loads so the first layout pass already
+        // reflects the folds. Temporary attributes (links/search) live on the
+        // layout manager, so they're (re)applied after this via refresh* calls.
+        if let container = textView.textContainer {
+            container.replaceLayoutManager(FoldingLayoutManager())
+        }
         textView.isEditable = true
         textView.isSelectable = true
         textView.allowsUndo = true
@@ -86,6 +93,13 @@ struct VimTextView: NSViewRepresentable {
         textView.isContinuousSpellCheckingEnabled = false
         textView.isAutomaticTextCompletionEnabled = false
         textView.isAutomaticLinkDetectionEnabled = false
+        // Render stored `.link` runs (e.g. browser-pasted URLs) as clean
+        // accent-colored text with no underline — the dated default.
+        textView.linkTextAttributes = [
+            .foregroundColor: accentColor,
+            .underlineStyle: 0,
+            .cursor: NSCursor.pointingHand
+        ]
         textView.textContainerInset = textContainerInset
         textView.selectedTextAttributes = [
             .backgroundColor: accentColor.withAlphaComponent(0.28)
@@ -182,6 +196,11 @@ struct VimTextView: NSViewRepresentable {
             textView.accentColor = accentColor
             textView.selectedTextAttributes = [
                 .backgroundColor: accentColor.withAlphaComponent(0.28)
+            ]
+            textView.linkTextAttributes = [
+                .foregroundColor: accentColor,
+                .underlineStyle: 0,
+                .cursor: NSCursor.pointingHand
             ]
             textView.applyTextColor(textColor)
             textView.refreshLinkHighlights()

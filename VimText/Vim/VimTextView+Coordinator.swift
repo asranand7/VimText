@@ -303,6 +303,12 @@ extension VimTextView {
         private var cursorDebounceItem: DispatchWorkItem?
 
         func textViewDidChangeSelection(_ notification: Notification) {
+            // Expand the link under the caret (and re-fold the rest) immediately
+            // so moving onto a chip reveals its URL without a visible lag. This
+            // no-ops in setFolds when the fold set is unchanged, so ordinary
+            // cursor moves away from any link cost nothing.
+            textView?.updateLinkFolds()
+
             // Debounce — don't let @Published cursorLine/cursorCol trigger
             // SwiftUI body re-evaluation on every keystroke.
             cursorDebounceItem?.cancel()

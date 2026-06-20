@@ -159,14 +159,54 @@ class VimNSTextView: NSTextView {
         for link in detectedLinks {
             let safe = NSIntersectionRange(link.range, NSRange(location: 0, length: length))
             guard safe.length > 0 else { continue }
+            // Modern link styling: accent color alone carries "this is a link".
+            // We actively force underlineStyle = 0 (not just skip adding one):
+            // browser-pasted URLs arrive as real `.link` attributes in the RTF
+            // with a baked-in underline, which NSTextView renders from storage.
+            // A temporary attribute overrides that for display without resaving,
+            // so both typed and pasted links read as clean accent-colored text.
             layoutManager.addTemporaryAttribute(.foregroundColor, value: accentColor, forCharacterRange: safe)
-            layoutManager.addTemporaryAttribute(
-                .underlineStyle,
-                value: NSUnderlineStyle.single.rawValue,
-                forCharacterRange: safe
-            )
+            layoutManager.addTemporaryAttribute(.underlineStyle, value: 0, forCharacterRange: safe)
         }
         window?.invalidateCursorRects(for: self)
+        updateLinkFolds()
+    }
+
+    /// Recomputes which links collapse to a domain chip. The link the caret is
+    /// currently on stays expanded so its full URL can be read and edited; every
+    /// other link folds. Display-only — the document text is never modified.
+    func updateLinkFolds() {
+        guard let foldingLM = layoutManager as? FoldingLayoutManager else { return }
+        foldingLM.chipFillColor = accentColor.withAlphaComponent(0.12)
+        foldingLM.chipStrokeColor = accentColor.withAlphaComponent(0.24)
+        foldingLM.chipIconColor = accentColor
+        foldingLM.chipTextHeight = layoutManager?.defaultLineHeight(for: font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)) ?? 18
+
+        guard !detectedLinks.isEmpty else {
+            foldingLM.setFolds([])
+            return
+        }
+
+        let sel = selectedRange()
+        // A link is "active" (kept expanded) when the caret/selection touches it,
+        // including the boundaries — so stepping onto a chip reveals it for
+        // editing and the caret never lands inside hidden, zero-width glyphs.
+        let active = detectedLinks.first { link in
+            let start = link.range.location
+            let end = link.range.location + link.range.length
+            if sel.length == 0 {
+                return sel.location >= start && sel.location <= end
+            }
+            return NSIntersectionRange(sel, link.range).length > 0
+        }
+
+        let folds = LinkFolding.computeFolds(
+            links: detectedLinks,
+            activeLinkRange: active?.range,
+            in: self.string as NSString
+        )
+        foldingLM.setFolds(folds)
+        needsDisplay = true
     }
 
     /// The detected link containing `characterIndex`, if any.
