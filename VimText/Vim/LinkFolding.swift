@@ -120,9 +120,14 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     /// filling the full (line-spaced) line fragment.
     var chipTextHeight: CGFloat = 18
 
-    /// Character indexes (one per folded link) reserved as fixed-width control
-    /// glyphs that hold the link icon just before the domain.
-    private var iconSlots: Set<Int> = []
+    /// Line-leading list markers (bullets / checkboxes) currently rendered.
+    private(set) var markers: [ListMarkers.Marker] = []
+    var markerTextColor: NSColor = .secondaryLabelColor
+    var markerAccentColor: NSColor = NSColor.systemBlue
+
+    /// Character indexes reserved as fixed-width control glyphs holding a drawn
+    /// decoration (the link icon, a bullet dot, or a checkbox).
+    private var controlSlots: Set<Int> = []
     private var cachedIcon: NSImage?
     private var cachedIconKey: String = ""
 
@@ -133,7 +138,10 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     /// Extra leading width when the chip directly follows a non-space character,
     /// so it doesn't visually hug the preceding `:`/word.
     private var chipLeadingGap: CGFloat { 7 }
-    /// Per-slot reserved width (icon box, plus the leading gap where needed).
+    private var bulletSlotWidth: CGFloat { (chipTextHeight * 0.62).rounded() }
+    private var checkboxSize: CGFloat { (chipTextHeight * 0.78).rounded() }
+    private var checkboxSlotWidth: CGFloat { checkboxSize + 4 }
+    /// Per-slot reserved width (icon box / bullet / checkbox).
     private var slotWidths: [Int: CGFloat] = [:]
 
     override init() {
@@ -150,23 +158,49 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     /// don't churn layout. Invalidates the union of old+new link ranges.
     func setFolds(_ newFolds: [LinkFolding.Fold]) {
         guard newFolds != folds else { return }
-
-        let affected = unionRange(of: folds + newFolds)
+        let affected = unionRange(folds.map(\.linkRange) + newFolds.map(\.linkRange))
         folds = newFolds
+        rebuildIndices()
+        invalidate(affected)
+    }
 
-        // Rebuild the sorted hidden-range index.
+    /// Replaces the list markers. Same no-op-when-unchanged contract as folds.
+    func setMarkers(_ newMarkers: [ListMarkers.Marker]) {
+        guard newMarkers != markers else { return }
+        let affected = unionRange(markers.map(\.lineRange) + newMarkers.map(\.lineRange))
+        markers = newMarkers
+        rebuildIndices()
+        invalidate(affected)
+    }
+
+    /// Rebuilds the hidden-range index and control-slot widths from both folds
+    /// and markers — the single source the glyph/layout callbacks read.
+    private func rebuildIndices() {
         var ranges: [NSRange] = []
-        for fold in folds { ranges.append(contentsOf: fold.hiddenRanges) }
+        var slots: [Int: CGFloat] = [:]
+
+        for fold in folds {
+            ranges.append(contentsOf: fold.hiddenRanges)
+            if let slot = fold.iconSlotIndex {
+                slots[slot] = iconBoxWidth + (fold.precededByNonSpace ? chipLeadingGap : 0)
+            }
+        }
+        for marker in markers {
+            if let hidden = marker.hiddenRange { ranges.append(hidden) }
+            switch marker.kind {
+            case .bullet: slots[marker.slotIndex] = bulletSlotWidth
+            case .checkbox: slots[marker.slotIndex] = checkboxSlotWidth
+            }
+        }
+
         ranges.sort { $0.location < $1.location }
         hiddenStarts = ranges.map { $0.location }
         hiddenEnds = ranges.map { $0.location + $0.length }
-        iconSlots = Set(folds.compactMap { $0.iconSlotIndex })
-        slotWidths = [:]
-        for fold in folds {
-            guard let slot = fold.iconSlotIndex else { continue }
-            slotWidths[slot] = iconBoxWidth + (fold.precededByNonSpace ? chipLeadingGap : 0)
-        }
+        controlSlots = Set(slots.keys)
+        slotWidths = slots
+    }
 
+    private func invalidate(_ affected: NSRange?) {
         guard let affected, affected.length > 0 else { return }
         let docLength = textStorage?.length ?? 0
         let target = NSIntersectionRange(affected, NSRange(location: 0, length: docLength))
@@ -175,13 +209,13 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         invalidateLayout(forCharacterRange: target, actualCharacterRange: nil)
     }
 
-    private func unionRange(of folds: [LinkFolding.Fold]) -> NSRange? {
-        guard !folds.isEmpty else { return nil }
+    private func unionRange(_ ranges: [NSRange]) -> NSRange? {
+        guard !ranges.isEmpty else { return nil }
         var minLoc = Int.max
         var maxEnd = 0
-        for fold in folds {
-            minLoc = min(minLoc, fold.linkRange.location)
-            maxEnd = max(maxEnd, fold.linkRange.location + fold.linkRange.length)
+        for r in ranges {
+            minLoc = min(minLoc, r.location)
+            maxEnd = max(maxEnd, r.location + r.length)
         }
         return NSRange(location: minLoc, length: maxEnd - minLoc)
     }
@@ -223,9 +257,9 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         var changed = false
         for i in 0..<count {
             let ci = charIndexes[i]
-            if iconSlots.contains(ci) {
-                // Reserved icon slot: a control glyph so the control-character
-                // delegate can give it a fixed width (see boundingBox below).
+            if controlSlots.contains(ci) {
+                // Reserved decoration slot: a control glyph so the control-
+                // character delegate can give it a fixed width (see boundingBox).
                 newProps[i] = .controlCharacter
                 changed = true
             } else if isHidden(ci) {
@@ -246,7 +280,7 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         shouldUse action: NSLayoutManager.ControlCharacterAction,
         forControlCharacterAt charIndex: Int
     ) -> NSLayoutManager.ControlCharacterAction {
-        iconSlots.contains(charIndex) ? .whitespace : action
+        controlSlots.contains(charIndex) ? .whitespace : action
     }
 
     func layoutManager(
@@ -264,7 +298,9 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
 
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
-        guard !folds.isEmpty, let container = textContainers.first else { return }
+        guard let container = textContainers.first, !folds.isEmpty || !markers.isEmpty else { return }
+
+        drawMarkers(glyphsToShow: glyphsToShow, at: origin, in: container)
 
         for fold in folds {
             let glyphRange = self.glyphRange(forCharacterRange: fold.visibleRange, actualCharacterRange: nil)
@@ -309,6 +345,62 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
                 icon.draw(in: iconRect)
             }
         }
+    }
+
+    /// Draws bullet dots and checkboxes in their reserved slots.
+    private func drawMarkers(glyphsToShow: NSRange, at origin: NSPoint, in container: NSTextContainer) {
+        for marker in markers {
+            let gr = glyphRange(forCharacterRange: NSRange(location: marker.slotIndex, length: 1), actualCharacterRange: nil)
+            guard gr.length > 0, NSIntersectionRange(gr, glyphsToShow).length > 0 else { continue }
+            let rect = boundingRect(forGlyphRange: gr, in: container).offsetBy(dx: origin.x, dy: origin.y)
+            let textCenterY = rect.minY + chipTextHeight / 2
+
+            switch marker.kind {
+            case .bullet:
+                let d = (chipTextHeight * 0.26).rounded()
+                let dot = NSRect(x: rect.minX + (rect.width - d) / 2, y: textCenterY - d / 2, width: d, height: d)
+                markerTextColor.setFill()
+                NSBezierPath(ovalIn: dot).fill()
+
+            case .checkbox(let checked):
+                let box = NSRect(x: rect.minX, y: textCenterY - checkboxSize / 2, width: checkboxSize, height: checkboxSize)
+                let path = NSBezierPath(roundedRect: box.insetBy(dx: 1, dy: 1), xRadius: 4, yRadius: 4)
+                if checked {
+                    markerAccentColor.setFill()
+                    path.fill()
+                    drawCheckmark(in: box, color: .white)
+                } else {
+                    path.lineWidth = 1.5
+                    markerTextColor.withAlphaComponent(0.55).setStroke()
+                    path.stroke()
+                }
+            }
+        }
+    }
+
+    /// A checkmark inside `box`. Coordinates are in the text view's flipped space
+    /// (y increases downward), so the dip of the check is the largest y.
+    private func drawCheckmark(in box: NSRect, color: NSColor) {
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: box.minX + box.width * 0.26, y: box.minY + box.height * 0.52))
+        path.line(to: NSPoint(x: box.minX + box.width * 0.44, y: box.minY + box.height * 0.70))
+        path.line(to: NSPoint(x: box.minX + box.width * 0.76, y: box.minY + box.height * 0.32))
+        path.lineWidth = 1.6
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        color.setStroke()
+        path.stroke()
+    }
+
+    /// The on-screen box for a checkbox marker in container coordinates (add the
+    /// text view's `textContainerOrigin` for view coordinates). For hit-testing.
+    func checkboxBox(for marker: ListMarkers.Marker) -> NSRect? {
+        guard case .checkbox = marker.kind, let container = textContainers.first else { return nil }
+        let gr = glyphRange(forCharacterRange: NSRange(location: marker.slotIndex, length: 1), actualCharacterRange: nil)
+        guard gr.length > 0 else { return nil }
+        let rect = boundingRect(forGlyphRange: gr, in: container)
+        let textCenterY = rect.minY + chipTextHeight / 2
+        return NSRect(x: rect.minX, y: textCenterY - checkboxSize / 2, width: checkboxSize, height: checkboxSize)
     }
 
     /// The tinted link glyph, cached until its color or size changes.

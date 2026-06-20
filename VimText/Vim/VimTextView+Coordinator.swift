@@ -261,6 +261,7 @@ extension VimTextView {
 
             textView.restyleCodeBlocks(baseFont: parent.font)
             textView.refreshLinkHighlightsDeferred()
+            textView.refreshListMarkers()
 
             // Re-scan find matches if the find bar is open
             if parent.findController?.isVisible == true,
@@ -308,6 +309,9 @@ extension VimTextView {
             // no-ops in setFolds when the fold set is unchanged, so ordinary
             // cursor moves away from any link cost nothing.
             textView?.updateLinkFolds()
+            // Re-fold the checkbox the caret just left / unfold the one it
+            // entered (no-ops when unchanged).
+            textView?.applyListMarkers()
 
             // Debounce — don't let @Published cursorLine/cursorCol trigger
             // SwiftUI body re-evaluation on every keystroke.

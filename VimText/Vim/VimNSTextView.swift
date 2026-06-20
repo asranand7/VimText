@@ -209,6 +209,76 @@ class VimNSTextView: NSTextView {
         needsDisplay = true
     }
 
+    // MARK: - List markers (bullets / checkboxes)
+
+    /// All list markers in the document, recomputed when content changes.
+    private(set) var detectedMarkers: [ListMarkers.Marker] = []
+
+    /// Re-detects bullet/checkbox markers from the current text, then applies
+    /// them. Call on load and after edits — detection is cheap (a line scan).
+    func refreshListMarkers() {
+        detectedMarkers = ListMarkers.detect(in: self.string as NSString)
+        applyListMarkers()
+    }
+
+    /// Pushes the active marker set to the layout manager. Bullets always render;
+    /// a checkbox on the caret's line shows raw `- [ ]` so it can be edited (its
+    /// hidden bracket glyphs would otherwise trap the caret).
+    func applyListMarkers() {
+        guard let foldingLM = layoutManager as? FoldingLayoutManager else { return }
+        let base = (typingAttributes[.foregroundColor] as? NSColor) ?? .labelColor
+        foldingLM.markerTextColor = base.withAlphaComponent(0.55)
+        foldingLM.markerAccentColor = accentColor
+        foldingLM.chipTextHeight = layoutManager?.defaultLineHeight(for: font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)) ?? 18
+
+        guard !detectedMarkers.isEmpty else {
+            foldingLM.setMarkers([])
+            return
+        }
+
+        let sel = selectedRange()
+        let active = detectedMarkers.filter { marker in
+            guard case .checkbox = marker.kind else { return true } // bullets always render
+            let start = marker.lineRange.location
+            let end = marker.lineRange.location + marker.lineRange.length
+            let caretOnLine = sel.length == 0
+                ? (sel.location >= start && sel.location <= end)
+                : NSIntersectionRange(sel, marker.lineRange).length > 0
+            return !caretOnLine
+        }
+        foldingLM.setMarkers(active)
+        needsDisplay = true
+    }
+
+    /// If `point` (view coordinates) lands on a rendered checkbox, toggles its
+    /// `[ ]`↔`[x]` character in the text. Returns true when it handled the click.
+    func toggleCheckboxIfClicked(at point: NSPoint) -> Bool {
+        guard isEditable, !isLockedNote,
+              let foldingLM = layoutManager as? FoldingLayoutManager else { return false }
+        for marker in foldingLM.markers {
+            guard case .checkbox = marker.kind,
+                  let toggleIndex = marker.toggleCharIndex,
+                  var box = foldingLM.checkboxBox(for: marker) else { continue }
+            box.origin.x += textContainerOrigin.x
+            box.origin.y += textContainerOrigin.y
+            guard box.insetBy(dx: -5, dy: -5).contains(point) else { continue }
+            toggleCheckbox(atCharIndex: toggleIndex)
+            return true
+        }
+        return false
+    }
+
+    private func toggleCheckbox(atCharIndex index: Int) {
+        guard let storage = textStorage, index < storage.length else { return }
+        let ch = (storage.string as NSString).character(at: index)
+        let replacement = (ch == 0x78 || ch == 0x58) ? " " : "x"
+        let range = NSRange(location: index, length: 1)
+        guard shouldChangeText(in: range, replacementString: replacement) else { return }
+        storage.replaceCharacters(in: range, with: replacement)
+        didChangeText()
+        refreshListMarkers()
+    }
+
     /// The detected link containing `characterIndex`, if any.
     func link(at characterIndex: Int) -> LinkDetection.Link? {
         detectedLinks.first { NSLocationInRange(characterIndex, $0.range) }
@@ -987,6 +1057,13 @@ class VimNSTextView: NSTextView {
         //    as a Vim editor should).
         if event.modifierFlags.contains(.command), let hit = link(atPoint: point) {
             openLink(hit.url)
+            return
+        }
+
+        // 0b) A plain click on a rendered checkbox toggles it (without moving
+        //     the caret), the way a notes app should.
+        if event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+           toggleCheckboxIfClicked(at: point) {
             return
         }
 
