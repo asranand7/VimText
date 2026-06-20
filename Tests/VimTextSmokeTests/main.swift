@@ -748,6 +748,100 @@ func testLinkDetectionAndGx() throws {
     try expectEqual(gg, [.moveCursor(.documentStart)], "gg must still jump to document start")
 }
 
+func testLinkFoldingComputeFolds() throws {
+    // A scheme+path URL collapses to its host (minus a leading www.).
+    let text = "Buy: https://www.amazon.in/TIMEX/dp/B0FVF here" as NSString
+    let links = LinkDetection.links(in: text as String)
+    try expectEqual(links.count, 1, "one URL detected")
+    let folds = LinkFolding.computeFolds(links: links, activeLinkRange: nil, in: text)
+    try expectEqual(folds.count, 1, "a URL with scheme+path folds to a chip")
+    let fold = folds[0]
+    try expectEqual(text.substring(with: fold.visibleRange), "amazon.in", "chip shows the host minus www.")
+    try expect(fold.iconSlotIndex == fold.visibleRange.location - 1, "icon slot sits just before the domain")
+    try expect(!fold.hiddenRanges.isEmpty, "the scheme/path is hidden")
+    try expect(!fold.precededByNonSpace, "a space precedes this link")
+
+    // The link under the caret is left expanded — excluded from the fold set.
+    let active = LinkFolding.computeFolds(links: links, activeLinkRange: links[0].range, in: text)
+    try expectEqual(active.count, 0, "the active link is not folded")
+
+    // A link that directly abuts punctuation flags precededByNonSpace, and a
+    // host with no www. shows in full.
+    let tight = "panda :https://seikowatches.co.in/p/x end" as NSString
+    let tightFolds = LinkFolding.computeFolds(links: LinkDetection.links(in: tight as String), activeLinkRange: nil, in: tight)
+    try expectEqual(tightFolds.count, 1, "the tight URL folds")
+    try expectEqual(tight.substring(with: tightFolds[0].visibleRange), "seikowatches.co.in", "host shown in full")
+    try expect(tightFolds[0].precededByNonSpace, "a ':' immediately precedes this link")
+
+    // Emails (mailto:, no host) stay expanded — nothing to collapse.
+    let mail = "ping me@test.org now" as NSString
+    let mailFolds = LinkFolding.computeFolds(links: LinkDetection.links(in: mail as String), activeLinkRange: nil, in: mail)
+    try expectEqual(mailFolds.count, 0, "emails have no host to fold")
+
+    // A bare domain (no scheme, no path) isn't worth a chip — nothing to hide.
+    let bare = "amazon.in" as NSString
+    let bareLink = LinkDetection.Link(range: NSRange(location: 0, length: bare.length), url: URL(string: "https://amazon.in")!)
+    let bareFolds = LinkFolding.computeFolds(links: [bareLink], activeLinkRange: nil, in: bare)
+    try expectEqual(bareFolds.count, 0, "a bare domain isn't folded")
+}
+
+func testListMarkerDetection() throws {
+    // Line offsets: "Title"=0-4 \n5 | "- Milk"=6-11 \n12 | "* Eggs"=13-18 \n19
+    // | "- [ ] open"=20-29 \n30 | "- [x] done"=31-40 \n41 | "  - indent"=42-51
+    // \n52 | "---"=53-55 \n56 | "-nospace"=57-64
+    let text = "Title\n- Milk\n* Eggs\n- [ ] open\n- [x] done\n  - indent\n---\n-nospace" as NSString
+    let markers = ListMarkers.detect(in: text)
+    try expectEqual(markers.count, 5, "five markers; the rule and the unspaced dash are ignored")
+
+    try expectEqual(markers[0].kind, .bullet, "'- Milk' is a bullet")
+    try expectEqual(markers[0].slotIndex, 6, "bullet slot is at the dash")
+    try expectEqual(markers[1].kind, .bullet, "'* Eggs' is a bullet")
+
+    try expectEqual(markers[2].kind, .checkbox(checked: false), "'- [ ]' is an unchecked box")
+    try expectEqual(markers[2].slotIndex, 20, "checkbox slot is at the dash")
+    try expect(markers[2].hiddenRange == NSRange(location: 21, length: 4), "the ' [ ]' chars are hidden")
+    try expect(markers[2].toggleCharIndex == 23, "toggle char sits between the brackets")
+    try expect(text.character(at: 23) == 0x20, "unchecked toggle char is a space")
+
+    try expectEqual(markers[3].kind, .checkbox(checked: true), "'- [x]' is a checked box")
+    try expect(markers[4].slotIndex == 44, "indented bullet's slot is after its leading spaces")
+
+    // Variants and non-markers.
+    try expect(ListMarkers.detect(in: "- [X] yes" as NSString).first?.kind == .checkbox(checked: true), "uppercase X is checked")
+    try expect(ListMarkers.detect(in: "+ plus" as NSString).first?.kind == .bullet, "'+ ' is a bullet too")
+    try expectEqual(ListMarkers.detect(in: "---" as NSString).count, 0, "a horizontal rule is not a bullet")
+    try expectEqual(ListMarkers.detect(in: "-nospace" as NSString).count, 0, "a dash with no following space is not a bullet")
+    try expectEqual(ListMarkers.detect(in: "- [x]done" as NSString).first?.kind, .bullet, "a checkbox needs a space after ']' — else it's a plain bullet")
+    try expectEqual(ListMarkers.detect(in: "" as NSString).count, 0, "empty text has no markers")
+}
+
+func testStoragePinnedStatePersists() throws {
+    // isPinned is a persisted field (model + NoteMetadata). Like isLocked, it
+    // must survive the round-trip — otherwise pins vanish on app restart.
+    try withTemporaryStorage { manager, _ in
+        var note = Note(title: "Idea", content: "build a thing", isPinned: true)
+        try expectSuccess(manager.saveNote(note), "pinned note should save")
+        try expectEqual(manager.loadNotes().first?.isPinned, true, "isPinned should persist across save/load")
+
+        note.isPinned = false
+        try expectSuccess(manager.saveNote(note), "unpin save should succeed")
+        try expectEqual(manager.loadNotes().first?.isPinned, false, "unpin should persist across save/load")
+    }
+}
+
+func testSearchNormalization() throws {
+    // searchNormalized = searchFolded + lowercased — the case-insensitive scan
+    // key behind sidebar/⌘K filtering (v2.19.5). Unlike searchFolded it is not
+    // 1:1 in UTF-16, so it's only for membership scans, never range mapping.
+    try expectEqual("Don\u{2019}T".searchNormalized, "don't", "folds the curly apostrophe and lowercases")
+    try expectEqual("HELLO".searchNormalized, "hello", "lowercases ASCII")
+    try expectEqual("A \u{2014} B".searchNormalized, "a - b", "folds the em dash and lowercases")
+    try expectEqual("CAF\u{00C9}".searchNormalized, "caf\u{00E9}", "non-folded scalars (É) just lowercase")
+
+    // The modifier-letter apostrophe (ʼ, U+02BC) also folds in searchFolded.
+    try expectEqual("can\u{02BC}t".searchFolded, "can't", "modifier-letter apostrophe folds to straight")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("Note model derived text", testNoteModelDerivedText),
     ("Editor preferences font sizing", testEditorPreferencesFontSizing),
@@ -771,7 +865,11 @@ let tests: [(String, () throws -> Void)] = [
     ("Command Palette search matching", testCommandPaletteSearchMatching),
     ("Fuzzy search and palette ranking", testFuzzySearchAndRanking),
     ("Search smart-quote folding", testSearchQuoteFolding),
-    ("Link detection and gd", testLinkDetectionAndGx)
+    ("Link detection and gd", testLinkDetectionAndGx),
+    ("Link folding (computeFolds)", testLinkFoldingComputeFolds),
+    ("List marker detection (bullets/checkboxes)", testListMarkerDetection),
+    ("Storage pinned-state persistence", testStoragePinnedStatePersists),
+    ("Search normalization (fold + lowercase)", testSearchNormalization)
 ]
 
 do {
