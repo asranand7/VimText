@@ -1141,27 +1141,43 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-        setHoveredLinkRange(link(atPoint: convert(event.locationInWindow, from: nil))?.range)
+        setHoveredLink(link(atPoint: convert(event.locationInWindow, from: nil)))
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        setHoveredLinkRange(nil)
+        setHoveredLink(nil)
     }
 
-    /// Tells the layout manager which folded chip the pointer is over so it draws
-    /// the darker hover fill. Redraws only when the hovered link actually changes.
-    private func setHoveredLinkRange(_ range: NSRange?) {
+    /// Reports the link under the pointer: darkens its chip (layout manager) and
+    /// surfaces its full URL instantly in the status bar — no waiting on the slow
+    /// native tooltip. Redraws only the affected chip rects when the hovered link
+    /// actually changes, so this stays snappy even on a large note.
+    private func setHoveredLink(_ link: LinkDetection.Link?) {
         guard let foldingLM = layoutManager as? FoldingLayoutManager else { return }
+        let newRange = link?.range
         let changed: Bool
-        switch (foldingLM.hoveredLinkRange, range) {
+        switch (foldingLM.hoveredLinkRange, newRange) {
         case let (current?, new?): changed = !NSEqualRanges(current, new)
         case (nil, nil): changed = false
         default: changed = true
         }
         guard changed else { return }
-        foldingLM.hoveredLinkRange = range
-        needsDisplay = true
+
+        let previous = foldingLM.hoveredLinkRange
+        foldingLM.hoveredLinkRange = newRange
+        vimEngine?.hoveredLinkURL = link?.url.absoluteString
+        // Repaint just the chips whose hover state flipped — not the whole view.
+        invalidateLinkChip(previous)
+        invalidateLinkChip(newRange)
+    }
+
+    private func invalidateLinkChip(_ range: NSRange?) {
+        guard let range, let layoutManager, let textContainer else { return }
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        setNeedsDisplay(rect.insetBy(dx: -10, dy: -4))
     }
 
     override func draw(_ dirtyRect: NSRect) {

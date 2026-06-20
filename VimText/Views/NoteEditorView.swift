@@ -517,6 +517,22 @@ struct NoteEditorView: View {
                     .frame(maxWidth: 280, alignment: .leading)
             }
 
+            // Browser-style instant link preview: the moment you hover a link
+            // chip, its full URL appears here — no waiting on the native tooltip.
+            if let hovered = vimEngine.hoveredLinkURL, !hovered.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "link")
+                        .font(.system(size: 9))
+                    Text(hovered)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.system(.caption, design: .default))
+                .foregroundStyle(theme.accent)
+                .frame(maxWidth: 380, alignment: .leading)
+                .transition(.opacity)
+            }
+
             Spacer()
 
             // Counts as one quiet trailing line: "48 words · 7:31"

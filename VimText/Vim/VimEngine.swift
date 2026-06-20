@@ -5,6 +5,10 @@ public final class VimEngine: ObservableObject {
     @Published public var mode: VimMode = .normal
     @Published var commandBuffer: String = ""
     @Published var statusMessage: String = ""
+    /// Full URL of the link currently under the pointer, shown instantly in the
+    /// status bar (browser-style) so a folded chip's destination is visible
+    /// without waiting on the slow native tooltip. nil when not hovering a link.
+    @Published var hoveredLinkURL: String? = nil
     @Published var showCommandLine: Bool = false
     @Published var commandLineText: String = ""
     @Published var cursorLine: Int = 1
