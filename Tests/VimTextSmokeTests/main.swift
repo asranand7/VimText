@@ -509,6 +509,92 @@ func testVimSlashSearchViaKeyDown() throws {
     }
 }
 
+/// Builds a live `VimNSTextView` wired to its engine/coordinator and seeded
+/// with `text`, plus a `press` helper that drives the real `keyDown` path —
+/// the shared rig for execution-level Vim regression tests.
+///
+/// The coordinator is returned (not just stored) because `VimNSTextView.coordinator`
+/// is `weak`; the caller must retain it for the lifetime of the test.
+@MainActor
+private func makeVimRig(_ text: String) -> (VimEngine, VimNSTextView, VimTextView.Coordinator, (String) -> Void) {
+    _ = NSApplication.shared
+    let engine = VimEngine()
+    let parent = VimTextView(
+        initialText: "", initialRTFData: Data(), onContentChange: nil,
+        vimEngine: engine, findController: nil, onSave: nil,
+        font: NSFont.systemFont(ofSize: 14)
+    )
+    let coordinator = VimTextView.Coordinator(parent)
+    let textView = VimNSTextView()
+    textView.vimEngine = engine
+    textView.coordinator = coordinator
+    coordinator.textView = textView
+    textView.string = text
+    textView.setSelectedRange(NSRange(location: 0, length: 0))
+    let press: (String) -> Void = { chars in
+        for ch in chars {
+            let s = String(ch)
+            if let event = NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: 0, context: nil, characters: s,
+                charactersIgnoringModifiers: s, isARepeat: false, keyCode: 0
+            ) { textView.keyDown(with: event) }
+        }
+    }
+    return (engine, textView, coordinator, press)
+}
+
+/// Regression for "yy/p on the file's last line pastes inline": the final line
+/// has no trailing newline, so the yank register must still be linewise and the
+/// paste must open a new line below rather than concatenating onto it.
+func testVimLinewisePasteLastLine() throws {
+    try MainActor.assumeIsolated {
+        // Last line ("second") carries no trailing newline.
+        let (eng, tv, coord, press) = makeVimRig("first\nsecond")
+        tv.setSelectedRange(NSRange(location: 6, length: 0)) // on "second"
+        press("yy")
+        try expectEqual(eng.register, "second\n", "yy on last line must yank a linewise register")
+        press("p")
+        try expectEqual(tv.string, "first\nsecond\nsecond",
+                        "yyp on the last line must duplicate it on a new line below")
+        try expectEqual(tv.selectedRange().location, 13,
+                        "cursor should land at the start of the pasted line")
+
+        // Regression guard: a non-last line still pastes below as before.
+        let (_, tv2, coord2, press2) = makeVimRig("alpha\nbeta\ngamma")
+        tv2.setSelectedRange(NSRange(location: 0, length: 0)) // on "alpha"
+        press2("yy")
+        press2("p")
+        try expectEqual(tv2.string, "alpha\nalpha\nbeta\ngamma",
+                        "yyp on a middle line must still paste a copy below")
+        withExtendedLifetime((coord, coord2)) {}
+    }
+}
+
+/// Regression for "; / , after t/T gets stuck": repeating a till motion must
+/// step over the adjacent target so the cursor advances each time.
+func testVimTillRepeatAdvances() throws {
+    try MainActor.assumeIsolated {
+        // a . b . c . d  → indices of '.' are 1, 3, 5.
+        let (_, tv, coord, press) = makeVimRig("a.b.c.d")
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        press("t.")
+        try expectEqual(tv.selectedRange().location, 0, "t. stops just before the first dot")
+        press(";")
+        try expectEqual(tv.selectedRange().location, 2, "; must advance to just before the next dot")
+        press(";")
+        try expectEqual(tv.selectedRange().location, 4, "repeated ; keeps advancing")
+
+        // Backward T then ; advances leftward instead of sticking.
+        tv.setSelectedRange(NSRange(location: 6, length: 0)) // on "d"
+        press("T.")
+        try expectEqual(tv.selectedRange().location, 6, "T. stops just after the nearest preceding dot")
+        press(";")
+        try expectEqual(tv.selectedRange().location, 4, "; must advance left past the adjacent dot")
+        withExtendedLifetime(coord) {}
+    }
+}
+
 func testVimCommandExecution() throws {
     let engine = VimEngine()
     try expectEqual(engine.executeCommand("42"), [.goToLine(42)], ":42 should go to line 42")
@@ -865,6 +951,8 @@ let tests: [(String, () throws -> Void)] = [
     ("Notes view-model filtering", testNotesViewModelFiltering),
     ("Vim command execution", testVimCommandExecution),
     ("Vim / search via keyDown", testVimSlashSearchViaKeyDown),
+    ("Vim linewise paste on last line", testVimLinewisePasteLastLine),
+    ("Vim till-repeat advances (t/T + ;/,)", testVimTillRepeatAdvances),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
     ("Command Palette search matching", testCommandPaletteSearchMatching),
