@@ -595,6 +595,49 @@ func testVimTillRepeatAdvances() throws {
     }
 }
 
+/// Regression for "J on the last line strands its final char": joining must
+/// span the next line's whole content even when it has no trailing newline.
+func testVimJoinLastLine() throws {
+    try MainActor.assumeIsolated {
+        // Next line "cd" is the last line (no trailing newline).
+        let (_, tv, coord, press) = makeVimRig("ab\ncd")
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        press("J")
+        try expectEqual(tv.string, "ab cd", "J must join the last line without stranding its final char")
+
+        // Regression guard: a mid-file join keeps the following line intact.
+        let (_, tv2, coord2, press2) = makeVimRig("ab\ncd\nef")
+        tv2.setSelectedRange(NSRange(location: 0, length: 0))
+        press2("J")
+        try expectEqual(tv2.string, "ab cd\nef", "J on a middle line must preserve the line after")
+        withExtendedLifetime((coord, coord2)) {}
+    }
+}
+
+/// Regression for "dd on the last line leaves a blank line": deleting the final
+/// line must also consume the newline that precedes it.
+func testVimDeleteLastLine() throws {
+    try MainActor.assumeIsolated {
+        let (_, tv, coord, press) = makeVimRig("first\nsecond")
+        tv.setSelectedRange(NSRange(location: 6, length: 0)) // on "second"
+        press("dd")
+        try expectEqual(tv.string, "first", "dd on the last line must not leave a trailing empty line")
+
+        // Regression guard: dd on a middle line removes exactly that line.
+        let (_, tv2, coord2, press2) = makeVimRig("first\nsecond\nthird")
+        tv2.setSelectedRange(NSRange(location: 0, length: 0)) // on "first"
+        press2("dd")
+        try expectEqual(tv2.string, "second\nthird", "dd on a middle line removes just that line")
+
+        // dd on the sole line empties the document.
+        let (_, tv3, coord3, press3) = makeVimRig("only")
+        tv3.setSelectedRange(NSRange(location: 0, length: 0))
+        press3("dd")
+        try expectEqual(tv3.string, "", "dd on the only line clears the document")
+        withExtendedLifetime((coord, coord2, coord3)) {}
+    }
+}
+
 func testVimCommandExecution() throws {
     let engine = VimEngine()
     try expectEqual(engine.executeCommand("42"), [.goToLine(42)], ":42 should go to line 42")
@@ -953,6 +996,8 @@ let tests: [(String, () throws -> Void)] = [
     ("Vim / search via keyDown", testVimSlashSearchViaKeyDown),
     ("Vim linewise paste on last line", testVimLinewisePasteLastLine),
     ("Vim till-repeat advances (t/T + ;/,)", testVimTillRepeatAdvances),
+    ("Vim join (J) on last line", testVimJoinLastLine),
+    ("Vim delete (dd) on last line", testVimDeleteLastLine),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
     ("Command Palette search matching", testCommandPaletteSearchMatching),

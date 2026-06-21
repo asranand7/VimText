@@ -472,6 +472,19 @@ extension VimTextView {
             text.hasSuffix("\n") ? text : text + "\n"
         }
 
+        /// The range to actually delete for a linewise *delete* of `range`. When
+        /// the target reaches the end of the document and has no trailing newline
+        /// of its own (it's the last line), the newline that precedes it must go
+        /// too — otherwise deleting the last line leaves a blank line behind
+        /// ("first\nsecond" + dd → "first", not "first\n"). The register is still
+        /// built from the original `range`, so the yank stays linewise.
+        private func linewiseDeletionRange(_ range: NSRange, in nsString: NSString) -> NSRange {
+            let end = range.location + range.length
+            guard end == nsString.length, range.location > 0,
+                  end > 0, nsString.character(at: end - 1) != 0x0A else { return range }
+            return NSRange(location: range.location - 1, length: range.length + 1)
+        }
+
         private func indentLineRange(_ range: NSRange, in textView: VimNSTextView) {
             var pos = range.location
             var limit = range.location + range.length
@@ -713,14 +726,14 @@ extension VimTextView {
                 let lineRange = nsString.lineRange(for: NSRange(location: cursorPos, length: 0))
                 let lineText = nsString.substring(with: lineRange)
                 parent.vimEngine.register = linewiseRegister(lineText)
-                textView.setSelectedRange(lineRange)
+                textView.setSelectedRange(linewiseDeletionRange(lineRange, in: nsString))
                 textView.delete(nil)
 
             case .deleteLines(let count):
                 let range = lineRangeForCount(from: cursorPos, count: max(1, count), in: nsString)
                 if range.length > 0 {
                     parent.vimEngine.register = linewiseRegister(nsString.substring(with: range))
-                    textView.setSelectedRange(range)
+                    textView.setSelectedRange(linewiseDeletionRange(range, in: nsString))
                     textView.delete(nil)
                 }
 
@@ -743,7 +756,7 @@ extension VimTextView {
                     let range = NSRange(location: startLine.location, length: NSMaxRange(endLine) - startLine.location)
                     if range.length > 0 {
                         parent.vimEngine.register = linewiseRegister(nsString.substring(with: range))
-                        textView.setSelectedRange(range)
+                        textView.setSelectedRange(linewiseDeletionRange(range, in: nsString))
                         textView.delete(nil)
                     }
                 } else {
@@ -926,7 +939,15 @@ extension VimTextView {
                     let nextLine = nsString.substring(with: nextLineRange)
                     let trimmed = nextLine.trimmingCharacters(in: .whitespacesAndNewlines)
                     let joinEnd = lineEnd > 0 && nsString.character(at: lineEnd - 1) == 0x0A ? lineEnd - 1 : lineEnd
-                    let replaceRange = NSRange(location: joinEnd, length: nextLineRange.length)
+                    // Replace from just before this line's newline through the end
+                    // of the next line's *content* (its own trailing newline, if
+                    // any, must survive). Using nextLineRange.length directly is one
+                    // short on the file's last line — which has no trailing newline
+                    // — and strands its final character ("ab\ncd" → "ab cdd").
+                    let nextLineEnd = nextLineRange.location + nextLineRange.length
+                    let nextContentEnd = nextLineEnd > nextLineRange.location
+                        && nsString.character(at: nextLineEnd - 1) == 0x0A ? nextLineEnd - 1 : nextLineEnd
+                    let replaceRange = NSRange(location: joinEnd, length: nextContentEnd - joinEnd)
                     textView.setSelectedRange(replaceRange)
                     textView.insertText(" " + trimmed, replacementRange: replaceRange)
                 }
