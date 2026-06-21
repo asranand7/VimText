@@ -89,7 +89,9 @@ public enum VimAction: Equatable {
     case visualSelectTextObject(TextObject)
     case visualSwapAnchor
 
-    case toggleCase
+    /// `~` — toggle case of `count` chars from the cursor, bounded to the
+    /// current line (a count past end-of-line stops there, it does not wrap).
+    case toggleCase(Int)
     /// `gu{motion}` / `gU{motion}` — lower/uppercase over a motion.
     case changeCaseMotion(Motion, Int, upper: Bool)
     /// `guu` / `gUU` — lower/uppercase whole lines.

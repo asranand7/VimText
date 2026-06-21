@@ -485,6 +485,17 @@ extension VimTextView {
             return NSRange(location: range.location - 1, length: range.length + 1)
         }
 
+        /// UTF-16 offset of the first non-blank character on the line containing
+        /// `loc`, clamped into the document — Vim's landing spot for `G`/`gg`/`:N`.
+        private func firstNonBlankOffset(ofLineAt loc: Int, in nsString: NSString) -> Int {
+            let length = nsString.length
+            guard length > 0 else { return 0 }
+            let lineRange = nsString.lineRange(for: NSRange(location: min(max(loc, 0), length - 1), length: 0))
+            let lineText = nsString.substring(with: lineRange)
+            let indent = lineText.prefix(while: { $0 == " " || $0 == "\t" })
+            return min(lineRange.location + indent.count, max(length - 1, 0))
+        }
+
         private func indentLineRange(_ range: NSRange, in textView: VimNSTextView) {
             var pos = range.location
             var limit = range.location + range.length
@@ -654,15 +665,28 @@ extension VimTextView {
             case .replaceChar:
                 break
 
-            case .toggleCase:
-                if cursorPos < length {
-                    let charRange = NSRange(location: cursorPos, length: 1)
+            case .toggleCase(let count):
+                // Toggle `count` chars from the cursor, bounded to the current
+                // line's content (Vim's `~` stops at end-of-line, never wraps;
+                // a count past the end must not thrash the last char).
+                let lineRange = nsString.lineRange(for: NSRange(location: min(cursorPos, max(length - 1, 0)), length: 0))
+                var lineContentEnd = lineRange.location + lineRange.length
+                if lineContentEnd > lineRange.location, nsString.character(at: lineContentEnd - 1) == 0x0A {
+                    lineContentEnd -= 1
+                }
+                let upTo = min(cursorPos + max(1, count), lineContentEnd)
+                var pos = cursorPos
+                while pos < upTo {
+                    let charRange = NSRange(location: pos, length: 1)
                     let ch = nsString.substring(with: charRange)
                     let toggled = ch == ch.uppercased() ? ch.lowercased() : ch.uppercased()
                     textView.insertText(toggled, replacementRange: charRange)
-                    let newPos = min(cursorPos + 1, length - 1)
-                    textView.setSelectedRange(NSRange(location: max(newPos, 0), length: 0))
+                    pos += 1
                 }
+                // Rest on the char after the toggled run, clamped to the line's
+                // last char (matching Vim).
+                let rest = min(upTo, max(lineContentEnd - 1, lineRange.location))
+                textView.setSelectedRange(NSRange(location: rest, length: 0))
 
             case .repeatLastChange:
                 let savedActions = engine.lastChangeActions
@@ -1035,16 +1059,28 @@ extension VimTextView {
                 let string = textView.string
                 var lineCount = 0
                 var currentIdx = string.startIndex
-                
+
                 while currentIdx < string.endIndex && lineCount < line - 1 {
                     let lineRange = string.lineRange(for: currentIdx..<currentIdx)
                     currentIdx = lineRange.upperBound
                     lineCount += 1
                 }
-                
-                let offset = currentIdx.utf16Offset(in: string)
-                textView.setSelectedRange(NSRange(location: offset, length: 0))
-                textView.scrollRangeToVisible(NSRange(location: offset, length: 0))
+
+                // Land on the line's first non-blank, like Vim's G/gg/:N.
+                let target = firstNonBlankOffset(ofLineAt: currentIdx.utf16Offset(in: string), in: nsString)
+                if isVisual {
+                    // Extend the active selection to the target instead of
+                    // collapsing it to a caret (`V5G`, `v3G`, `v2gg`).
+                    visualCursorPos = target
+                    if engine.mode == .visualBlock {
+                        updateBlockSelection(in: textView)
+                    } else {
+                        updateVisualSelection(cursorAt: target, in: textView)
+                    }
+                } else {
+                    textView.setSelectedRange(NSRange(location: target, length: 0))
+                }
+                textView.scrollRangeToVisible(NSRange(location: target, length: 0))
 
             case .save:
                 parent.onSave?()
@@ -2122,14 +2158,11 @@ extension VimTextView {
                 return lineRange.location + indent.count
 
             case .documentStart:
-                return 0
+                return firstNonBlankOffset(ofLineAt: 0, in: nsString)
 
             case .documentEnd:
-                if length > 0 {
-                    let lastLineRange = nsString.lineRange(for: NSRange(location: length - 1, length: 0))
-                    return lastLineRange.location
-                }
-                return 0
+                let lastLineRange = nsString.lineRange(for: NSRange(location: length - 1, length: 0))
+                return firstNonBlankOffset(ofLineAt: lastLineRange.location, in: nsString)
 
             case .paragraphForward:
                 var pos = cursorPos

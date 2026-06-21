@@ -238,7 +238,7 @@ public final class VimEngine: ObservableObject {
             return [.changeLine]
         case "~":
             resetBuffers()
-            return Array(repeating: .toggleCase, count: count)
+            return [.toggleCase(count)]
         case "p":
             resetBuffers()
             return Array(repeating: .pasteAfter, count: count)

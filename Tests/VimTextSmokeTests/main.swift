@@ -210,7 +210,7 @@ func testVimOperatorsTextObjectsAndRepeats() throws {
     engine = VimEngine()
     try expectEqual(engine.processKey("x"), [.deleteChar], "x should delete character")
     try expectEqual(feed(engine, "3", "X"), Array(repeating: .deleteCharBefore, count: 3), "3X should delete three chars before")
-    try expectEqual(feed(engine, "2", "~"), Array(repeating: .toggleCase, count: 2), "2~ should toggle twice")
+    try expectEqual(feed(engine, "2", "~"), [.toggleCase(2)], "2~ should toggle twice")
     try expectEqual(feed(engine, "2", "p"), Array(repeating: .pasteAfter, count: 2), "2p should paste twice")
     try expectEqual(feed(engine, "2", "P"), Array(repeating: .pasteBefore, count: 2), "2P should paste twice before")
     try expectEqual(engine.processKey("."), [.repeatLastChange], ". should repeat last change")
@@ -638,6 +638,61 @@ func testVimDeleteLastLine() throws {
     }
 }
 
+/// Regression for "count G/gg in visual mode collapses the selection": a
+/// counted line jump must extend the active visual selection, not drop it to a
+/// caret. Also covers G/gg landing on the line's first non-blank.
+func testVimVisualCountGotoLine() throws {
+    try MainActor.assumeIsolated {
+        // V then 3G selects whole lines 1..3 (V-LINE through end of line 3).
+        let (eng, tv, coord, press) = makeVimRig("one\ntwo\nthree\nfour")
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        press("V")
+        press("3")
+        press("G")
+        try expect(eng.mode == .visualLine, "still in V-LINE after 3G")
+        let sel = tv.selectedRange()
+        try expectEqual(sel.location, 0, "selection starts at the document start")
+        // "one\ntwo\nthree\n" = 14 chars — V-LINE spans lines 1..3 including
+        // line 3's trailing newline.
+        try expectEqual(sel.location + sel.length, 14, "3G must extend the V-LINE selection through line 3")
+
+        // Charwise visual: v then 2G extends the caret end to line 2.
+        let (_, tv2, coord2, press2) = makeVimRig("one\ntwo\nthree")
+        tv2.setSelectedRange(NSRange(location: 0, length: 0))
+        press2("v")
+        press2("2")
+        press2("G")
+        try expect(tv2.selectedRange().length > 1, "v2G must extend the charwise selection, not collapse it")
+        withExtendedLifetime((coord, coord2)) {}
+    }
+}
+
+/// `gg`/`G` (and counted forms) land on the line's first non-blank char.
+func testVimGotoLineFirstNonBlank() throws {
+    try MainActor.assumeIsolated {
+        // Line 2 is indented; 2G should land on 'b' (after the 4 spaces).
+        let (_, tv, coord, press) = makeVimRig("a\n    bcd\ne")
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        press("2")
+        press("G")
+        try expectEqual(tv.selectedRange().location, 6, "2G lands on the first non-blank of line 2")
+        withExtendedLifetime(coord) {}
+    }
+}
+
+/// Regression for "~ with a count past end-of-line thrashes the last char":
+/// it must toggle each remaining char once and stop, never wrap or re-toggle.
+func testVimToggleCaseCountStopsAtLineEnd() throws {
+    try MainActor.assumeIsolated {
+        let (_, tv, coord, press) = makeVimRig("ab\ncd")
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        press("5")
+        press("~")
+        try expectEqual(tv.string, "AB\ncd", "5~ on a 2-char line toggles both once and stops (no wrap, no re-toggle)")
+        withExtendedLifetime(coord) {}
+    }
+}
+
 func testVimCommandExecution() throws {
     let engine = VimEngine()
     try expectEqual(engine.executeCommand("42"), [.goToLine(42)], ":42 should go to line 42")
@@ -998,6 +1053,9 @@ let tests: [(String, () throws -> Void)] = [
     ("Vim till-repeat advances (t/T + ;/,)", testVimTillRepeatAdvances),
     ("Vim join (J) on last line", testVimJoinLastLine),
     ("Vim delete (dd) on last line", testVimDeleteLastLine),
+    ("Vim visual count G/gg extends selection", testVimVisualCountGotoLine),
+    ("Vim G/gg first non-blank landing", testVimGotoLineFirstNonBlank),
+    ("Vim ~ count stops at line end", testVimToggleCaseCountStopsAtLineEnd),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
     ("Command Palette search matching", testCommandPaletteSearchMatching),
