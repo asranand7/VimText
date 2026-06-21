@@ -222,8 +222,13 @@ func testVimFindSearchVisualAndControlParsing() throws {
     try expectEqual(engine.processKey(";"), [.moveCursor(.findChar("x", true))], "; should repeat find")
     try expectEqual(engine.processKey(","), [.moveCursor(.findChar("x", false))], ", should reverse find")
     try expectEqual(feed(engine, "t", ")"), [.moveCursor(.tillChar(")", true))], "t) should move till char")
+    // ; / , repeating a t/T must emit the skip-adjacent variant so the cursor
+    // advances past the char it already rests before instead of staying put.
+    try expectEqual(engine.processKey(";"), [.moveCursor(.tillCharRepeat(")", true))], "; should repeat till (skip-adjacent)")
+    try expectEqual(engine.processKey(","), [.moveCursor(.tillCharRepeat(")", false))], ", should reverse till (skip-adjacent)")
     try expectEqual(feed(engine, "F", "a"), [.moveCursor(.findChar("a", false))], "Fa should find backward")
     try expectEqual(feed(engine, "T", "a"), [.moveCursor(.tillChar("a", false))], "Ta should till backward")
+    try expectEqual(engine.processKey(";"), [.moveCursor(.tillCharRepeat("a", false))], "; should repeat backward till (skip-adjacent)")
 
     engine = VimEngine()
     try expectEqual(feed(engine, "d", "f", ")"), [.deleteMotion(.findChar(")", true), 1)], "df) should delete through char")

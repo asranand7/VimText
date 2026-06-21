@@ -337,7 +337,7 @@ public final class VimEngine: ObservableObject {
                 if isFind {
                     return Array(repeating: .moveCursor(.findChar(ch, forward)), count: count)
                 } else {
-                    return Array(repeating: .moveCursor(.tillChar(ch, forward)), count: count)
+                    return Array(repeating: .moveCursor(.tillCharRepeat(ch, forward)), count: count)
                 }
             }
             resetBuffers()
@@ -348,7 +348,7 @@ public final class VimEngine: ObservableObject {
                 if isFind {
                     return Array(repeating: .moveCursor(.findChar(ch, !forward)), count: count)
                 } else {
-                    return Array(repeating: .moveCursor(.tillChar(ch, !forward)), count: count)
+                    return Array(repeating: .moveCursor(.tillCharRepeat(ch, !forward)), count: count)
                 }
             }
             resetBuffers()
@@ -1016,12 +1016,12 @@ public final class VimEngine: ObservableObject {
             return [.none]
         case ";":
             if let (ch, forward, isFind) = lastFindChar {
-                return counted(isFind ? .findChar(ch, forward) : .tillChar(ch, forward))
+                return counted(isFind ? .findChar(ch, forward) : .tillCharRepeat(ch, forward))
             }
             return [.none]
         case ",":
             if let (ch, forward, isFind) = lastFindChar {
-                return counted(isFind ? .findChar(ch, !forward) : .tillChar(ch, !forward))
+                return counted(isFind ? .findChar(ch, !forward) : .tillCharRepeat(ch, !forward))
             }
             return [.none]
         default:

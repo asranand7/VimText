@@ -464,6 +464,14 @@ extension VimTextView {
             return NSRange(location: firstLine.location, length: max(0, end - firstLine.location))
         }
 
+        /// Marks `text` as a linewise register. The file's last line carries no
+        /// trailing newline, so a raw `yy`/`dd` there would yield text without a
+        /// `\n` and paste would degrade to charwise — append one so the register
+        /// is unambiguously linewise.
+        private func linewiseRegister(_ text: String) -> String {
+            text.hasSuffix("\n") ? text : text + "\n"
+        }
+
         private func indentLineRange(_ range: NSRange, in textView: VimNSTextView) {
             var pos = range.location
             var limit = range.location + range.length
@@ -704,14 +712,14 @@ extension VimTextView {
             case .deleteLine:
                 let lineRange = nsString.lineRange(for: NSRange(location: cursorPos, length: 0))
                 let lineText = nsString.substring(with: lineRange)
-                parent.vimEngine.register = lineText
+                parent.vimEngine.register = linewiseRegister(lineText)
                 textView.setSelectedRange(lineRange)
                 textView.delete(nil)
 
             case .deleteLines(let count):
                 let range = lineRangeForCount(from: cursorPos, count: max(1, count), in: nsString)
                 if range.length > 0 {
-                    parent.vimEngine.register = nsString.substring(with: range)
+                    parent.vimEngine.register = linewiseRegister(nsString.substring(with: range))
                     textView.setSelectedRange(range)
                     textView.delete(nil)
                 }
@@ -734,7 +742,7 @@ extension VimTextView {
                     let endLine = nsString.lineRange(for: NSRange(location: max(cursorPos, target), length: 0))
                     let range = NSRange(location: startLine.location, length: NSMaxRange(endLine) - startLine.location)
                     if range.length > 0 {
-                        parent.vimEngine.register = nsString.substring(with: range)
+                        parent.vimEngine.register = linewiseRegister(nsString.substring(with: range))
                         textView.setSelectedRange(range)
                         textView.delete(nil)
                     }
@@ -759,7 +767,7 @@ extension VimTextView {
                 if contentRange.length > 0 && nsString.character(at: contentRange.location + contentRange.length - 1) == 0x0A {
                     contentRange.length -= 1
                 }
-                parent.vimEngine.register = nsString.substring(with: contentRange)
+                parent.vimEngine.register = linewiseRegister(nsString.substring(with: contentRange))
                 textView.setSelectedRange(contentRange)
                 textView.delete(nil)
                 textView.updateCursorAppearance(isBlock: false)
@@ -771,7 +779,7 @@ extension VimTextView {
             case .changeLines(let count):
                 let range = lineRangeForCount(from: cursorPos, count: max(1, count), in: nsString, includeTrailingNewline: false)
                 if range.length > 0 {
-                    parent.vimEngine.register = nsString.substring(with: range)
+                    parent.vimEngine.register = linewiseRegister(nsString.substring(with: range))
                     textView.setSelectedRange(range)
                     textView.delete(nil)
                 }
@@ -808,7 +816,7 @@ extension VimTextView {
                     }
                     let range = NSRange(location: startLine.location, length: rangeEnd - startLine.location)
                     if range.length > 0 {
-                        parent.vimEngine.register = nsString.substring(with: range)
+                        parent.vimEngine.register = linewiseRegister(nsString.substring(with: range))
                         textView.setSelectedRange(range)
                         textView.delete(nil)
                     }
@@ -834,14 +842,14 @@ extension VimTextView {
 
             case .yankLine:
                 let lineRange = nsString.lineRange(for: NSRange(location: cursorPos, length: 0))
-                parent.vimEngine.register = nsString.substring(with: lineRange)
+                parent.vimEngine.register = linewiseRegister(nsString.substring(with: lineRange))
                 parent.vimEngine.statusMessage = "1 line yanked"
                 flashYankHighlight(range: lineRange, in: textView)
 
             case .yankLines(let count):
                 let range = lineRangeForCount(from: cursorPos, count: max(1, count), in: nsString)
                 if range.length > 0 {
-                    parent.vimEngine.register = nsString.substring(with: range)
+                    parent.vimEngine.register = linewiseRegister(nsString.substring(with: range))
                     parent.vimEngine.statusMessage = "\(max(1, count)) line(s) yanked"
                     flashYankHighlight(range: range, in: textView)
                 }
@@ -853,7 +861,7 @@ extension VimTextView {
                     let endLine = nsString.lineRange(for: NSRange(location: max(cursorPos, target), length: 0))
                     let range = NSRange(location: startLine.location, length: NSMaxRange(endLine) - startLine.location)
                     if range.length > 0 {
-                        parent.vimEngine.register = nsString.substring(with: range)
+                        parent.vimEngine.register = linewiseRegister(nsString.substring(with: range))
                         parent.vimEngine.statusMessage = "Yanked"
                         flashYankHighlight(range: range, in: textView)
                     }
@@ -877,10 +885,21 @@ extension VimTextView {
                 guard !reg.isEmpty else { break }
                 if reg.hasSuffix("\n") {
                     let lineRange = nsString.lineRange(for: NSRange(location: cursorPos, length: 0))
-                    let insertPos = lineRange.location + lineRange.length
-                    textView.setSelectedRange(NSRange(location: insertPos, length: 0))
-                    textView.insertText(reg, replacementRange: NSRange(location: insertPos, length: 0))
-                    textView.setSelectedRange(NSRange(location: insertPos, length: 0))
+                    let lineEnd = lineRange.location + lineRange.length
+                    let lineHasNewline = lineEnd > 0 && nsString.character(at: lineEnd - 1) == 0x0A
+                    if lineHasNewline {
+                        textView.setSelectedRange(NSRange(location: lineEnd, length: 0))
+                        textView.insertText(reg, replacementRange: NSRange(location: lineEnd, length: 0))
+                        textView.setSelectedRange(NSRange(location: lineEnd, length: 0))
+                    } else {
+                        // Last line has no trailing newline of its own — open a new
+                        // line below it instead of concatenating onto it (drop the
+                        // register's trailing \n, prepend one to start the new line).
+                        let body = String(reg.dropLast())
+                        textView.setSelectedRange(NSRange(location: lineEnd, length: 0))
+                        textView.insertText("\n" + body, replacementRange: NSRange(location: lineEnd, length: 0))
+                        textView.setSelectedRange(NSRange(location: min(lineEnd + 1, (textView.string as NSString).length), length: 0))
+                    }
                 } else {
                     let insertPos = min(cursorPos + 1, length)
                     textView.setSelectedRange(NSRange(location: insertPos, length: 0))
@@ -2127,6 +2146,9 @@ extension VimTextView {
             case .tillChar(let ch, let forward):
                 return findCharInLine(ch, forward: forward, till: true, from: cursorPos, in: nsString)
 
+            case .tillCharRepeat(let ch, let forward):
+                return findCharInLine(ch, forward: forward, till: true, from: cursorPos, in: nsString, skipAdjacent: true)
+
             case .matchingBracket:
                 return findMatchingBracket(from: cursorPos, in: nsString)
 
@@ -2319,15 +2341,21 @@ extension VimTextView {
             return .punctuation
         }
 
-        private func findCharInLine(_ ch: Character, forward: Bool, till: Bool, from pos: Int, in nsString: NSString) -> Int {
+        /// `skipAdjacent` steps over a target sitting immediately next to the
+        /// cursor — used when `;`/`,` repeats a `t`/`T`, where the cursor already
+        /// rests just before/after the previous match and must advance past it.
+        private func findCharInLine(_ ch: Character, forward: Bool, till: Bool, from pos: Int, in nsString: NSString, skipAdjacent: Bool = false) -> Int {
             let string = nsString as String
             guard pos < string.utf16.count else { return pos }
             let startIdx = string.utf16.index(string.utf16.startIndex, offsetBy: pos)
             let lineRange = string.lineRange(for: startIdx..<startIdx)
-            
+
             if forward {
                 var i = startIdx
                 if i < lineRange.upperBound {
+                    i = string.index(after: i)
+                }
+                if skipAdjacent, i < lineRange.upperBound, string[i] == ch {
                     i = string.index(after: i)
                 }
                 while i < lineRange.upperBound {
@@ -2342,6 +2370,10 @@ extension VimTextView {
                 }
             } else {
                 var i = startIdx
+                if skipAdjacent, i > lineRange.lowerBound {
+                    let prev = string.index(before: i)
+                    if string[prev] == ch { i = prev }
+                }
                 while i > lineRange.lowerBound {
                     i = string.index(before: i)
                     if string[i] == ch {

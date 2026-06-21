@@ -169,6 +169,11 @@ public enum Motion: Equatable {
 
     case findChar(Character, Bool)
     case tillChar(Character, Bool)
+    /// `;` / `,` repeat of a `t`/`T` motion. Identical to `tillChar` except it
+    /// steps over a target sitting immediately adjacent to the cursor — without
+    /// this, repeating `t` re-finds the char the cursor already rests before and
+    /// never advances.
+    case tillCharRepeat(Character, Bool)
 
     case matchingBracket
 
@@ -177,7 +182,7 @@ public enum Motion: Equatable {
         // `$` is inclusive in Vim: operators act through the last character
         // of the line (gU$, y$, …). d$/c$ are special-cased in the engine but
         // every other operator + $ relies on this.
-        case .findChar, .tillChar, .wordEnd, .matchingBracket, .lineEnd:
+        case .findChar, .tillChar, .tillCharRepeat, .wordEnd, .matchingBracket, .lineEnd:
             return true
         default:
             return false
