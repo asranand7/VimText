@@ -120,8 +120,16 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     /// The link range currently under the pointer, drawn with the darker fill.
     var hoveredLinkRange: NSRange?
     /// Text line height used to size the chip so it hugs the domain rather than
-    /// filling the full (line-spaced) line fragment.
-    var chipTextHeight: CGFloat = 18
+    /// filling the full (line-spaced) line fragment. The icon and slot widths
+    /// scale with it, so a change (font-size bump) must re-reserve the slots and
+    /// re-run layout — otherwise chips keep drawing at the old font's size.
+    var chipTextHeight: CGFloat = 18 {
+        didSet {
+            guard chipTextHeight != oldValue else { return }
+            rebuildIndices()
+            invalidate(unionRange(folds.map(\.linkRange) + markers.map(\.lineRange)))
+        }
+    }
 
     /// Line-leading list markers (bullets / checkboxes) currently rendered.
     private(set) var markers: [ListMarkers.Marker] = []
@@ -135,7 +143,7 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     private var cachedIconKey: String = ""
 
     private var iconSize: CGFloat { (chipTextHeight * 0.6).rounded() }
-    private var iconGap: CGFloat { 5 }
+    private var iconGap: CGFloat { 3 }
     /// On-screen width reserved before the domain: the icon plus a small gap.
     private var iconBoxWidth: CGFloat { iconSize + iconGap }
     /// Extra leading width when the chip directly follows a non-space character,
@@ -240,6 +248,33 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         return charIndex < hiddenEnds[candidate]
     }
 
+    /// Splits `range` into the pieces that fall outside any currently-hidden
+    /// (folded URL / marker) range. Callers that paint their own on-screen
+    /// decorations over a character range — e.g. search-match highlighting —
+    /// must clip to this rather than the raw range: a hidden character has a
+    /// zero-width null glyph, so painting over it collapses to a stray sliver
+    /// at the fold point instead of covering visible text.
+    func visibleSubranges(of range: NSRange) -> [NSRange] {
+        guard !hiddenStarts.isEmpty else { return [range] }
+        var result: [NSRange] = []
+        var spanStart: Int?
+        let end = range.location + range.length
+        for ci in range.location..<end {
+            if isHidden(ci) {
+                if let start = spanStart {
+                    result.append(NSRange(location: start, length: ci - start))
+                    spanStart = nil
+                }
+            } else if spanStart == nil {
+                spanStart = ci
+            }
+        }
+        if let start = spanStart {
+            result.append(NSRange(location: start, length: end - start))
+        }
+        return result
+    }
+
     // MARK: NSLayoutManagerDelegate — hide the folded glyphs
 
     func layoutManager(
@@ -328,7 +363,7 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             let pill = NSRect(
                 x: pillLeft,
                 y: textCenterY - chipHeight / 2,
-                width: rect.maxX + 6 - pillLeft,
+                width: rect.maxX + 4 - pillLeft,
                 height: chipHeight
             )
             let path = NSBezierPath(roundedRect: pill, xRadius: 5, yRadius: 5)

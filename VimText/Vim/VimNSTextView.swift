@@ -30,10 +30,21 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 
     func highlightCurrentMatch(range: NSRange) {
         currentMatchLayer?.removeFromSuperlayer()
+        currentMatchLayer = nil
         guard let layoutManager = self.layoutManager,
               let textContainer = self.textContainer else { return }
-        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-        let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        // Clip to the visible (unfolded) pieces of the match so a match that
+        // falls inside a collapsed URL doesn't draw its box at the fold's
+        // zero-width glyph position — see FoldingLayoutManager.visibleSubranges.
+        let foldingLM = layoutManager as? FoldingLayoutManager
+        let pieces = (foldingLM?.visibleSubranges(of: range) ?? [range]).filter { $0.length > 0 }
+        guard var rect = pieces.first.map({
+            layoutManager.boundingRect(forGlyphRange: layoutManager.glyphRange(forCharacterRange: $0, actualCharacterRange: nil), in: textContainer)
+        }) else { return }
+        for piece in pieces.dropFirst() {
+            let gr = layoutManager.glyphRange(forCharacterRange: piece, actualCharacterRange: nil)
+            rect = rect.union(layoutManager.boundingRect(forGlyphRange: gr, in: textContainer))
+        }
         var highlightRect = rect
         highlightRect.origin.x += self.textContainerOrigin.x
         highlightRect.origin.y += self.textContainerOrigin.y
@@ -61,11 +72,16 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         guard length > 0, !ranges.isEmpty else { return }
 
         let color = NSColor.systemYellow.withAlphaComponent(0.30)
+        // Clip each match to its visible (unfolded) pieces — a match that
+        // falls inside a collapsed URL has no on-screen glyphs to paint over.
+        let foldingLM = layoutManager as? FoldingLayoutManager
         var applied = 0
         for r in ranges {
             let safe = NSIntersectionRange(r, NSRange(location: 0, length: length))
             guard safe.length > 0 else { continue }
-            layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: safe)
+            for piece in foldingLM?.visibleSubranges(of: safe) ?? [safe] where piece.length > 0 {
+                layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: piece)
+            }
             applied += 1
             if applied >= Self.maxSearchMatches { break }
         }
@@ -172,6 +188,15 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         updateLinkFolds()
     }
 
+    /// The chip/marker text height for the editor's current base font. Reads
+    /// the SwiftUI-side font first: NSTextView's `font` getter can lag behind
+    /// `applyBaseFont` right after a font-size change, which would size chips
+    /// for the previous font.
+    private func chipTextHeightForCurrentFont() -> CGFloat {
+        let baseFont = coordinator?.parent.font ?? font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        return layoutManager?.defaultLineHeight(for: baseFont) ?? 18
+    }
+
     /// Recomputes which links collapse to a domain chip. The link the caret is
     /// currently on stays expanded so its full URL can be read and edited; every
     /// other link folds. Display-only — the document text is never modified.
@@ -181,7 +206,7 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         foldingLM.chipHoverFillColor = accentColor.withAlphaComponent(0.26)
         foldingLM.chipStrokeColor = accentColor.withAlphaComponent(0.24)
         foldingLM.chipIconColor = accentColor
-        foldingLM.chipTextHeight = layoutManager?.defaultLineHeight(for: font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)) ?? 18
+        foldingLM.chipTextHeight = chipTextHeightForCurrentFont()
 
         guard !detectedLinks.isEmpty else {
             foldingLM.setFolds([])
@@ -230,7 +255,7 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         let base = (typingAttributes[.foregroundColor] as? NSColor) ?? .labelColor
         foldingLM.markerTextColor = base.withAlphaComponent(0.55)
         foldingLM.markerAccentColor = accentColor
-        foldingLM.chipTextHeight = layoutManager?.defaultLineHeight(for: font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)) ?? 18
+        foldingLM.chipTextHeight = chipTextHeightForCurrentFont()
 
         guard !detectedMarkers.isEmpty else {
             foldingLM.setMarkers([])
@@ -1498,7 +1523,12 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 
     override func paste(_ sender: Any?) {
         if insertPastedImage() { return }
-        super.paste(sender)
+        // Always paste the plain-text flavor. Source apps (IntelliJ, browsers,
+        // Xcode) also put an RTF flavor on the pasteboard with their own theme
+        // baked in — fonts, syntax colors, and a background color on every
+        // character — which super.paste() would import wholesale. Links don't
+        // need the RTF: they're re-detected from the plain string.
+        pasteAsPlainText(sender)
         // Use the coordinator's parent font — the live, user-configured font
         // from EditorPreferences — instead of self.font which is the stale
         // NSTextView-level property and may carry an outdated size.

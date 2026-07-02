@@ -186,6 +186,10 @@ struct VimTextView: NSViewRepresentable {
             var attrs = textView.typingAttributes
             attrs[.font] = font
             textView.typingAttributes = attrs
+            // Chips and list markers size themselves from the font's line
+            // height — refold so they re-reserve their slots at the new size.
+            textView.updateLinkFolds()
+            textView.applyListMarkers()
             scrollView.verticalRulerView?.needsDisplay = true
         }
 
