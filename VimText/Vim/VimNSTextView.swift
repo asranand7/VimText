@@ -1093,6 +1093,13 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
             return
         }
 
+        // 0c) Double-clicking an image opens it large in the full-window
+        //     lightbox viewer (single click is reserved for select/resize).
+        if event.clickCount == 2, let (attachment, _) = imageAttachment(at: point) {
+            presentImageLightbox(startingAt: attachment)
+            return
+        }
+
         // 1) Dragging a handle of the already-selected image resizes precisely.
         if let selected = selectedImageAttachment,
            let rect = rect(for: selected),
@@ -1277,6 +1284,19 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 
     private func rect(for attachment: ImageTextAttachment) -> NSRect? {
         imageAttachmentRects().first { $0.attachment === attachment }?.rect
+    }
+
+    /// Opens the full-window image viewer starting on `attachment`, with every
+    /// image in the note (document order) available via the arrow keys.
+    func presentImageLightbox(startingAt attachment: ImageTextAttachment) {
+        deselectImage()
+        var images: [NSImage] = []
+        var startIndex = 0
+        for entry in imageAttachmentRects() {
+            if entry.attachment === attachment { startIndex = images.count }
+            if let image = entry.attachment.image { images.append(image) }
+        }
+        ImageLightboxView.present(images: images, startIndex: startIndex, over: self)
     }
 
     private func imageAttachment(at point: NSPoint) -> (ImageTextAttachment, NSRect)? {
