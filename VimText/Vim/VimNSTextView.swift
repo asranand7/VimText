@@ -1523,12 +1523,20 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 
     override func paste(_ sender: Any?) {
         if insertPastedImage() { return }
-        // Always paste the plain-text flavor. Source apps (IntelliJ, browsers,
-        // Xcode) also put an RTF flavor on the pasteboard with their own theme
-        // baked in — fonts, syntax colors, and a background color on every
-        // character — which super.paste() would import wholesale. Links don't
-        // need the RTF: they're re-detected from the plain string.
-        pasteAsPlainText(sender)
+        // Strip rich formatting only when the clipboard actually holds text.
+        // Source apps (IntelliJ, browsers, Xcode) put an RTF flavor on the
+        // pasteboard with their own theme baked in — fonts, syntax colors, and
+        // a background color on every character — which super.paste() would
+        // import wholesale; pasteAsPlainText drops all of it (links are
+        // re-detected from the plain string anyway). But pasteAsPlainText also
+        // drops images, so for a non-text pasteboard (e.g. a screenshot that
+        // insertPastedImage couldn't handle) fall back to super.paste so the
+        // image is still inserted rather than silently discarded.
+        if NSPasteboard.general.string(forType: .string) != nil {
+            pasteAsPlainText(sender)
+        } else {
+            super.paste(sender)
+        }
         // Use the coordinator's parent font — the live, user-configured font
         // from EditorPreferences — instead of self.font which is the stale
         // NSTextView-level property and may carry an outdated size.

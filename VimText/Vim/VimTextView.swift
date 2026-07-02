@@ -84,6 +84,11 @@ struct VimTextView: NSViewRepresentable {
         textView.isSelectable = true
         textView.allowsUndo = true
         textView.isRichText = true
+        // Without this, an image-only pasteboard (macOS screenshot-to-clipboard
+        // is PNG/TIFF with no text flavor) fails NSTextView's paste: validation,
+        // Edit ▸ Paste stays disabled, and ⌘V never reaches our paste() override.
+        // Actual image insertion is handled by insertPastedImage().
+        textView.importsGraphics = true
         textView.backgroundColor = backgroundColor
         textView.drawsBackground = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
