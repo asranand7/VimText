@@ -823,7 +823,7 @@ struct NoteEditorView: View {
         if let weekAgo = cal.date(byAdding: .day, value: -7, to: Date()), date > weekAgo {
             return "Edited \(AppDateFormatters.weekday.string(from: date)) at \(time)"
         }
-        return "Edited " + AppDateFormatters.shortDateTime.string(from: date)
+        return "Edited " + AppDateFormatters.ordinalDateTime(from: date)
     }
 }
 

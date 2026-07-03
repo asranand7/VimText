@@ -553,13 +553,18 @@ struct CommandPaletteView: View {
     
     @ViewBuilder
     private func paletteNoteRow(note: Note, index: Int, isSelected: Bool) -> some View {
-        let preview = viewModel.preview(for: note.id) ?? note.preview
+        let preview = note.isLocked ? Note.lockedPreviewMask : (viewModel.preview(for: note.id) ?? note.preview)
         VStack(alignment: .leading, spacing: 3) {
             HStack {
                 Text(highlightedText(note.displayTitle, query: state.searchText, fuzzyFallback: true))
                     .font(.system(.body, design: .default).weight(.semibold))
                     .foregroundStyle(theme.text)
                 Spacer()
+                if note.isLocked {
+                    Image(systemName: "lock.fill")
+                        .font(.caption2)
+                        .foregroundStyle(theme.secondaryText.opacity(0.7))
+                }
                 if note.isPinned {
                     Image(systemName: "pin.fill")
                         .font(.caption2)
@@ -810,7 +815,7 @@ struct CommandPaletteView: View {
     }
 
     private func formatDate(_ date: Date) -> String {
-        AppDateFormatters.shortDateTime.string(from: date)
+        AppDateFormatters.ordinalDateTime(from: date)
     }
 }
 

@@ -29,8 +29,14 @@ struct NoteRowView: View {
                   note.modifiedAt > weekAgo {
             return AppDateFormatters.weekday.string(from: note.modifiedAt)
         } else {
-            return AppDateFormatters.shortDate.string(from: note.modifiedAt)
+            return AppDateFormatters.ordinalDate(from: note.modifiedAt)
         }
+    }
+
+    private var previewText: String {
+        if note.isLocked { return Note.lockedPreviewMask }
+        let text = preview ?? note.preview
+        return text.isEmpty ? "No additional text" : text
     }
 
     private var lockStatusGlyph: some View {
@@ -150,7 +156,7 @@ struct NoteRowView: View {
                     .foregroundStyle(theme.secondaryText.opacity(isSelected ? 0.9 : 0.72))
                     .fixedSize()
 
-                Text((preview ?? note.preview).isEmpty ? "No additional text" : (preview ?? note.preview))
+                Text(previewText)
                     .font(.system(size: 12, weight: .regular, design: .default))
                     .foregroundStyle(theme.secondaryText.opacity(isSelected ? 0.82 : 0.62))
                     .lineLimit(2)

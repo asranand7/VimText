@@ -55,6 +55,10 @@ public struct Note: Identifiable, Codable, Hashable {
 
     public var preview: String { Self.makePreview(content: content) }
 
+    /// Shown in place of the real preview for locked notes, so contents
+    /// (passwords, PINs) never surface in the sidebar or search palette.
+    public static let lockedPreviewMask = "••••••"
+
     /// Pure derivation of a sidebar/palette preview from raw note content.
     /// Exposed as a static so the view model can cache the result per note id
     /// (keyed off content changes) instead of re-deriving it in the render hot
