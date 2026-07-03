@@ -560,6 +560,67 @@ func testVimSearchCacheInvalidation() throws {
     }
 }
 
+/// MotionResolver is the pure motion core: `(motion, position, text) → offset`
+/// with no NSTextView involved. These tests hit it directly — the whole point
+/// of the extraction — while the keyDown-rig tests above cover the wiring
+/// (Coordinator → resolver → selection).
+func testMotionResolverPure() throws {
+    func at(_ motion: Motion, _ pos: Int, _ text: String, count: Int = 1) -> Int? {
+        MotionResolver.resolve(motion, count: count, from: pos, in: text as NSString)
+    }
+
+    // Word motions (w/b/e), including the punctuation word class.
+    let words = "one two  three"
+    try expectEqual(at(.wordForward, 0, words), 4, "w jumps to the next word start")
+    try expectEqual(at(.wordForward, 0, words, count: 2), 9, "2w applies the motion twice")
+    try expectEqual(at(.wordBackward, 9, words), 4, "b jumps to the previous word start")
+    try expectEqual(at(.wordEnd, 0, words), 2, "e lands on the current word's last char")
+    try expectEqual(at(.wordEnd, 2, words), 6, "e from a word end advances to the next word's end")
+    try expectEqual(at(.wordForward, 3, "foo(bar)"), 4, "w treats punctuation as its own word class")
+
+    // Line motions (0 / $ / ^) and vertical column preservation.
+    let lines = "  hello\nworld"
+    try expectEqual(at(.lineStart, 5, lines), 0, "0 goes to the line start")
+    try expectEqual(at(.lineEnd, 2, lines), 6, "$ lands on the last char, not the newline")
+    try expectEqual(at(.firstNonBlank, 5, lines), 2, "^ lands on the first non-blank")
+    try expectEqual(at(.down, 6, lines), 12, "j clamps the column to the shorter target line")
+    try expectEqual(at(.up, 12, lines), 4, "k preserves the column going up")
+    try expectEqual(at(.documentStart, 12, lines), 2, "gg lands on the first line's first non-blank")
+    try expectEqual(at(.documentEnd, 0, lines), 8, "G lands on the last line's first non-blank")
+
+    // Paragraph motions ({ / }).
+    let paras = "alpha\nbeta\n\ngamma"
+    try expectEqual(at(.paragraphForward, 0, paras), 11, "} stops at the blank line")
+    try expectEqual(at(.paragraphBackward, 14, paras), 11, "{ stops at the preceding blank line")
+    try expectEqual(at(.paragraphForward, 12, paras), 17, "} past the last paragraph returns the doc length")
+
+    // f / t / ;-repeat (tillCharRepeat must skip an adjacent target — the
+    // v2.21.4 stuck-repeat fix, now assertable without a text view).
+    let find = "abcabc"
+    try expectEqual(at(.findChar("c", true), 0, find), 2, "f finds the char")
+    try expectEqual(at(.findChar("c", true), 0, find, count: 2), 5, "2fc finds the second occurrence")
+    try expectEqual(at(.tillChar("c", true), 0, find), 1, "t stops just before the char")
+    try expectEqual(at(.tillCharRepeat("c", true), 1, find), 4, "; after t skips the adjacent match")
+    try expectEqual(at(.findChar("a", false), 5, find), 3, "F searches backward")
+
+    // % bracket matching, including scan-forward-to-a-bracket.
+    try expectEqual(at(.matchingBracket, 0, "(foo)"), 4, "% jumps from open to close")
+    try expectEqual(at(.matchingBracket, 4, "(foo)"), 0, "% jumps from close to open")
+    try expectEqual(at(.matchingBracket, 0, "a(b)"), 3, "% scans forward on the line to the first bracket")
+
+    // Contract edges: empty doc → 0, boundaries clamp, viewport motions → nil.
+    try expectEqual(at(.wordForward, 0, ""), 0, "empty document resolves to 0")
+    try expectEqual(at(.left, 0, "abc"), 0, "h clamps at the line start")
+    try expectEqual(at(.right, 2, "abc"), 2, "l clamps at the last char")
+    try expectEqual(at(.down, 0, "abc"), 0, "j on the last line stays put")
+    try expect(at(.screenTop, 0, "abc") == nil, "H is viewport-dependent — pure resolver declines it")
+
+    try expectEqual(MotionResolver.firstNonBlankOffset(ofLineAt: 0, in: "\t  x" as NSString), 3,
+                    "firstNonBlankOffset skips tabs and spaces")
+    try expectEqual(MotionResolver.firstNonBlankOffset(ofLineAt: 99, in: "ab" as NSString), 0,
+                    "firstNonBlankOffset clamps an out-of-range location")
+}
+
 /// Builds a live `VimNSTextView` wired to its engine/coordinator and seeded
 /// with `text`, plus a `press` helper that drives the real `keyDown` path —
 /// the shared rig for execution-level Vim regression tests.
@@ -1101,6 +1162,7 @@ let tests: [(String, () throws -> Void)] = [
     ("Vim command execution", testVimCommandExecution),
     ("Vim / search via keyDown", testVimSlashSearchViaKeyDown),
     ("Vim search cache invalidation on edit", testVimSearchCacheInvalidation),
+    ("Pure motion resolution (MotionResolver)", testMotionResolverPure),
     ("Vim linewise paste on last line", testVimLinewisePasteLastLine),
     ("Vim till-repeat advances (t/T + ;/,)", testVimTillRepeatAdvances),
     ("Vim join (J) on last line", testVimJoinLastLine),
