@@ -131,6 +131,9 @@ struct VimTextView: NSViewRepresentable {
         textView.typingAttributes = defaultAttrs
 
         textView.delegate = context.coordinator
+        // The view tracks edited ranges itself (see NSTextStorageDelegate
+        // extension) so code-block restyles can stay scoped to the edit.
+        textView.textStorage?.delegate = textView
         textView.vimEngine = vimEngine
         textView.coordinator = context.coordinator
         textView.paperStyle = paperStyle
@@ -155,15 +158,19 @@ struct VimTextView: NSViewRepresentable {
         // text storage is authoritative; content flows out via onContentChange.
         if !initialRTFData.isEmpty, let attrStr = NSAttributedString(rtf: initialRTFData, documentAttributes: nil) {
             textView.textStorage?.setAttributedString(attrStr)
+            // One editing transaction for both whole-document normalization
+            // passes — layout/processing runs once instead of twice at open.
+            textView.textStorage?.beginEditing()
             textView.applyTextColor(textColor)
             textView.applyBaseFont(font)
+            textView.textStorage?.endEditing()
         } else {
             let attrStr = NSAttributedString(string: initialText, attributes: defaultAttrs)
             textView.textStorage?.setAttributedString(attrStr)
         }
         textView.restyleCodeBlocks(baseFont: font)
         textView.renderImageAttachments()
-        textView.refreshLinkHighlights()
+        textView.refreshLinkHighlightsAdaptive()
         textView.refreshListMarkers()
         context.coordinator.latestText = initialText
         context.coordinator.latestRTF = initialRTFData
@@ -213,7 +220,7 @@ struct VimTextView: NSViewRepresentable {
                 .cursor: NSCursor.pointingHand
             ]
             textView.applyTextColor(textColor)
-            textView.refreshLinkHighlights()
+            textView.refreshLinkHighlightsAdaptive()
             textView.refreshListMarkers()
             var attrs = textView.typingAttributes
             attrs[.foregroundColor] = textColor

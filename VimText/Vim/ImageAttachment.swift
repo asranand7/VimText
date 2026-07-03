@@ -10,23 +10,52 @@ private let defaultImageDisplayWidth: CGFloat = 560
 /// (`![|width](assets/UUID.png)`) on save and round-trip at a stable size.
 final class ImageTextAttachment: NSTextAttachment {
     let assetRelativePath: String
+    /// Full-resolution size in points (from the file's metadata) — the sizing
+    /// reference for aspect ratio and the default display cap, independent of
+    /// whatever resolution the backing image was actually decoded at.
     let nativeSize: NSSize
+    /// Full-resolution width in pixels; with `decodedPixelWidth` it tells the
+    /// resize path whether a sharper decode is even possible.
+    let nativePixelWidth: CGFloat
+    /// Pixel width of the currently decoded backing image (0 while the async
+    /// decode is still in flight and the placeholder is showing).
+    private(set) var decodedPixelWidth: CGFloat = 0
 
-    init(image: NSImage, assetRelativePath: String, displayWidth: CGFloat?) {
+    /// `image` may be nil at first: the attachment lays out immediately from
+    /// metadata (`nativeSize`) and the display-sized bitmap arrives via
+    /// `setBackingImage` once the off-main decode finishes.
+    init(image: NSImage?, nativeSize: NSSize, nativePixelWidth: CGFloat,
+         assetRelativePath: String, displayWidth: CGFloat?) {
         self.assetRelativePath = assetRelativePath
-        self.nativeSize = image.size
+        self.nativeSize = nativeSize
+        self.nativePixelWidth = nativePixelWidth
         super.init(data: nil, ofType: nil)
         self.image = image
-        let width = displayWidth ?? min(image.size.width, defaultImageDisplayWidth)
+        let width = displayWidth ?? min(nativeSize.width, defaultImageDisplayWidth)
         setDisplayWidth(width)
         attachmentCell = ResizableImageAttachmentCell(imageCell: image)
+    }
+
+    /// Convenience for callers holding an already-decoded full image.
+    convenience init(image: NSImage, assetRelativePath: String, displayWidth: CGFloat?) {
+        self.init(image: image, nativeSize: image.size, nativePixelWidth: image.size.width,
+                  assetRelativePath: assetRelativePath, displayWidth: displayWidth)
     }
 
     required init?(coder: NSCoder) {
         self.assetRelativePath = coder.decodeObject(forKey: "assetRelativePath") as? String ?? ""
         self.nativeSize = .zero
+        self.nativePixelWidth = 0
         super.init(coder: coder)
         if let image { attachmentCell = ResizableImageAttachmentCell(imageCell: image) }
+    }
+
+    /// Swaps in a freshly decoded display-sized bitmap (initial async load, or
+    /// a sharper re-decode after the user enlarges the image).
+    func setBackingImage(_ newImage: NSImage, decodedPixelWidth: CGFloat) {
+        self.image = newImage
+        self.decodedPixelWidth = decodedPixelWidth
+        (attachmentCell as? NSTextAttachmentCell)?.image = newImage
     }
 
     override func encode(with coder: NSCoder) {
@@ -65,7 +94,18 @@ final class ResizableImageAttachmentCell: NSTextAttachmentCell {
     }
 
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView?) {
-        image?.draw(in: cellFrame, from: .zero, operation: .sourceOver, fraction: 1.0)
+        guard let image else {
+            // Decode still in flight: a quiet placeholder at the final size, so
+            // the bitmap arriving a moment later never shifts the layout.
+            let path = NSBezierPath(roundedRect: cellFrame.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6)
+            NSColor.labelColor.withAlphaComponent(0.05).setFill()
+            path.fill()
+            NSColor.labelColor.withAlphaComponent(0.10).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            return
+        }
+        image.draw(in: cellFrame, from: .zero, operation: .sourceOver, fraction: 1.0)
         // The selection box + handles are drawn by VimNSTextView (on top, not
         // clipped to the cell) when this image is selected.
     }

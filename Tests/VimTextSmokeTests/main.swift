@@ -683,6 +683,67 @@ func testVimLinewisePasteLastLine() throws {
     }
 }
 
+/// Guards the scoped code-block restyle fast paths: shift edits above a block
+/// must keep the block's mono styling (and update `codeBlockRanges`) without a
+/// structural rewrite, and text inserted at a block edge with stale inherited
+/// code attributes must be normalized back to base styling.
+func testCodeBlockScopedRestyle() throws {
+    try MainActor.assumeIsolated {
+        let font = NSFont.systemFont(ofSize: 14)
+        let (_, tv, coord, _) = makeVimRig("intro\n```\nlet x = 1\n```\ntail")
+        // makeNSView wires the view as its storage's delegate; the rig builds
+        // the view directly, so mirror that here for edited-range tracking.
+        tv.textStorage?.delegate = tv
+
+        func isMono(_ i: Int) -> Bool {
+            guard let f = tv.textStorage?.attribute(.font, at: i, effectiveRange: nil) as? NSFont else { return false }
+            return f.fontDescriptor.symbolicTraits.contains(.monoSpace)
+        }
+        func isTagged(_ i: Int) -> Bool {
+            tv.textStorage?.attribute(.codeBlock, at: i, effectiveRange: nil) != nil
+        }
+
+        tv.restyleCodeBlocks(baseFont: font)
+        try expectEqual(tv.codeBlockRanges.count, 1, "one fenced block detected")
+        let initial = tv.codeBlockRanges[0]
+        try expect(isMono(initial.location + 4) && isTagged(initial.location + 4),
+                   "block body is mono + tagged after the full restyle")
+        try expect(!isMono(0), "intro stays proportional")
+
+        // Shift edit: insert a line above the block, then restyle. The block
+        // must land at its shifted offset with styling intact.
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        tv.insertText("added\n", replacementRange: NSRange(location: 0, length: 0))
+        tv.restyleCodeBlocks(baseFont: font)
+        try expectEqual(tv.codeBlockRanges, [NSRange(location: initial.location + 6, length: initial.length)],
+                        "block range shifts by the inserted length")
+        let shifted = tv.codeBlockRanges[0]
+        try expect(isMono(shifted.location + 4) && isTagged(shifted.location + 4),
+                   "block body keeps mono + tag after a shift edit")
+        try expect(!isMono(0) && !isTagged(0), "inserted line above gets base styling")
+
+        // Edge insert with stale inherited code styling (what pasting right
+        // below a block produces): the scoped normalize must strip it even
+        // though the block ranges themselves are unchanged.
+        let after = shifted.location + shifted.length
+        let staleAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: .regular),
+            .codeBlock: true
+        ]
+        tv.textStorage?.replaceCharacters(in: NSRange(location: after, length: 0),
+                                          with: NSAttributedString(string: "x", attributes: staleAttrs))
+        tv.didChangeText()
+        try expect(isMono(after) && isTagged(after), "precondition: inserted char carries stale code styling")
+        tv.restyleCodeBlocks(baseFont: font)
+        try expectEqual(tv.codeBlockRanges, [shifted], "block ranges unchanged by an edit outside them")
+        try expect(!isMono(after) && !isTagged(after),
+                   "stale code styling outside the block is normalized away")
+        try expect(isMono(shifted.location + 4) && isTagged(shifted.location + 4),
+                   "block styling survives the scoped normalize")
+        withExtendedLifetime(coord) {}
+    }
+}
+
 /// Regression for "; / , after t/T gets stuck": repeating a till motion must
 /// step over the adjacent target so the cursor advances each time.
 func testVimTillRepeatAdvances() throws {
@@ -1170,6 +1231,7 @@ let tests: [(String, () throws -> Void)] = [
     ("Vim visual count G/gg extends selection", testVimVisualCountGotoLine),
     ("Vim G/gg first non-blank landing", testVimGotoLineFirstNonBlank),
     ("Vim ~ count stops at line end", testVimToggleCaseCountStopsAtLineEnd),
+    ("Code-block scoped restyle fast paths", testCodeBlockScopedRestyle),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
     ("Command Palette search matching", testCommandPaletteSearchMatching),

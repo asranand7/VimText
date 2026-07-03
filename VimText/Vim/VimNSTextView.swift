@@ -11,6 +11,12 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     /// status hint (see Coordinator.executeActions and keyDown's `r` path).
     var isLockedNote: Bool = false
     var codeBlockRanges: [NSRange] = []
+    /// Union of the character ranges edited since the last code-block restyle
+    /// (post-edit coordinates, maintained by the text-storage delegate). Lets
+    /// `restyleCodeBlocks` fix up just the edited region when the fence
+    /// structure didn't change, instead of rewriting the whole document's
+    /// attributes on every typing pause in a note that contains code blocks.
+    private var editedRangeSinceRestyle: NSRange?
     private var copyButtons: [NSButton] = []
     private var blockCursorLayer: CALayer?
     /// Set while a coalesced block-cursor redraw is already queued for this
@@ -180,6 +186,22 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     /// is never serialized into the note's content or RTF.
     func refreshLinkHighlights() {
         applyLinkHighlights(LinkDetection.links(in: self.string))
+    }
+
+    /// Documents at or below this UTF-16 length get the synchronous link scan
+    /// (no chip pop-in); anything larger goes through the deferred scan so the
+    /// NSDataDetector pass can't stall note-open or a theme switch.
+    private static let syncLinkScanLimit = 64_000
+
+    /// Sync link refresh for normal-sized notes, deferred for large ones.
+    /// Use anywhere a full rescan happens on the main thread with the user
+    /// waiting (note open, theme change).
+    func refreshLinkHighlightsAdaptive() {
+        if (self.string as NSString).length <= Self.syncLinkScanLimit {
+            refreshLinkHighlights()
+        } else {
+            refreshLinkHighlightsDeferred()
+        }
     }
 
     /// Re-detects links off the main thread, then applies the result back on
@@ -619,66 +641,125 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     /// Re-derive code-block styling from the fenced plain text: monospaced font
     /// inside fences (tagged with .codeBlock for background drawing), proportional
     /// font with preserved bold/italic elsewhere.
+    ///
+    /// The full-document rewrite only runs when the fence *structure* changed.
+    /// When blocks are unchanged or merely shifted by edits outside them (the
+    /// common case: typing above a block), the attributes moved with the text,
+    /// so only the edited region is normalized — previously every such pause
+    /// rewrote the whole document's attributes and invalidated all its layout.
     func restyleCodeBlocks(baseFont: NSFont) {
         guard let textStorage = textStorage else { return }
-        let len = textStorage.length
         let ranges = computeCodeBlockRanges()
+        let edited = editedRangeSinceRestyle
+        editedRangeSinceRestyle = nil
+
         if ranges == codeBlockRanges {
+            // Structure and offsets untouched. With no blocks there's nothing
+            // code-styled to fix; with blocks, normalize just the edited region
+            // so text inserted at a block edge can't keep inherited mono styling.
+            guard let edited, !ranges.isEmpty else { return }
+            applyCodeBlockStyling(in: edited, baseFont: baseFont)
             return
         }
-        codeBlockRanges = ranges
-        guard len > 0 else { needsDisplay = true; return }
 
-        let fullRange = NSRange(location: 0, length: len)
+        // Shift fast path: same block count and lengths, and every new range
+        // still fully carries the .codeBlock tag — proof it's the same styled
+        // text at new offsets (a restructure that coincidentally matches the
+        // shape fails the tag check and takes the full rewrite below).
+        if let edited,
+           ranges.count == codeBlockRanges.count,
+           zip(ranges, codeBlockRanges).allSatisfy({ $0.length == $1.length }),
+           ranges.allSatisfy({ hasCodeBlockTag(spanning: $0) }) {
+            codeBlockRanges = ranges
+            applyCodeBlockStyling(in: edited, baseFont: baseFont)
+            needsDisplay = true // block background boxes moved with the text
+            updateCopyButtons()
+            return
+        }
+
+        codeBlockRanges = ranges
+        guard textStorage.length > 0 else { needsDisplay = true; return }
+        applyCodeBlockStyling(in: NSRange(location: 0, length: textStorage.length), baseFont: baseFont)
+        needsDisplay = true
+        updateCopyButtons()
+    }
+
+    /// True when the `.codeBlock` attribute covers every character of `range`.
+    private func hasCodeBlockTag(spanning range: NSRange) -> Bool {
+        guard let storage = textStorage, range.length > 0,
+              NSMaxRange(range) <= storage.length else { return false }
+        var effective = NSRange()
+        guard storage.attribute(.codeBlock, at: range.location, longestEffectiveRange: &effective, in: range) != nil else {
+            return false
+        }
+        return effective.length == range.length
+    }
+
+    /// Rewrites code-block styling over `target` only, deriving everything from
+    /// the current `codeBlockRanges`: base font/paragraph (bold/italic kept)
+    /// outside fences, mono font + `.codeBlock` tag inside, and the block-gap
+    /// paragraph styles on each block's boundary lines. The full restyle passes
+    /// the whole document; the fast paths pass just the edited region so the
+    /// attribute churn — and the layout invalidation it causes — stays O(edit).
+    private func applyCodeBlockStyling(in target: NSRange, baseFont: NSFont) {
+        guard let textStorage = textStorage, textStorage.length > 0 else { return }
+        let ns = string as NSString
+        let docRange = NSRange(location: 0, length: ns.length)
+        var target = NSIntersectionRange(target, docRange)
+        guard target.length > 0 else { return }
+        // Paragraph styles only render correctly over whole paragraphs.
+        target = ns.paragraphRange(for: target)
+
         let monoFont = NSFont.monospacedSystemFont(ofSize: baseFont.pointSize, weight: .regular)
         let fontManager = NSFontManager.shared
-
-        let ns = string as NSString
         let baseParagraph = VimTextView.paragraphStyle()
         let blockGap: CGFloat = 12
 
         // Cosmetic-only: don't register code-block restyling on the undo stack.
         undoManager?.disableUndoRegistration()
         textStorage.beginEditing()
-        textStorage.removeAttribute(.codeBlock, range: fullRange)
-        // Reset paragraph style + font everywhere; blocks override below.
-        textStorage.addAttribute(.paragraphStyle, value: baseParagraph, range: fullRange)
-        textStorage.enumerateAttribute(.font, in: fullRange, options: []) { value, range, _ in
+        textStorage.removeAttribute(.codeBlock, range: target)
+        // Reset paragraph style + font in the target; blocks override below.
+        textStorage.addAttribute(.paragraphStyle, value: baseParagraph, range: target)
+        textStorage.enumerateAttribute(.font, in: target, options: []) { value, range, _ in
             let traits = (value as? NSFont).map { fontManager.traits(of: $0) } ?? NSFontTraitMask()
             var f = baseFont
             if traits.contains(.boldFontMask) { f = fontManager.convert(f, toHaveTrait: .boldFontMask) }
             if traits.contains(.italicFontMask) { f = fontManager.convert(f, toHaveTrait: .italicFontMask) }
             textStorage.addAttribute(.font, value: f, range: range)
         }
-        // Overlay monospaced font + tag on fenced ranges, and add a gap above the
-        // opening fence and below the closing fence so the block stands apart.
-        for r in ranges {
-            let safe = NSIntersectionRange(r, fullRange)
+        // Overlay monospaced font + tag where blocks intersect the target, and
+        // re-add the gap above the opening fence / below the closing fence for
+        // any boundary line falling inside it.
+        for r in codeBlockRanges {
+            let safe = NSIntersectionRange(r, docRange)
             guard safe.length > 0 else { continue }
-            textStorage.addAttribute(.font, value: monoFont, range: safe)
-            textStorage.addAttribute(.codeBlock, value: true, range: safe)
+            let overlap = NSIntersectionRange(safe, target)
 
             let firstLine = ns.lineRange(for: NSRange(location: safe.location, length: 0))
             let lastLine = ns.lineRange(for: NSRange(location: min(safe.location + safe.length - 1, ns.length), length: 0))
+            guard overlap.length > 0
+                || NSIntersectionRange(firstLine, target).length > 0
+                || NSIntersectionRange(lastLine, target).length > 0 else { continue }
 
-            let before = baseParagraph.mutableCopy() as! NSMutableParagraphStyle
-            before.paragraphSpacingBefore = blockGap
-            let after = baseParagraph.mutableCopy() as! NSMutableParagraphStyle
-            after.paragraphSpacing = blockGap
-
-            let firstSafe = NSIntersectionRange(firstLine, fullRange)
-            if firstSafe.length > 0 {
-                textStorage.addAttribute(.paragraphStyle, value: before, range: firstSafe)
+            if overlap.length > 0 {
+                textStorage.addAttribute(.font, value: monoFont, range: overlap)
+                textStorage.addAttribute(.codeBlock, value: true, range: overlap)
             }
-            let lastSafe = NSIntersectionRange(lastLine, fullRange)
-            if lastSafe.length > 0 {
-                textStorage.addAttribute(.paragraphStyle, value: after, range: lastSafe)
+
+            if NSIntersectionRange(firstLine, target).length > 0 {
+                let before = baseParagraph.mutableCopy() as! NSMutableParagraphStyle
+                before.paragraphSpacingBefore = blockGap
+                textStorage.addAttribute(.paragraphStyle, value: before, range: NSIntersectionRange(firstLine, docRange))
+            }
+            if NSIntersectionRange(lastLine, target).length > 0 {
+                let after = baseParagraph.mutableCopy() as! NSMutableParagraphStyle
+                after.paragraphSpacing = blockGap
+                textStorage.addAttribute(.paragraphStyle, value: after, range: NSIntersectionRange(lastLine, docRange))
             }
         }
         textStorage.endEditing()
         undoManager?.enableUndoRegistration()
-        needsDisplay = true
-        updateCopyButtons()
     }
 
     func updateFontSize(_ newSize: CGFloat) {
@@ -1350,7 +1431,15 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         var startIndex = 0
         for entry in imageAttachmentRects() {
             if entry.attachment === attachment { startIndex = images.count }
-            if let image = entry.attachment.image { images.append(image) }
+            // The attachment's backing image is decoded at display size, so the
+            // lightbox loads the full-resolution original from the asset file
+            // (NSImage(contentsOf:) decodes lazily, at first draw per image).
+            let url = StorageManager.shared.assetURL(forRelativePath: entry.attachment.assetRelativePath)
+            if entry.attachment.assetRelativePath.hasPrefix("assets/"), let full = NSImage(contentsOf: url) {
+                images.append(full)
+            } else if let image = entry.attachment.image {
+                images.append(image)
+            }
         }
         ImageLightboxView.present(images: images, startIndex: startIndex, over: self)
     }
@@ -1423,6 +1512,7 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
             attachment.setDisplayWidth(min(max(48, width), maxWidth))
             invalidateLayout(for: attachment)
         }
+        refreshBackingImageIfEnlarged(attachment)
         coordinator?.imageDidResize()
     }
 
@@ -1445,7 +1535,10 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
             attachment.setDisplayWidth(min(max(48, startWidth + (point.x - startPoint.x)), maxWidth))
             invalidateLayout(for: attachment)
         }
-        if didResize { coordinator?.imageDidResize() }
+        if didResize {
+            refreshBackingImageIfEnlarged(attachment)
+            coordinator?.imageDidResize()
+        }
     }
 
     /// Widest an image may be drawn — the text column minus insets.
@@ -1676,13 +1769,18 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     ]
 
     private func insertImage(data: Data, fileExtension: String) -> Bool {
-        guard let image = NSImage(data: data),
+        // Header probe only — the display-sized bitmap is decoded off-main so a
+        // multi-megapixel screenshot paste doesn't stall the keystroke.
+        guard let probe = ImageDecoder.probe(.data(data)),
               let relativePath = StorageManager.shared.saveImageAsset(data, fileExtension: fileExtension) else {
             return false
         }
-        let attachment = ImageTextAttachment(image: image,
+        let attachment = ImageTextAttachment(image: nil,
+                                             nativeSize: probe.pointSize,
+                                             nativePixelWidth: probe.pixelSize.width,
                                              assetRelativePath: relativePath,
                                              displayWidth: nil)
+        loadAttachmentImageAsync(attachment, from: .data(data))
         let attachmentString = NSAttributedString(attachment: attachment)
         let range = selectedRange()
         guard shouldChangeText(in: range, replacementString: "\u{FFFC}") else { return false }
@@ -1722,15 +1820,21 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         selectedImageAttachment = nil
 
         storage.beginEditing()
-        // Replace back-to-front so earlier match ranges stay valid.
+        // Replace back-to-front so earlier match ranges stay valid. Only the
+        // image header is read here (dimensions for layout) — pixel decoding
+        // happens off-main below, at display size rather than full resolution,
+        // so opening an image-heavy note doesn't block on decodes.
         for reference in references.reversed() {
             guard reference.path.hasPrefix("assets/") else { continue }
             let url = StorageManager.shared.assetURL(forRelativePath: reference.path)
-            guard let image = NSImage(contentsOf: url) else { continue }
-            let attachment = ImageTextAttachment(image: image,
+            guard let probe = ImageDecoder.probe(.url(url)) else { continue }
+            let attachment = ImageTextAttachment(image: nil,
+                                                 nativeSize: probe.pointSize,
+                                                 nativePixelWidth: probe.pixelSize.width,
                                                  assetRelativePath: reference.path,
                                                  displayWidth: reference.width)
             storage.replaceCharacters(in: reference.range, with: NSAttributedString(attachment: attachment))
+            loadAttachmentImageAsync(attachment, from: .url(url))
         }
         storage.endEditing()
         // This mutates the storage without going through didChangeText — the
@@ -1739,6 +1843,43 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         invalidateSearchCaches()
         (enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?.invalidateLineCache()
         window?.invalidateCursorRects(for: self)
+    }
+
+    /// Pixel density to decode note images at. The view may not be in a window
+    /// yet when attachments load, so fall back to the sharpest attached screen.
+    private var imageBackingScale: CGFloat {
+        window?.backingScaleFactor
+            ?? NSScreen.screens.map(\.backingScaleFactor).max()
+            ?? 2
+    }
+
+    /// Decodes `attachment`'s bitmap at its display width off the main thread,
+    /// then swaps it in and repaints its line. The attachment already has its
+    /// final bounds (from the metadata probe), so nothing reflows on arrival.
+    private func loadAttachmentImageAsync(_ attachment: ImageTextAttachment, from source: ImageDecoder.Source) {
+        let pointWidth = attachment.bounds.width
+        let scale = imageBackingScale
+        DispatchQueue.global(qos: .userInitiated).async { [weak self, weak attachment] in
+            guard let decoded = ImageDecoder.downsampledImage(from: source, targetPointWidth: pointWidth, scale: scale) else { return }
+            DispatchQueue.main.async {
+                guard let attachment else { return }
+                attachment.setBackingImage(decoded.image, decodedPixelWidth: decoded.pixelWidth)
+                // No-op if the attachment left the document while decoding.
+                self?.invalidateLayout(for: attachment)
+            }
+        }
+    }
+
+    /// After a resize: if the image was enlarged past the resolution it was
+    /// decoded at (and the source file has more pixels to give), re-decode a
+    /// sharper bitmap in the background.
+    private func refreshBackingImageIfEnlarged(_ attachment: ImageTextAttachment) {
+        let wantedPixels = attachment.bounds.width * imageBackingScale
+        guard wantedPixels > attachment.decodedPixelWidth + 1,
+              attachment.decodedPixelWidth < attachment.nativePixelWidth,
+              attachment.assetRelativePath.hasPrefix("assets/") else { return }
+        let url = StorageManager.shared.assetURL(forRelativePath: attachment.assetRelativePath)
+        loadAttachmentImageAsync(attachment, from: .url(url))
     }
 
     override func drawBackground(in rect: NSRect) {
@@ -1960,4 +2101,31 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         enclosingScrollView?.verticalRulerView?.needsDisplay = true
     }
 
+}
+
+// MARK: - NSTextStorageDelegate — edited-range tracking for scoped restyles
+
+extension VimNSTextView: NSTextStorageDelegate {
+    /// Accumulates the union of character edits since the last code-block
+    /// restyle (wired as the storage's delegate in makeNSView). Attribute-only
+    /// edits (theme/color/font passes, including the restyle itself) don't
+    /// carry `.editedCharacters` and are ignored. When an edit lands before
+    /// the accumulated range, the stored range shifts by the length delta —
+    /// approximate, but only ever used to decide how much to re-normalize, and
+    /// a structural fence change always falls back to the full rewrite anyway.
+    func textStorage(_ textStorage: NSTextStorage,
+                     didProcessEditing editedMask: NSTextStorageEditActions,
+                     range editedRange: NSRange,
+                     changeInLength delta: Int) {
+        guard editedMask.contains(.editedCharacters) else { return }
+        if let existing = editedRangeSinceRestyle {
+            var adjusted = existing
+            if editedRange.location <= existing.location {
+                adjusted.location = max(0, existing.location + delta)
+            }
+            editedRangeSinceRestyle = NSUnionRange(adjusted, editedRange)
+        } else {
+            editedRangeSinceRestyle = editedRange
+        }
+    }
 }
