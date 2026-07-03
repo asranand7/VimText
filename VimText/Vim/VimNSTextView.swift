@@ -545,21 +545,21 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     }
 
     /// True if the document carries manual rich formatting that only RTF can
-    /// preserve: bold/italic/underline/strikethrough runs, or an attachment
-    /// (embedded image). Theme foreground color and code-block monospacing are
-    /// deliberately excluded — both are re-derived on load (applyTextColor and
-    /// restyleCodeBlocks rebuild them from the plain `.txt`), so a plain-prose
-    /// or code-only note needs no RTF sidecar. Enumerates with an early exit, so
-    /// it's ~O(1) for a plain note (one run) and cheap for a rich one (stops at
-    /// the first rich run) — far cheaper than the whole-document RTF encode it
-    /// lets us skip.
+    /// preserve: bold/italic/underline/strikethrough runs. Theme foreground
+    /// color, code-block monospacing, and image attachments are deliberately
+    /// excluded — all are re-derived on load from the plain `.txt`
+    /// (applyTextColor, restyleCodeBlocks, renderImageAttachments), and
+    /// serializedRTF flattens attachments to their Markdown refs anyway, so a
+    /// plain-prose, code-only, or image-only note needs no RTF sidecar.
+    /// Enumerates with an early exit, so it's ~O(1) for a plain note (one run)
+    /// and cheap for a rich one (stops at the first rich run) — far cheaper
+    /// than the whole-document RTF encode it lets us skip.
     var hasRichTextFormatting: Bool {
         guard let storage = textStorage, storage.length > 0 else { return false }
         let fontManager = NSFontManager.shared
         var rich = false
         storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length), options: []) { attrs, _, stop in
-            if attrs[.attachment] != nil
-                || (attrs[.underlineStyle] as? Int ?? 0) != 0
+            if (attrs[.underlineStyle] as? Int ?? 0) != 0
                 || (attrs[.strikethroughStyle] as? Int ?? 0) != 0 {
                 rich = true; stop.pointee = true; return
             }
