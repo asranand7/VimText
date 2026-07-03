@@ -181,8 +181,10 @@ final class NotesViewModel: ObservableObject {
             }
         }
 
-        let pinned = result.filter { $0.isPinned }.sorted { $0.createdAt > $1.createdAt }
-        let unpinned = result.filter { !$0.isPinned }.sorted { $0.createdAt > $1.createdAt }
+        // Most recently edited first, matching the modifiedAt date shown on
+        // each row and the sidebar's modifiedAt-based date sections.
+        let pinned = result.filter { $0.isPinned }.sorted { $0.modifiedAt > $1.modifiedAt }
+        let unpinned = result.filter { !$0.isPinned }.sorted { $0.modifiedAt > $1.modifiedAt }
         return pinned + unpinned
     }
 
