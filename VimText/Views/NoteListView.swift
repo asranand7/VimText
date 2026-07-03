@@ -799,17 +799,86 @@ struct NoteListView: View {
         // navigableCount avoids rebuilding the navigable list (and its date
         // sections) on every j/k — the hot path only needs a count to clamp.
         let count = navigableCount
-        guard count > 0 else { return }
 
-        if let current = highlightedIndex {
-            if down {
-                highlightedIndex = min(current + 1, count - 1)
+        if let current = highlightedIndex, count > 0 {
+            let next = down ? current + 1 : current - 1
+            if next >= 0 && next < count {
+                highlightedIndex = next
             } else {
-                highlightedIndex = max(current - 1, 0)
+                // Dead-ended against the list edge: unfold the adjacent
+                // collapsed section (if any) and step into it.
+                expandAdjacentCollapsedSection(down: down)
             }
-        } else {
+        } else if count > 0 {
             highlightedIndex = down ? 0 : count - 1
+        } else {
+            // Every section is folded — j/k opens the nearest one.
+            expandAdjacentCollapsedSection(down: down)
         }
+    }
+
+    /// The full on-screen section sequence (Pinned, then date sections),
+    /// including collapsed ones. Only consulted at the navigable-list edges,
+    /// so the per-keystroke j/k path never pays for the section rebuild.
+    private func screenSections() -> [(title: String, notes: [Note])] {
+        let notes = viewModel.filteredNotes
+        let pinned = notes.filter { $0.isPinned }
+        var sections = dateSections(notes.filter { !$0.isPinned })
+        if !pinned.isEmpty { sections.insert((title: "Pinned", notes: pinned), at: 0) }
+        return sections
+    }
+
+    /// j/k at the edge of the list unfolds the nearest collapsed section in
+    /// that direction and lands on its closest note — the keyboard equivalent
+    /// of clicking the section header.
+    private func expandAdjacentCollapsedSection(down: Bool) {
+        guard !searchActive, !collapsedSections.isEmpty else { return }
+        let sections = screenSections()
+
+        // Screen-order index of the section holding the cursor; with no
+        // cursor, scan the whole list from the matching end.
+        var cursorSection = down ? -1 : sections.count
+        if let index = highlightedIndex {
+            let order = navigableNotes
+            if index >= 0, index < order.count {
+                let id = order[index].id
+                if let found = sections.firstIndex(where: { $0.notes.contains { $0.id == id } }) {
+                    cursorSection = found
+                }
+            }
+        }
+
+        let scan: [Int] = down
+            ? Array((cursorSection + 1)..<sections.count)
+            : Array((0..<cursorSection).reversed())
+        guard let targetIndex = scan.first(where: { collapsedSections.contains(sections[$0].title) })
+        else { return }
+        let target = sections[targetIndex]
+
+        withAnimation(DS.snappy) {
+            collapsedSections.remove(target.title)
+        }
+        // Land on the newly revealed section's nearest note, located in the
+        // post-expansion navigable order.
+        let landing = down ? target.notes.first : target.notes.last
+        if let landing, let idx = navigableNotes.firstIndex(where: { $0.id == landing.id }) {
+            highlightedIndex = idx
+        }
+    }
+
+    /// gg/G land on the true first/last note, unfolding the edge section
+    /// first if it's collapsed.
+    private func goToListEdge(bottom: Bool) {
+        if !searchActive, !collapsedSections.isEmpty {
+            let sections = screenSections()
+            let edge = bottom ? sections.last : sections.first
+            if let edge, collapsedSections.contains(edge.title) {
+                withAnimation(DS.snappy) { collapsedSections.remove(edge.title) }
+            }
+        }
+        let count = currentNavList.count
+        guard count > 0 else { return }
+        highlightedIndex = bottom ? count - 1 : 0
     }
 
     private func selectHighlighted() {
@@ -847,8 +916,8 @@ struct NoteListView: View {
                 }
             },
             onMove: { down in moveHighlight(down: down) },
-            onTop: { if !currentNavList.isEmpty { highlightedIndex = 0 } },
-            onBottom: { if !currentNavList.isEmpty { highlightedIndex = currentNavList.count - 1 } },
+            onTop: { goToListEdge(bottom: false) },
+            onBottom: { goToListEdge(bottom: true) },
             onOpen: { openHighlightedFromNav() },
             onExit: { exitListNav() },
             onDelete: { deleteHighlightedFromNav() },
