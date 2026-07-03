@@ -123,22 +123,12 @@ extension VimTextView {
                 return
             }
 
-            // Search the folded text so straight quotes match smart quotes;
-            // folding is 1:1 in UTF-16, so the ranges are valid in the
-            // live text storage.
-            let query = query.searchFolded
-            let nsString = textView.string.searchFolded as NSString
-            let length = nsString.length
-            var searchRange = NSRange(location: 0, length: length)
-
-            while searchRange.location < length {
-                let found = nsString.range(of: query, options: [.caseInsensitive], range: searchRange)
-                if found.location == NSNotFound { break }
-                findMatchRanges.append(found)
-                if findMatchRanges.count >= VimNSTextView.maxSearchMatches { break }
-                searchRange.location = found.location + found.length
-                searchRange.length = length - searchRange.location
-            }
+            // searchMatches folds the text so straight quotes match smart
+            // quotes (folding is 1:1 in UTF-16, so the ranges are valid in
+            // the live storage) and caches the folded document across
+            // keystrokes — re-folding a large note per keystroke was the
+            // find bar's dominant cost.
+            findMatchRanges = textView.searchMatches(for: query)
 
             textView.applyMatchHighlights(findMatchRanges)
 
@@ -680,7 +670,11 @@ extension VimTextView {
                     let charRange = NSRange(location: pos, length: 1)
                     let ch = nsString.substring(with: charRange)
                     let toggled = ch == ch.uppercased() ? ch.lowercased() : ch.uppercased()
-                    textView.insertText(toggled, replacementRange: charRange)
+                    // Caseless chars (digits, punctuation) toggle to themselves —
+                    // skip the storage write instead of dirtying the document.
+                    if toggled != ch {
+                        textView.insertText(toggled, replacementRange: charRange)
+                    }
                     pos += 1
                 }
                 // Rest on the char after the toggled run, clamped to the line's
@@ -1021,23 +1015,23 @@ extension VimTextView {
                 break
 
             case .searchExecute(let term, let forward):
-                textView.highlightAllMatches(term: term)
-                searchAndMoveCursor(term: term, forward: forward, in: textView)
+                let matches = textView.highlightAllMatches(term: term)
+                searchAndMoveCursor(term: term, forward: forward, matches: matches, in: textView)
                 scheduleSearchHighlightClear(for: textView)
 
             case .nextMatch:
                 let term = parent.vimEngine.searchTerm
                 guard !term.isEmpty else { break }
-                textView.highlightAllMatches(term: term)
-                searchAndMoveCursor(term: term, forward: parent.vimEngine.searchForwardDirection, in: textView)
+                let matches = textView.highlightAllMatches(term: term)
+                searchAndMoveCursor(term: term, forward: parent.vimEngine.searchForwardDirection, matches: matches, in: textView)
                 parent.vimEngine.statusMessage = "/\(term)"
                 scheduleSearchHighlightClear(for: textView)
 
             case .previousMatch:
                 let term = parent.vimEngine.searchTerm
                 guard !term.isEmpty else { break }
-                textView.highlightAllMatches(term: term)
-                searchAndMoveCursor(term: term, forward: !parent.vimEngine.searchForwardDirection, in: textView)
+                let matches = textView.highlightAllMatches(term: term)
+                searchAndMoveCursor(term: term, forward: !parent.vimEngine.searchForwardDirection, matches: matches, in: textView)
                 parent.vimEngine.statusMessage = "?\(term)"
                 scheduleSearchHighlightClear(for: textView)
 
@@ -1050,8 +1044,8 @@ extension VimTextView {
                 // the same direction (n = forward after *, backward after #).
                 parent.vimEngine.searchTerm = word
                 parent.vimEngine.searchForwardDirection = forward
-                textView.highlightAllMatches(term: word)
-                searchAndMoveCursor(term: word, forward: forward, in: textView)
+                let matches = textView.highlightAllMatches(term: word)
+                searchAndMoveCursor(term: word, forward: forward, matches: matches, in: textView)
                 parent.vimEngine.statusMessage = (forward ? "/" : "?") + word
                 scheduleSearchHighlightClear(for: textView)
 
@@ -1820,59 +1814,40 @@ extension VimTextView {
             VimWordUnderCursor.word(in: textView.string as NSString, at: textView.selectedRange().location)
         }
 
-        private func searchAndMoveCursor(term: String, forward: Bool, in textView: VimNSTextView) {
-            // Folded so `/don't` typed with a straight quote finds the smart
-            // quotes the editor inserts; offsets stay valid in the original.
-            let term = term.searchFolded
-            let nsString = textView.string.searchFolded as NSString
-            let length = nsString.length
-            guard length > 0, !term.isEmpty else { return }
-
+        /// Moves the cursor to the next/previous match in `matches` (the ranges
+        /// `highlightAllMatches` already found — document order), wrapping like
+        /// Vim. Sharing the scan means an `n` press costs one pass over the
+        /// match list instead of a second fold + scan of the whole document.
+        private func searchAndMoveCursor(term: String, forward: Bool, matches: [NSRange], in textView: VimNSTextView) {
+            guard !matches.isEmpty else {
+                parent.vimEngine.statusMessage = "Pattern not found: \(term.searchFolded)"
+                return
+            }
             let cursorPos = textView.selectedRange().location
-
+            let found: NSRange
+            var wrapped = false
             if forward {
-                let searchStart = min(cursorPos + 1, length)
-                if searchStart < length {
-                    let searchRange = NSRange(location: searchStart, length: length - searchStart)
-                    let found = nsString.range(of: term, options: [.caseInsensitive], range: searchRange)
-                    if found.location != NSNotFound {
-                        textView.setSelectedRange(NSRange(location: found.location, length: 0))
-                        textView.scrollRangeToVisible(found)
-                        flashSearchHighlight(range: found, in: textView)
-                        return
-                    }
-                }
-                let wrapRange = NSRange(location: 0, length: min(cursorPos + 1, length))
-                let found = nsString.range(of: term, options: [.caseInsensitive], range: wrapRange)
-                if found.location != NSNotFound {
-                    textView.setSelectedRange(NSRange(location: found.location, length: 0))
-                    textView.scrollRangeToVisible(found)
-                    flashSearchHighlight(range: found, in: textView)
-                    parent.vimEngine.statusMessage = "search hit BOTTOM, continuing at TOP"
+                if let next = matches.first(where: { $0.location > cursorPos }) {
+                    found = next
                 } else {
-                    parent.vimEngine.statusMessage = "Pattern not found: \(term)"
+                    found = matches[0]
+                    wrapped = true
                 }
             } else {
-                if cursorPos > 0 {
-                    let searchRange = NSRange(location: 0, length: cursorPos)
-                    let found = nsString.range(of: term, options: [.caseInsensitive, .backwards], range: searchRange)
-                    if found.location != NSNotFound {
-                        textView.setSelectedRange(NSRange(location: found.location, length: 0))
-                        textView.scrollRangeToVisible(found)
-                        flashSearchHighlight(range: found, in: textView)
-                        return
-                    }
-                }
-                let wrapRange = NSRange(location: cursorPos, length: length - cursorPos)
-                let found = nsString.range(of: term, options: [.caseInsensitive, .backwards], range: wrapRange)
-                if found.location != NSNotFound {
-                    textView.setSelectedRange(NSRange(location: found.location, length: 0))
-                    textView.scrollRangeToVisible(found)
-                    flashSearchHighlight(range: found, in: textView)
-                    parent.vimEngine.statusMessage = "search hit TOP, continuing at BOTTOM"
+                if let prev = matches.last(where: { $0.location < cursorPos }) {
+                    found = prev
                 } else {
-                    parent.vimEngine.statusMessage = "Pattern not found: \(term)"
+                    found = matches[matches.count - 1]
+                    wrapped = true
                 }
+            }
+            textView.setSelectedRange(NSRange(location: found.location, length: 0))
+            textView.scrollRangeToVisible(found)
+            flashSearchHighlight(range: found, in: textView)
+            if wrapped {
+                parent.vimEngine.statusMessage = forward
+                    ? "search hit BOTTOM, continuing at TOP"
+                    : "search hit TOP, continuing at BOTTOM"
             }
         }
 

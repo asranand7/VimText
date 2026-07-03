@@ -120,22 +120,53 @@ final class LineNumberRulerView: NSRulerView {
         guard range.length > 0 else { return 0 }
         let safeEnd = min(nsString.length, range.location + range.length)
         guard range.location < safeEnd else { return 0 }
+        // Bulk-copy characters and scan the buffer: one getCharacters call per
+        // chunk instead of an objc_msgSend per character, which dominated the
+        // gutter's draw time on large notes.
         var count = 0
-        for idx in range.location..<safeEnd {
-            if nsString.character(at: idx) == 0x0A { count += 1 }
+        var location = range.location
+        let chunkSize = 64 * 1024
+        var buffer = [unichar](repeating: 0, count: min(chunkSize, safeEnd - location))
+        while location < safeEnd {
+            let chunkLen = min(chunkSize, safeEnd - location)
+            buffer.withUnsafeMutableBufferPointer { buf in
+                nsString.getCharacters(buf.baseAddress!, range: NSRange(location: location, length: chunkLen))
+            }
+            for i in 0..<chunkLen where buffer[i] == 0x0A { count += 1 }
+            location += chunkLen
         }
         return count
     }
 
+    /// The last (character index, line number) pair resolved by `lineNumber`.
+    /// Scrolling redraws the gutter every frame; counting newlines only over
+    /// the delta since the previous draw keeps that O(scroll distance) instead
+    /// of O(document) per frame. Edits shift offsets, so `invalidateLineCache`
+    /// (called from `VimNSTextView.didChangeText`) must drop it.
+    private var lineAnchor: (charIndex: Int, line: Int)?
+
+    func invalidateLineCache() {
+        lineAnchor = nil
+    }
+
     private func lineNumber(at characterIndex: Int, in nsString: NSString) -> Int {
-        guard characterIndex > 0 else { return 1 }
-        var line = 1
-        let safeEnd = min(characterIndex, nsString.length)
-        var idx = 0
-        while idx < safeEnd {
-            if nsString.character(at: idx) == 0x0A { line += 1 }
-            idx += 1
+        let target = min(max(characterIndex, 0), nsString.length)
+        guard target > 0 else { return 1 }
+        let line: Int
+        // Count from the cached anchor when that's the shorter walk (an
+        // invariant, not an optimization guess: line(T) = 1 + newlines[0,T)
+        // = anchorLine ± newlines between anchor and T).
+        if let anchor = lineAnchor, anchor.charIndex <= nsString.length,
+           abs(anchor.charIndex - target) < target {
+            if target >= anchor.charIndex {
+                line = anchor.line + newlineCount(in: NSRange(location: anchor.charIndex, length: target - anchor.charIndex), in: nsString)
+            } else {
+                line = anchor.line - newlineCount(in: NSRange(location: target, length: anchor.charIndex - target), in: nsString)
+            }
+        } else {
+            line = 1 + newlineCount(in: NSRange(location: 0, length: target), in: nsString)
         }
+        lineAnchor = (target, line)
         return line
     }
 }

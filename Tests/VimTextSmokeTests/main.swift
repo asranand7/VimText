@@ -509,6 +509,57 @@ func testVimSlashSearchViaKeyDown() throws {
     }
 }
 
+/// The search path caches the folded document and the per-term match scan
+/// (VimNSTextView.searchMatches) so `n`/`N` and find-bar keystrokes don't
+/// re-fold a large note every press. A stale cache after an edit would move
+/// the cursor to pre-edit offsets — this locks in the invalidation.
+func testVimSearchCacheInvalidation() throws {
+    try MainActor.assumeIsolated {
+    _ = NSApplication.shared
+    let engine = VimEngine()
+    let parent = VimTextView(
+        initialText: "", initialRTFData: Data(), onContentChange: nil,
+        vimEngine: engine, findController: nil, onSave: nil,
+        font: NSFont.systemFont(ofSize: 14)
+    )
+    let coordinator = VimTextView.Coordinator(parent)
+    let textView = VimNSTextView()
+    textView.vimEngine = engine
+    textView.coordinator = coordinator
+    coordinator.textView = textView
+    // "match" sits at offsets 4, 14, 25.
+    textView.string = "one match\ntwo match\nthree match"
+    textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+    func press(_ chars: String, code: UInt16 = 0) throws {
+        guard let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, characters: chars,
+            charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code
+        ) else { throw SmokeTestFailure.failed("could not synthesize key event for \(chars)") }
+        textView.keyDown(with: event)
+    }
+
+    try press("/", code: 44)
+    for ch in "match" { try press(String(ch)) }
+    try press("\r", code: 36)
+    try expectEqual(textView.selectedRange().location, 4, "search should land on the first match")
+    try press("n")
+    try expectEqual(textView.selectedRange().location, 14, "n should reach the second match (cache warm)")
+
+    // Delete the document's first character — every match shifts left by one.
+    // The cached folded text and match ranges must be dropped by the edit.
+    textView.setSelectedRange(NSRange(location: 0, length: 0))
+    try press("x")
+    try expectEqual(textView.string, "ne match\ntwo match\nthree match", "x should delete the first char")
+    try press("n")
+    try expectEqual(textView.selectedRange().location, 3,
+                    "n after an edit must use post-edit offsets, not the stale match cache")
+    try press("n")
+    try expectEqual(textView.selectedRange().location, 13, "subsequent n keeps navigating the fresh scan")
+    }
+}
+
 /// Builds a live `VimNSTextView` wired to its engine/coordinator and seeded
 /// with `text`, plus a `press` helper that drives the real `keyDown` path —
 /// the shared rig for execution-level Vim regression tests.
@@ -1049,6 +1100,7 @@ let tests: [(String, () throws -> Void)] = [
     ("Notes view-model filtering", testNotesViewModelFiltering),
     ("Vim command execution", testVimCommandExecution),
     ("Vim / search via keyDown", testVimSlashSearchViaKeyDown),
+    ("Vim search cache invalidation on edit", testVimSearchCacheInvalidation),
     ("Vim linewise paste on last line", testVimLinewisePasteLastLine),
     ("Vim till-repeat advances (t/T + ;/,)", testVimTillRepeatAdvances),
     ("Vim join (J) on last line", testVimJoinLastLine),

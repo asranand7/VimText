@@ -27,6 +27,58 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     /// Whether temporary search-highlight attributes are currently applied,
     /// so clearing can skip an O(n) attribute sweep when there's nothing set.
     private var hasTemporarySearchHighlights = false
+    /// Folded snapshot of the document for search (see `String.searchFolded`).
+    /// Folding a multi-MB note is O(n), so it's cached across find-bar
+    /// keystrokes and `n`/`N` presses and invalidated on edit — not recomputed
+    /// per search.
+    private var foldedSearchString: NSString?
+    /// The last search scan (folded term → match ranges). Repeat `n`/`N`
+    /// presses on the same term reuse it instead of rescanning the document.
+    private var searchMatchCache: (term: String, ranges: [NSRange])?
+    /// The folded term whose match highlights are currently painted, so a
+    /// repeated `n` doesn't re-add thousands of temporary attributes.
+    private var appliedHighlightTerm: String?
+
+    /// Drops the folded-document and match caches. Called on every text
+    /// mutation (`didChangeText` plus the load-time attachment rewrite).
+    func invalidateSearchCaches() {
+        foldedSearchString = nil
+        searchMatchCache = nil
+        appliedHighlightTerm = nil
+    }
+
+    /// All ranges of `term` in the document (searchFolded on both sides so
+    /// straight quotes match smart quotes; folding is 1:1 in UTF-16, so the
+    /// ranges are valid in the live text storage), in document order, capped
+    /// at `maxSearchMatches`. Both the folded document snapshot and the
+    /// per-term scan are cached until the next edit, so the Vim search and
+    /// the find bar share one scan instead of re-folding the whole note.
+    func searchMatches(for term: String) -> [NSRange] {
+        let term = term.searchFolded
+        guard !term.isEmpty else { return [] }
+        if let cache = searchMatchCache, cache.term == term { return cache.ranges }
+
+        let nsString: NSString
+        if let cached = foldedSearchString {
+            nsString = cached
+        } else {
+            nsString = self.string.searchFolded as NSString
+            foldedSearchString = nsString
+        }
+        let length = nsString.length
+        var ranges: [NSRange] = []
+        var searchRange = NSRange(location: 0, length: length)
+        while searchRange.location < length {
+            let found = nsString.range(of: term, options: [.caseInsensitive], range: searchRange)
+            if found.location == NSNotFound { break }
+            ranges.append(found)
+            if ranges.count >= Self.maxSearchMatches { break }
+            searchRange.location = found.location + found.length
+            searchRange.length = length - searchRange.location
+        }
+        searchMatchCache = (term, ranges)
+        return ranges
+    }
 
     func highlightCurrentMatch(range: NSRange) {
         currentMatchLayer?.removeFromSuperlayer()
@@ -89,31 +141,26 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     }
 
     /// Scans for `term` and highlights all matches. Used by the Vim `/` search.
-    func highlightAllMatches(term: String) {
-        guard !term.isEmpty else { clearSearchHighlights(); return }
-        // Folded so straight-quote queries match smart-quote text; folding is
-        // 1:1 in UTF-16, so the highlight ranges are valid in the original.
-        let term = term.searchFolded
-        let nsString = self.string.searchFolded as NSString
-        let length = nsString.length
-        guard length > 0 else { clearSearchHighlights(); return }
-
-        var ranges: [NSRange] = []
-        var searchRange = NSRange(location: 0, length: length)
-        while searchRange.location < length {
-            let found = nsString.range(of: term, options: [.caseInsensitive], range: searchRange)
-            if found.location == NSNotFound { break }
-            ranges.append(found)
-            if ranges.count >= Self.maxSearchMatches { break }
-            searchRange.location = found.location + found.length
-            searchRange.length = length - searchRange.location
+    /// Returns the match ranges so callers (`n`/`N` navigation) can move the
+    /// cursor without a second scan of the document. Re-applying the same
+    /// term's highlights while they're still painted is skipped entirely.
+    @discardableResult
+    func highlightAllMatches(term: String) -> [NSRange] {
+        guard !term.isEmpty else { clearSearchHighlights(); return [] }
+        let ranges = searchMatches(for: term)
+        guard !ranges.isEmpty else { clearSearchHighlights(); return [] }
+        let folded = term.searchFolded
+        if !hasTemporarySearchHighlights || appliedHighlightTerm != folded {
+            applyMatchHighlights(ranges)
+            appliedHighlightTerm = folded
         }
-        applyMatchHighlights(ranges)
+        return ranges
     }
 
     func clearSearchHighlights() {
         currentMatchLayer?.removeFromSuperlayer()
         currentMatchLayer = nil
+        appliedHighlightTerm = nil
         if hasTemporarySearchHighlights, let layoutManager = self.layoutManager {
             let fullRange = NSRange(location: 0, length: (self.string as NSString).length)
             layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
@@ -453,7 +500,16 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 
     func applyBaseFont(_ baseFont: NSFont) {
         guard let textStorage = textStorage else { return }
-        let fullRange = NSRange(location: 0, length: textStorage.length)
+        applyBaseFont(baseFont, in: NSRange(location: 0, length: textStorage.length))
+    }
+
+    /// Normalizes font (preserving bold/italic traits) and paragraph style over
+    /// `range` only. Paste uses this scoped to the inserted text — rewriting
+    /// attributes across the whole document made pasting into a large note
+    /// O(document) instead of O(pasted text).
+    func applyBaseFont(_ baseFont: NSFont, in range: NSRange) {
+        guard let textStorage = textStorage else { return }
+        let fullRange = NSIntersectionRange(range, NSRange(location: 0, length: textStorage.length))
         guard fullRange.length > 0 else { return }
         let fontManager = NSFontManager.shared
         // Cosmetic-only: don't pollute the undo stack with font attribute
@@ -1535,7 +1591,11 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 
     override func didChangeText() {
         super.didChangeText()
-        enclosingScrollView?.verticalRulerView?.needsDisplay = true
+        invalidateSearchCaches()
+        if let ruler = enclosingScrollView?.verticalRulerView as? LineNumberRulerView {
+            ruler.invalidateLineCache()
+            ruler.needsDisplay = true
+        }
         if let engine = vimEngine, !engine.mode.isEditing {
             scheduleBlockCursorRedraw()
         }
@@ -1543,6 +1603,7 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 
     override func paste(_ sender: Any?) {
         if insertPastedImage() { return }
+        let pasteStart = selectedRange().location
         // Strip rich formatting only when the clipboard actually holds text.
         // Source apps (IntelliJ, browsers, Xcode) put an RTF flavor on the
         // pasteboard with their own theme baked in — fonts, syntax colors, and
@@ -1561,7 +1622,13 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         // from EditorPreferences — instead of self.font which is the stale
         // NSTextView-level property and may carry an outdated size.
         let baseFont = coordinator?.parent.font ?? self.font ?? NSFont.systemFont(ofSize: 16)
-        applyBaseFont(baseFont)
+        // Normalize only the pasted range (the caret sits at its end after the
+        // paste) — the rest of the document already carries the base font, and
+        // touching it wholesale also clobbered code-block monospacing.
+        let pasteEnd = selectedRange().location
+        if pasteEnd > pasteStart {
+            applyBaseFont(baseFont, in: NSRange(location: pasteStart, length: pasteEnd - pasteStart))
+        }
         coordinator?.formattingDidChange()
     }
 
@@ -1666,6 +1733,11 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
             storage.replaceCharacters(in: reference.range, with: NSAttributedString(attachment: attachment))
         }
         storage.endEditing()
+        // This mutates the storage without going through didChangeText — the
+        // markdown refs collapse to single attachment chars, shifting every
+        // later offset — so the search/line caches must be dropped by hand.
+        invalidateSearchCaches()
+        (enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?.invalidateLineCache()
         window?.invalidateCursorRects(for: self)
     }
 
