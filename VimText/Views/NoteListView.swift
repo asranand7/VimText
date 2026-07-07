@@ -546,13 +546,21 @@ struct NoteListView: View {
                         
                         Divider()
                         
-                        Button("Change Notes Location…") {
-                            changeNotesDirectory()
-                        }
-                        
-                        if StorageManager.shared.customDirectoryPath != nil {
-                            Button("Use Default Location") {
-                                switchNotesDirectory(to: nil)
+                        Section(notesLocationLabel) {
+                            Button("Reveal in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting(
+                                    [URL(fileURLWithPath: StorageManager.shared.baseDirectoryPath)]
+                                )
+                            }
+
+                            Button("Change Notes Location…") {
+                                changeNotesDirectory()
+                            }
+
+                            if StorageManager.shared.customDirectoryPath != nil {
+                                Button("Use Default Location") {
+                                    switchNotesDirectory(to: nil)
+                                }
                             }
                         }
                     }
@@ -656,6 +664,15 @@ struct NoteListView: View {
                 highlightedIndex = min(max(index, 0), count - 1)
             }
         }
+    }
+
+    /// Menu-section header showing where notes currently live, so the
+    /// location isn't discoverable only via the ⋯ button's tooltip.
+    private var notesLocationLabel: String {
+        guard let path = StorageManager.shared.customDirectoryPath else {
+            return "Notes in Default Location"
+        }
+        return "Notes in \((path as NSString).abbreviatingWithTildeInPath)"
     }
 
     private func changeNotesDirectory() {
