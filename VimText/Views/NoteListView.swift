@@ -552,7 +552,7 @@ struct NoteListView: View {
                         
                         if StorageManager.shared.customDirectoryPath != nil {
                             Button("Use Default Location") {
-                                viewModel.changeDirectoryPath(to: nil)
+                                switchNotesDirectory(to: nil)
                             }
                         }
                     }
@@ -665,9 +665,34 @@ struct NoteListView: View {
         panel.allowsMultipleSelection = false
         panel.title = "Choose Notes Location"
         panel.prompt = "Select"
-        
-        if panel.runModal() == .OK, let url = panel.url {
-            viewModel.changeDirectoryPath(to: url.path)
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard url.path != StorageManager.shared.baseDirectoryPath else { return }
+        switchNotesDirectory(to: url.path)
+    }
+
+    /// Switches the notes location, offering to copy the existing notes over
+    /// first so they don't silently disappear from view. `nil` = default
+    /// App Support location.
+    private func switchNotesDirectory(to path: String?) {
+        guard !viewModel.notes.isEmpty else {
+            viewModel.changeDirectoryPath(to: path)
+            return
+        }
+        let count = viewModel.notes.count
+        let alert = NSAlert()
+        alert.messageText = "Copy your notes to the new location?"
+        alert.informativeText = "\"Copy & Switch\" copies your \(count) note\(count == 1 ? "" : "s") (including images) to the new location before switching. \"Switch Only\" shows just the notes already there. The files in the current location are left untouched either way."
+        alert.addButton(withTitle: "Copy & Switch")
+        alert.addButton(withTitle: "Switch Only")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            viewModel.changeDirectoryPath(to: path, migratingNotes: true)
+        case .alertSecondButtonReturn:
+            viewModel.changeDirectoryPath(to: path)
+        default:
+            break
         }
     }
 

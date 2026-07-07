@@ -391,6 +391,53 @@ public final class StorageManager {
         ioQueue.sync {}
     }
 
+    /// The base directory the store currently resolves to (custom or default),
+    /// for UI that needs to detect a no-op location change.
+    public var baseDirectoryPath: String { baseURL.path }
+
+    /// Copies the entire store — the notes tree (json + sidecars + assets) and
+    /// folders.json — into `path` (nil = the default App Support location),
+    /// skipping any file that already exists at the destination. The originals
+    /// are left untouched, so this is safe to run before switching
+    /// `customDirectoryPath`. Returns the number of notes copied.
+    public func migrateStore(toBasePath path: String?) -> Result<Int, StorageError> {
+        waitForPendingWrites()
+        let destBase = path.map { URL(fileURLWithPath: $0) } ?? appSupportRoot
+        let srcNotes = notesURL.standardizedFileURL
+        let destNotes = destBase.appendingPathComponent("notes", isDirectory: true).standardizedFileURL
+        guard destNotes.path != srcNotes.path else { return .success(0) }
+        // Refuse a destination inside the source tree: the copy would recurse
+        // into the directory it is creating.
+        guard !destNotes.path.hasPrefix(srcNotes.path + "/") else {
+            return .failure(.cannotCreateDirectory(destNotes.path))
+        }
+        do {
+            var copiedNotes = 0
+            try copyContents(of: srcNotes, to: destNotes, copiedNotes: &copiedNotes)
+            let destFolders = destBase.appendingPathComponent("folders.json")
+            if fileManager.fileExists(atPath: foldersURL.path), !fileManager.fileExists(atPath: destFolders.path) {
+                try fileManager.copyItem(at: foldersURL, to: destFolders)
+            }
+            return .success(copiedNotes)
+        } catch {
+            return .failure(.cannotWriteFile(destNotes.path, error.localizedDescription))
+        }
+    }
+
+    private func copyContents(of src: URL, to dest: URL, copiedNotes: inout Int) throws {
+        try fileManager.createDirectory(at: dest, withIntermediateDirectories: true)
+        guard fileManager.fileExists(atPath: src.path) else { return }
+        for item in try fileManager.contentsOfDirectory(at: src, includingPropertiesForKeys: [.isDirectoryKey]) {
+            let target = dest.appendingPathComponent(item.lastPathComponent)
+            if (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                try copyContents(of: item, to: target, copiedNotes: &copiedNotes)
+            } else if !fileManager.fileExists(atPath: target.path) {
+                try fileManager.copyItem(at: item, to: target)
+                if item.pathExtension == "json" { copiedNotes += 1 }
+            }
+        }
+    }
+
     private func performSaveNote(_ note: Note, rtfInSync: Bool = true) -> Result<Void, StorageError> {
         do {
             try fileManager.createDirectory(at: notesURL, withIntermediateDirectories: true)

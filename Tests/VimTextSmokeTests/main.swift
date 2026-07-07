@@ -1204,6 +1204,47 @@ func testSearchNormalization() throws {
     try expectEqual("can\u{02BC}t".searchFolded, "can't", "modifier-letter apostrophe folds to straight")
 }
 
+func testMigrateStoreCopiesStore() throws {
+    try withTemporaryStorage { manager, _ in
+        let note = Note(title: "Migrate me", content: "Migrate me\nbody text")
+        guard case .success = manager.saveNote(note) else {
+            throw SmokeTestFailure.failed("saving the source note failed")
+        }
+        guard let assetPath = manager.saveImageAsset(Data([0xDE, 0xAD]), fileExtension: "png") else {
+            throw SmokeTestFailure.failed("saving the source asset failed")
+        }
+
+        let destURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VimTextSmokeTests-migrate-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: destURL) }
+
+        guard case .success(let copied) = manager.migrateStore(toBasePath: destURL.path) else {
+            throw SmokeTestFailure.failed("migrateStore failed")
+        }
+        try expectEqual(copied, 1, "one note should be copied")
+
+        // Re-running must not overwrite or duplicate anything at the destination.
+        guard case .success(let again) = manager.migrateStore(toBasePath: destURL.path) else {
+            throw SmokeTestFailure.failed("second migrateStore failed")
+        }
+        try expectEqual(again, 0, "second migration should copy nothing")
+
+        manager.customDirectoryPath = destURL.path
+        let notes = manager.loadNotes()
+        try expectEqual(notes.count, 1, "migrated store should load one note")
+        try expectEqual(notes.first?.title, "Migrate me", "note title should survive migration")
+        try expectEqual(notes.first?.content, "Migrate me\nbody text", "note content should survive migration")
+        try expect(FileManager.default.fileExists(atPath: manager.assetURL(forRelativePath: assetPath).path),
+                   "asset file should exist in the migrated store")
+
+        // A destination inside the current notes tree would copy into itself.
+        let inside = destURL.appendingPathComponent("notes/sub").path
+        guard case .failure = manager.migrateStore(toBasePath: inside) else {
+            throw SmokeTestFailure.failed("migration into the source notes tree should be refused")
+        }
+    }
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("Note model derived text", testNoteModelDerivedText),
     ("Editor preferences font sizing", testEditorPreferencesFontSizing),
@@ -1241,6 +1282,7 @@ let tests: [(String, () throws -> Void)] = [
     ("Link folding (computeFolds)", testLinkFoldingComputeFolds),
     ("List marker detection (bullets/checkboxes)", testListMarkerDetection),
     ("Storage pinned-state persistence", testStoragePinnedStatePersists),
+    ("Storage migration to a new location", testMigrateStoreCopiesStore),
     ("Search normalization (fold + lowercase)", testSearchNormalization)
 ]
 

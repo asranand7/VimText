@@ -555,9 +555,17 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    /// Flushes any pending changes to the old folder before switching directory paths.
-    func changeDirectoryPath(to path: String?) {
+    /// Flushes any pending changes to the old folder before switching directory
+    /// paths. With `migratingNotes`, first copies the existing store into the
+    /// new location (the old files stay in place as a backup).
+    func changeDirectoryPath(to path: String?, migratingNotes: Bool = false) {
         flushPendingSavesSynchronously()
+        if migratingNotes {
+            if case .failure(let error) = storage.migrateStore(toBasePath: path) {
+                saveState = .error(error.localizedDescription)
+                return
+            }
+        }
         storage.customDirectoryPath = path
         load()
     }
