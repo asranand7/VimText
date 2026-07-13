@@ -66,6 +66,12 @@ class CommandPaletteState: ObservableObject {
         commands.append(PaletteCommand(id: "new_note", name: "Create New Note", icon: "square.and.pencil", shortcut: "⌘N", category: "Notes") {
             Task { @MainActor in viewModel.createNote() }
         })
+        commands.append(PaletteCommand(id: "quick_capture", name: "Quick Capture", icon: "bolt.circle", shortcut: QuickCaptureHotKey.shared.shortcutDescription, category: "Notes") {
+            Task { @MainActor in QuickCapturePanelController.shared.show() }
+        })
+        commands.append(PaletteCommand(id: "quick_capture_shortcut", name: "Set Quick Capture Shortcut…", icon: "keyboard", category: "Notes") {
+            NotificationCenter.default.post(name: .openQuickCaptureShortcutSettings, object: nil)
+        })
         if hasNote {
             commands.append(PaletteCommand(id: "duplicate_note", name: "Duplicate Note", icon: "plus.square.on.square", shortcut: "⌘D", category: "Notes") {
                 NotificationCenter.default.post(name: .duplicateCurrentNote, object: nil)

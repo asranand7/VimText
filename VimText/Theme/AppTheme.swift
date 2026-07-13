@@ -27,6 +27,7 @@ struct AppTheme: Identifiable, Hashable {
     var textNS: NSColor { NSColor(hex: textColor) }
     var secondaryTextNS: NSColor { NSColor(hex: secondaryColor) }
     var accentNS: NSColor { NSColor(hex: accentColor) }
+    var separatorNS: NSColor { NSColor(hex: separatorColor) }
 
     var colorScheme: ColorScheme { isDark ? .dark : .light }
 }
@@ -132,6 +133,13 @@ extension AppTheme {
     static func theme(id: String) -> AppTheme {
         all.first { $0.id == id } ?? light
     }
+
+    /// The persisted theme, for AppKit surfaces (e.g. the Quick Capture
+    /// panel) that live outside the SwiftUI environment. Reads the same
+    /// UserDefaults key ThemeManager writes.
+    static var current: AppTheme {
+        theme(id: UserDefaults.standard.string(forKey: ThemeManager.storageKey) ?? indigo.id)
+    }
 }
 
 final class ThemeManager: ObservableObject {
@@ -144,7 +152,7 @@ final class ThemeManager: ObservableObject {
         didSet { UserDefaults.standard.set(sidebarTintHex, forKey: Self.sidebarKey) }
     }
 
-    private static let storageKey = "selectedThemeID"
+    static let storageKey = "selectedThemeID"
     private static let sidebarKey = "sidebarTintHex"
 
     init() {

@@ -8,6 +8,7 @@ struct NoteListView: View {
     @State private var selectedNoteIds: Set<UUID> = []
     @State private var isSelectionMode = false
     @State private var showDeleteAllConfirm = false
+    @State private var showQuickCaptureShortcutSheet = false
     @State private var showDeleteSelectedConfirm = false
     @State private var searchFocusTrigger = false
     @State private var highlightedIndex: Int? = nil
@@ -563,6 +564,12 @@ struct NoteListView: View {
                                 }
                             }
                         }
+
+                        Divider()
+
+                        Button("Quick Capture Shortcut… (\(QuickCaptureHotKey.shared.shortcutDescription))") {
+                            showQuickCaptureShortcutSheet = true
+                        }
                     }
 
                     Divider()
@@ -644,6 +651,12 @@ struct NoteListView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .openChangeLocationPanel)) { _ in
             changeNotesDirectory()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openQuickCaptureShortcutSettings)) { _ in
+            showQuickCaptureShortcutSheet = true
+        }
+        .sheet(isPresented: $showQuickCaptureShortcutSheet) {
+            QuickCaptureShortcutSheet()
         }
         .onChange(of: viewModel.searchText) {
             if viewModel.searchText.isEmpty {

@@ -19,6 +19,11 @@ enum NoteSaveState: Equatable {
 
 @MainActor
 final class NotesViewModel: ObservableObject {
+    /// The live view model, if a main window exists. Quick Capture saves
+    /// through it so the sidebar updates in place; when it's nil (window
+    /// closed, app still running) capture falls back to writing disk directly.
+    static weak var current: NotesViewModel?
+
     @Published var notes: [Note] = []
     @Published var folders: [NoteFolder] = []
     @Published var selectedNoteId: UUID? {
@@ -195,6 +200,8 @@ final class NotesViewModel: ObservableObject {
     }
 
     init() {
+        Self.current = self
+
         // Recompute filteredNotes whenever any input changes.
         Publishers.CombineLatest4($notes, $showAllNotes, $selectedFolderId, $searchText)
             .map { [weak self] notes, showAll, folderId, search in
@@ -346,6 +353,19 @@ final class NotesViewModel: ObservableObject {
         notes.insert(note, at: 0)
         applySaveResult(storage.saveNote(note))
         selectedNoteId = note.id
+    }
+
+    /// Creates and saves a note from Quick Capture text without selecting it —
+    /// capture must not yank the main window's editor away from what it's
+    /// showing. Lands in All Notes (no folder), like ⌘N from that view.
+    func createQuickCapturedNote(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let title = QuickCapture.title(from: trimmed)
+        let note = Note(title: title.isEmpty ? "Untitled" : title, content: trimmed)
+        indexNote(note)
+        notes.insert(note, at: 0)
+        applySaveResult(storage.saveNote(note))
     }
 
     /// Creates a copy of `note` (new id/timestamps, unpinned) directly above it

@@ -18,6 +18,9 @@ public extension Notification.Name {
     /// header trash button.
     static let requestDeleteCurrentNote = Notification.Name("requestDeleteCurrentNote")
     static let toggleSidebar = Notification.Name("toggleSidebar")
+    /// Opens the sheet for rebinding the global Quick Capture shortcut
+    /// (posted by the ⌘P palette; NoteListView owns the sheet).
+    static let openQuickCaptureShortcutSettings = Notification.Name("openQuickCaptureShortcutSettings")
     static let openChangeLocationPanel = Notification.Name("openChangeLocationPanel")
     static let refocusEditor = Notification.Name("refocusEditor")
     /// Posted when a note is opened from somewhere other than the sidebar
