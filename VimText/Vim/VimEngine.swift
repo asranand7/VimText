@@ -224,10 +224,10 @@ public final class VimEngine: ObservableObject {
             return [.yankLines(count)]
         case "x":
             resetBuffers()
-            return Array(repeating: .deleteChar, count: count)
+            return [.deleteChars(count)]
         case "X":
             resetBuffers()
-            return Array(repeating: .deleteCharBefore, count: count)
+            return [.deleteCharsBefore(count)]
         case "s":
             mode = .insert
             resetBuffers()
@@ -447,6 +447,11 @@ public final class VimEngine: ObservableObject {
                 // `gd` opens the link under the cursor (this app's take on
                 // Vim's `gx`; there are no definitions to go to in notes).
                 return [.openLinkUnderCursor]
+            } else if key == "v" {
+                // `gv` — reselect the last visual selection. The mode switch
+                // happens in the coordinator, which owns the saved selection
+                // (and knows whether one exists at all).
+                return [.reselectVisual]
             }
             return [.none]
 
@@ -1113,6 +1118,10 @@ public final class VimEngine: ObservableObject {
         switch key {
         case "r":
             return [.redo]
+        case "o":
+            return [.jumpBackward]
+        case "i":
+            return [.jumpForward]
         case "d":
             return Array(repeating: .moveCursor(.down), count: 15)
         case "u":

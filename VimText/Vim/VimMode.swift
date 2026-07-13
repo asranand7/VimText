@@ -35,6 +35,11 @@ public enum VimAction: Equatable {
     case deleteToEnd
     case deleteChar
     case deleteCharBefore
+    /// `x` / `X` with a count — delete `count` chars forward / backward, bounded
+    /// to the current line, yanking the whole run into the register (so `3x`
+    /// then `p` restores all three, and `xp` transposes).
+    case deleteChars(Int)
+    case deleteCharsBefore(Int)
 
     case changeMotion(Motion, Int)
     case changeLine
@@ -52,6 +57,12 @@ public enum VimAction: Equatable {
 
     case undo
     case redo
+
+    /// `Ctrl-O` / `Ctrl-I` — step backward / forward through the jump list
+    /// (positions recorded before searches, line jumps, mark jumps, and the
+    /// long-range motions gg/G/%/{ }/H/M/L).
+    case jumpBackward
+    case jumpForward
 
     case indent
     case outdent
@@ -88,6 +99,9 @@ public enum VimAction: Equatable {
     case yankTextObject(TextObject)
     case visualSelectTextObject(TextObject)
     case visualSwapAnchor
+    /// `gv` — reselect the last visual selection (same anchor/cursor and the
+    /// same visual sub-mode it was made in).
+    case reselectVisual
 
     /// `~` — toggle case of `count` chars from the cursor, bounded to the
     /// current line (a count past end-of-line stops there, it does not wrap).

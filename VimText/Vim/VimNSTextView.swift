@@ -647,11 +647,25 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     /// common case: typing above a block), the attributes moved with the text,
     /// so only the edited region is normalized — previously every such pause
     /// rewrote the whole document's attributes and invalidated all its layout.
-    func restyleCodeBlocks(baseFont: NSFont) {
+    /// Pass `force: true` to rewrite the whole document's code-block styling
+    /// even when the fence structure is unchanged — needed after a font-size
+    /// change, which rewrites every font via `applyBaseFont` (wiping the mono
+    /// runs) without editing any text, so the edited-range fast paths below
+    /// would otherwise leave the blocks proportional.
+    func restyleCodeBlocks(baseFont: NSFont, force: Bool = false) {
         guard let textStorage = textStorage else { return }
         let ranges = computeCodeBlockRanges()
         let edited = editedRangeSinceRestyle
         editedRangeSinceRestyle = nil
+
+        if force {
+            codeBlockRanges = ranges
+            guard textStorage.length > 0 else { needsDisplay = true; return }
+            applyCodeBlockStyling(in: NSRange(location: 0, length: textStorage.length), baseFont: baseFont)
+            needsDisplay = true
+            updateCopyButtons()
+            return
+        }
 
         if ranges == codeBlockRanges {
             // Structure and offsets untouched. With no blocks there's nothing
@@ -971,7 +985,7 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
                 return
             }
 
-            if modifiers.contains(.control) && event.characters == "[" {
+            if modifiers.contains(.control) && event.charactersIgnoringModifiers == "[" {
                 let actions = engine.processKey("[", modifiers: modifiers)
                 coordinator.executeActions(actions)
                 return
@@ -1027,8 +1041,19 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
             return
         }
 
-        guard let chars = event.characters, !chars.isEmpty else { return }
-        let key = chars
+        // Control combos arrive in `event.characters` as raw ASCII control
+        // codes (Ctrl-R = U+0012, Ctrl-O = U+000F, …), which never match the
+        // engine's key strings — so redo, and the Ctrl-O/Ctrl-I jump list,
+        // silently died on real keyboards. Read the base key from
+        // charactersIgnoringModifiers whenever Control is held (the Ctrl-D/U/F/B
+        // and Ctrl-V branches above already do). Shift is still honored there.
+        let key: String
+        if modifiers.contains(.control), let base = event.charactersIgnoringModifiers, !base.isEmpty {
+            key = base
+        } else {
+            guard let chars = event.characters, !chars.isEmpty else { return }
+            key = chars
+        }
 
         if engine.keyBuffer == "r" && !isEsc {
             engine.resetBuffers()

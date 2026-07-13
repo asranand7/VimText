@@ -37,6 +37,24 @@ extension VimTextView {
         /// recreated per note via `.id(noteId)`. Positions are not adjusted as
         /// the text changes; jumps clamp into the current document.
         var marks: [Character: Int] = [:]
+        /// Jump list for `Ctrl-O` / `Ctrl-I`, modeled as browser-style history:
+        /// `jumpBackStack` holds older positions, `jumpForwardStack` newer ones.
+        /// A new jump pushes the pre-jump position onto back and clears forward.
+        /// Per-note like `marks` (the editor is recreated per note); offsets are
+        /// clamped into the live document on use. Capped so a long session can't
+        /// grow unbounded (Vim keeps 100).
+        var jumpBackStack: [Int] = []
+        var jumpForwardStack: [Int] = []
+        private static let jumpListLimit = 100
+        /// The last visual selection (anchor/cursor offsets and which visual
+        /// sub-mode it was made in), saved whenever a visual selection ends —
+        /// Esc, mode toggle, or an operation (y/d/c/>/<…) — so `gv` can
+        /// reselect it. Per-note, like `marks`; offsets are clamped on use.
+        var lastVisualSelection: (anchor: Int, cursor: Int, mode: VimMode)?
+        /// The visual sub-mode the coordinator believes is active. Needed
+        /// because the engine flips `mode` back to .normal *before* the exit
+        /// action reaches executeAction, so the handler can't read it there.
+        private var activeVisualMode: VimMode?
         var isReplayingDot: Bool = false
         var lastFontSize: CGFloat = 0
         var lastFontName: String = ""
@@ -373,7 +391,7 @@ extension VimTextView {
                 let isChangeAction = actions.contains { action in
                     switch action {
                     case .insertMode, .deleteMotion, .deleteLine, .deleteLines, .deleteToEnd, .deleteChar,
-                         .deleteCharBefore, .changeMotion, .changeLine, .changeLines, .changeToEnd,
+                         .deleteCharBefore, .deleteChars, .deleteCharsBefore, .changeMotion, .changeLine, .changeLines, .changeToEnd,
                          .deleteTextObject, .changeTextObject, .toggleCase, .joinLines,
                          .changeCaseMotion, .changeCaseLines,
                          .pasteAfter, .pasteBefore, .indent, .outdent, .indentLines, .outdentLines, .replaceChar:
@@ -400,6 +418,13 @@ extension VimTextView {
                 }
             }
 
+            // Record the pre-jump cursor position before a "jump" command so
+            // Ctrl-O can return to it. Skipped while replaying `.` and while a
+            // visual selection is active (Vim records jumps from normal mode).
+            if !isReplayingDot, !engine.mode.isVisual, actions.contains(where: Self.isJumpAction) {
+                recordJump(from: textView.selectedRange().location)
+            }
+
             // Group every mutating command into one undo step, so e.g. `3x`,
             // a block-mode delete loop, or a `.` replay undoes atomically
             // instead of one NSTextView edit at a time. Never wrap undo/redo
@@ -419,7 +444,7 @@ extension VimTextView {
         private static func isTextMutating(_ action: VimAction) -> Bool {
             switch action {
             case .insertMode, .deleteMotion, .deleteLine, .deleteLines, .deleteToEnd, .deleteChar,
-                 .deleteCharBefore, .changeMotion, .changeLine, .changeLines, .changeToEnd,
+                 .deleteCharBefore, .deleteChars, .deleteCharsBefore, .changeMotion, .changeLine, .changeLines, .changeToEnd,
                  .deleteTextObject, .changeTextObject, .toggleCase, .joinLines,
                  .changeCaseMotion, .changeCaseLines, .visualChangeCase,
                  .pasteAfter, .pasteBefore, .indent, .outdent, .indentLines, .outdentLines,
@@ -429,6 +454,79 @@ extension VimTextView {
             default:
                 return false
             }
+        }
+
+        /// Actions Vim records in the jump list: searches, line jumps, mark
+        /// jumps, and the long-range motions (gg/G, %, { }, H/M/L). Ordinary
+        /// character/word motions (h/j/k/l/w/b/e/f/t) are deliberately excluded.
+        private static func isJumpAction(_ action: VimAction) -> Bool {
+            switch action {
+            case .goToLine, .jumpToMark, .searchExecute, .nextMatch, .previousMatch, .searchWordUnderCursor:
+                return true
+            case .moveCursor(let motion):
+                switch motion {
+                case .documentStart, .documentEnd, .matchingBracket,
+                     .paragraphForward, .paragraphBackward,
+                     .screenTop, .screenMiddle, .screenBottom:
+                    return true
+                default:
+                    return false
+                }
+            default:
+                return false
+            }
+        }
+
+        /// Pushes `pos` onto the back stack and clears the forward history — a
+        /// new jump invalidates any Ctrl-I redo path (browser-history semantics).
+        private func recordJump(from pos: Int) {
+            if jumpBackStack.last == pos {
+                jumpForwardStack.removeAll()
+                return
+            }
+            jumpBackStack.append(pos)
+            jumpForwardStack.removeAll()
+            if jumpBackStack.count > Self.jumpListLimit {
+                jumpBackStack.removeFirst(jumpBackStack.count - Self.jumpListLimit)
+            }
+        }
+
+        /// `Ctrl-O` — return to the previous jump position, pushing the current
+        /// one onto the forward stack so `Ctrl-I` can come back.
+        private func jumpBackward(in textView: VimNSTextView) {
+            guard let target = jumpBackStack.popLast() else {
+                parent.vimEngine.statusMessage = "Already at oldest jump"
+                return
+            }
+            jumpForwardStack.append(textView.selectedRange().location)
+            moveToJump(target, in: textView)
+        }
+
+        /// `Ctrl-I` — move forward to a position an earlier `Ctrl-O` left.
+        private func jumpForward(in textView: VimNSTextView) {
+            guard let target = jumpForwardStack.popLast() else {
+                parent.vimEngine.statusMessage = "Already at newest jump"
+                return
+            }
+            jumpBackStack.append(textView.selectedRange().location)
+            moveToJump(target, in: textView)
+        }
+
+        /// If a visual selection is active (per `activeVisualMode`), records it
+        /// as the last visual selection for `gv` and clears the active flag.
+        /// Called from every path that ends a visual selection.
+        private func saveVisualSelectionIfActive() {
+            guard let mode = activeVisualMode else { return }
+            lastVisualSelection = (visualAnchor, visualCursorPos, mode)
+            activeVisualMode = nil
+        }
+
+        /// Clamps a stored jump offset into the current document and moves there.
+        private func moveToJump(_ offset: Int, in textView: VimNSTextView) {
+            let length = (textView.string as NSString).length
+            let target = min(max(offset, 0), max(length - 1, 0))
+            textView.setSelectedRange(NSRange(location: target, length: 0))
+            textView.scrollRangeToVisible(NSRange(location: target, length: 0))
         }
 
         private func lineRangeForCount(from cursorPos: Int, count: Int, in nsString: NSString, includeTrailingNewline: Bool = true) -> NSRange {
@@ -561,6 +659,7 @@ extension VimTextView {
 
             case .normalMode:
                 textView.breakUndoCoalescing()
+                saveVisualSelectionIfActive() // Esc / v-toggle out of visual → remember for gv
                 textView.visualCursorOverride = nil
                 clearBlockHighlights(in: textView)
 
@@ -618,6 +717,7 @@ extension VimTextView {
 
             case .visualMode:
                 clearBlockHighlights(in: textView)
+                activeVisualMode = .visual
                 visualAnchor = cursorPos
                 visualCursorPos = cursorPos
                 textView.visualCursorOverride = cursorPos
@@ -626,6 +726,7 @@ extension VimTextView {
 
             case .visualLineMode:
                 clearBlockHighlights(in: textView)
+                activeVisualMode = .visualLine
                 visualAnchor = cursorPos
                 visualCursorPos = cursorPos
                 textView.visualCursorOverride = cursorPos
@@ -633,6 +734,7 @@ extension VimTextView {
                 textView.setSelectedRange(lineRange)
 
             case .visualBlockMode:
+                activeVisualMode = .visualBlock
                 visualAnchor = cursorPos
                 visualCursorPos = cursorPos
                 textView.visualCursorOverride = cursorPos
@@ -720,13 +822,41 @@ extension VimTextView {
 
             case .deleteChar:
                 if cursorPos < length {
-                    textView.setSelectedRange(NSRange(location: cursorPos, length: 1))
+                    let range = NSRange(location: cursorPos, length: 1)
+                    parent.vimEngine.register = nsString.substring(with: range)
+                    textView.setSelectedRange(range)
                     textView.delete(nil)
                 }
 
             case .deleteCharBefore:
                 if cursorPos > 0 {
-                    textView.setSelectedRange(NSRange(location: cursorPos - 1, length: 1))
+                    let range = NSRange(location: cursorPos - 1, length: 1)
+                    parent.vimEngine.register = nsString.substring(with: range)
+                    textView.setSelectedRange(range)
+                    textView.delete(nil)
+                }
+
+            case .deleteChars(let count):
+                let n = max(1, count)
+                let lineRange = nsString.lineRange(for: NSRange(location: min(cursorPos, max(length - 1, 0)), length: 0))
+                var lineEnd = lineRange.location + lineRange.length
+                if lineEnd > lineRange.location, nsString.character(at: lineEnd - 1) == 0x0A { lineEnd -= 1 }
+                let end = min(cursorPos + n, lineEnd)
+                if cursorPos < end {
+                    let range = NSRange(location: cursorPos, length: end - cursorPos)
+                    parent.vimEngine.register = nsString.substring(with: range)
+                    textView.setSelectedRange(range)
+                    textView.delete(nil)
+                }
+
+            case .deleteCharsBefore(let count):
+                let n = max(1, count)
+                let lineRange = nsString.lineRange(for: NSRange(location: min(cursorPos, max(length - 1, 0)), length: 0))
+                let start = max(cursorPos - n, lineRange.location)
+                if start < cursorPos {
+                    let range = NSRange(location: start, length: cursorPos - start)
+                    parent.vimEngine.register = nsString.substring(with: range)
+                    textView.setSelectedRange(range)
                     textView.delete(nil)
                 }
 
@@ -966,6 +1096,12 @@ extension VimTextView {
             case .redo:
                 textView.undoManager?.redo()
 
+            case .jumpBackward:
+                jumpBackward(in: textView)
+
+            case .jumpForward:
+                jumpForward(in: textView)
+
             case .indent:
                 let lineRange = nsString.lineRange(for: NSRange(location: cursorPos, length: 0))
                 textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
@@ -1073,6 +1209,7 @@ extension VimTextView {
                 break
 
             case .visualDelete:
+                saveVisualSelectionIfActive()
                 textView.visualCursorOverride = nil
                 if wasInBlockMode && !lastBlockRanges.isEmpty {
                     let ranges = lastBlockRanges
@@ -1103,6 +1240,7 @@ extension VimTextView {
                 textView.updateCursorAppearance(isBlock: true)
 
             case .visualYank:
+                saveVisualSelectionIfActive()
                 textView.visualCursorOverride = nil
                 if wasInBlockMode && !lastBlockRanges.isEmpty {
                     let ranges = lastBlockRanges
@@ -1127,6 +1265,7 @@ extension VimTextView {
                 textView.updateCursorAppearance(isBlock: true)
 
             case .visualChange:
+                saveVisualSelectionIfActive()
                 textView.visualCursorOverride = nil
                 if wasInBlockMode && !lastBlockRanges.isEmpty {
                     let ranges = lastBlockRanges
@@ -1155,6 +1294,7 @@ extension VimTextView {
                 textView.updateCursorAppearance(isBlock: false)
 
             case .visualPaste(let linewise):
+                saveVisualSelectionIfActive()
                 textView.visualCursorOverride = nil
                 clearBlockHighlights(in: textView)
                 wasInBlockMode = false
@@ -1179,6 +1319,7 @@ extension VimTextView {
                 textView.updateCursorAppearance(isBlock: true)
 
             case .visualIndent:
+                saveVisualSelectionIfActive()
                 let sel = textView.selectedRange()
                 let lineRange = nsString.lineRange(for: sel)
                 var offset = 0
@@ -1194,6 +1335,7 @@ extension VimTextView {
                 textView.updateCursorAppearance(isBlock: true)
 
             case .visualOutdent:
+                saveVisualSelectionIfActive()
                 let sel = textView.selectedRange()
                 let lineRange = nsString.lineRange(for: sel)
                 var pos = lineRange.location
@@ -1219,6 +1361,7 @@ extension VimTextView {
                 textView.updateCursorAppearance(isBlock: true)
 
             case .visualBlockInsert:
+                saveVisualSelectionIfActive()
                 textView.visualCursorOverride = nil
                 if !lastBlockRanges.isEmpty {
                     let firstRange = lastBlockRanges[0]
@@ -1235,6 +1378,7 @@ extension VimTextView {
                 textView.updateCursorAppearance(isBlock: false)
 
             case .visualBlockAppend:
+                saveVisualSelectionIfActive()
                 textView.visualCursorOverride = nil
                 if !lastBlockRanges.isEmpty {
                     let firstRange = lastBlockRanges[0]
@@ -1308,59 +1452,89 @@ extension VimTextView {
                     textView.scrollRangeToVisible(range)
                 }
 
+            case .reselectVisual:
+                guard let saved = lastVisualSelection, length > 0 else {
+                    engine.statusMessage = "No previous visual selection"
+                    break
+                }
+                // Clamp the stored offsets into the live document — the text
+                // may have shrunk since the selection was made (Vim clamps too).
+                let anchor = min(max(saved.anchor, 0), length - 1)
+                let cursor = min(max(saved.cursor, 0), length - 1)
+                engine.mode = saved.mode
+                activeVisualMode = saved.mode
+                visualAnchor = anchor
+                visualCursorPos = cursor
+                textView.visualCursorOverride = cursor
+                if saved.mode == .visualBlock {
+                    updateBlockSelection(in: textView)
+                } else {
+                    updateVisualSelection(cursorAt: cursor, in: textView)
+                }
+                textView.scrollRangeToVisible(NSRange(location: cursor, length: 0))
+                textView.updateCursorAppearance(isBlock: true)
+
             case .substitute(let pattern, let replacement, let isEntireDocument, let isGlobalReplace, let isCaseInsensitive):
-                let string = textView.string
-                let nsString = string as NSString
+                let swiftString = textView.string
+                let nsString = swiftString as NSString
                 let length = nsString.length
-                
+
                 let targetRange: NSRange
                 if isEntireDocument {
                     targetRange = NSRange(location: 0, length: length)
                 } else {
                     targetRange = nsString.lineRange(for: NSRange(location: cursorPos, length: 0))
                 }
-                
-                let targetText = nsString.substring(with: targetRange)
-                
+
                 var options: NSRegularExpression.Options = []
                 if isCaseInsensitive {
                     options.insert(.caseInsensitive)
                 }
-                
+
                 guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
                     parent.vimEngine.statusMessage = "Invalid regex pattern: \(pattern)"
                     break
                 }
-                
-                let matches = regex.matches(in: targetText, options: [], range: NSRange(location: 0, length: (targetText as NSString).length))
-                guard !matches.isEmpty else {
+
+                // Collect the matches to replace, in live document coordinates.
+                // Vim substitutes the first match on each line without the `g`
+                // flag and every match with it, so scan line-by-line across the
+                // target range and keep the first (or all) per line.
+                var replacements: [(range: NSRange, text: String)] = []
+                var idx = targetRange.location
+                let scanEnd = NSMaxRange(targetRange)
+                while idx < scanEnd {
+                    let lineRange = nsString.lineRange(for: NSRange(location: idx, length: 0))
+                    let scanRange = NSIntersectionRange(lineRange, targetRange)
+                    if scanRange.length > 0 {
+                        let matches = regex.matches(in: swiftString, options: [], range: scanRange)
+                        for m in matches where m.range.length > 0 {
+                            let text = regex.replacementString(for: m, in: swiftString, offset: 0, template: replacement)
+                            replacements.append((m.range, text))
+                            if !isGlobalReplace { break }
+                        }
+                    }
+                    let next = lineRange.location + lineRange.length
+                    if next <= idx { break }
+                    idx = next
+                }
+
+                guard !replacements.isEmpty else {
                     parent.vimEngine.statusMessage = "Pattern not found: \(pattern)"
                     break
                 }
-                
-                var newText = targetText
-                var offset = 0
-                var replaceCount = 0
-                
-                for match in matches {
-                    if !isGlobalReplace && replaceCount > 0 {
-                        break
-                    }
-                    
-                    let matchRange = NSRange(location: match.range.location + offset, length: match.range.length)
-                    let matchResult = regex.replacementString(for: match, in: newText, offset: offset, template: replacement)
-                    
-                    let nsNewText = newText as NSString
-                    newText = nsNewText.replacingCharacters(in: matchRange, with: matchResult)
-                    
-                    offset += (matchResult as NSString).length - matchRange.length
-                    replaceCount += 1
+
+                // Replace back-to-front so earlier offsets stay valid, editing
+                // only the matched spans. Everything outside a match — images,
+                // bold/italic runs, other text — is left untouched (the old
+                // whole-range rebuild flattened attachments to plain text and
+                // was O(matches × document length)).
+                for (range, text) in replacements.reversed() {
+                    textView.setSelectedRange(range)
+                    textView.insertText(text, replacementRange: range)
                 }
-                
-                textView.setSelectedRange(targetRange)
-                textView.insertText(newText, replacementRange: targetRange)
-                textView.setSelectedRange(NSRange(location: targetRange.location, length: 0))
-                parent.vimEngine.statusMessage = "Replaced \(replaceCount) occurrence(s)"
+                textView.setSelectedRange(NSRange(location: min(targetRange.location, max((textView.string as NSString).length - 1, 0)), length: 0))
+                parent.vimEngine.statusMessage = "Replaced \(replacements.count) occurrence(s)"
 
             case .changeCaseMotion(let motion, let count, let upper):
                 let target = resolveMotionNTimes(motion, count: count, in: textView)
@@ -1385,6 +1559,7 @@ extension VimTextView {
                 applyCaseChange(in: range, upper: upper, cursorTo: cursorPos, in: textView)
 
             case .visualChangeCase(let upper):
+                saveVisualSelectionIfActive()
                 textView.visualCursorOverride = nil
                 clearBlockHighlights(in: textView)
                 wasInBlockMode = false
@@ -1698,9 +1873,12 @@ extension VimTextView {
                 }
             }
             
-            let startOffset = start.utf16Offset(in: string)
-            let endOffset = end.utf16Offset(in: string)
-            return NSRange(location: startOffset, length: endOffset - startOffset + 1)
+            // `end` is the index of the last character in the object. Build the
+            // range through the char *after* it so a trailing multi-UTF-16 char
+            // (an emoji, a flag) isn't cut in half — the old `endOffset + 1`
+            // assumed every character was one UTF-16 unit.
+            let endInclusive = string.index(after: end)
+            return NSRange(start..<endInclusive, in: string)
         }
 
         private func findParagraphObject(at pos: Int, in nsString: NSString, inner: Bool) -> NSRange? {
@@ -1873,6 +2051,15 @@ extension VimTextView {
             let engine = parent.vimEngine
 
             textView.visualCursorOverride = newPos
+
+            // An empty document has no line to select and no char to extend over:
+            // `length - 1` would feed -1 into lineRange (NSRangeException), and the
+            // charwise `max(selLen, 1)` would over-run the buffer. Just keep the
+            // caret at the start. (Repro: empty note, Esc, V, j.)
+            guard length > 0 else {
+                textView.setSelectedRange(NSRange(location: 0, length: 0))
+                return
+            }
 
             if engine.mode == .visualLine {
                 let anchorLineRange = nsString.lineRange(for: NSRange(location: min(visualAnchor, length - 1), length: 0))

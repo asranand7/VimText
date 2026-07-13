@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 @testable import VimTextCore
 
@@ -208,8 +209,8 @@ func testVimOperatorsTextObjectsAndRepeats() throws {
     try expectEqual(feed(engine, "y", "a", "W"), [.yankTextObject(.around(.bigWord))], "yaW should yank around WORD")
 
     engine = VimEngine()
-    try expectEqual(engine.processKey("x"), [.deleteChar], "x should delete character")
-    try expectEqual(feed(engine, "3", "X"), Array(repeating: .deleteCharBefore, count: 3), "3X should delete three chars before")
+    try expectEqual(engine.processKey("x"), [.deleteChars(1)], "x should delete a char (counted, register-filling)")
+    try expectEqual(feed(engine, "3", "X"), [.deleteCharsBefore(3)], "3X should delete three chars before as one counted run")
     try expectEqual(feed(engine, "2", "~"), [.toggleCase(2)], "2~ should toggle twice")
     try expectEqual(feed(engine, "2", "p"), Array(repeating: .pasteAfter, count: 2), "2p should paste twice")
     try expectEqual(feed(engine, "2", "P"), Array(repeating: .pasteBefore, count: 2), "2P should paste twice before")
@@ -437,15 +438,18 @@ func testNotesViewModelFiltering() throws {
     let folder = UUID()
     let older = Date(timeIntervalSince1970: 1000)
     let newer = Date(timeIntervalSince1970: 2000)
+    // modifiedAt is the sidebar sort key (v2.23.0) — pin it explicitly. The
+    // default `Date()` can tie across back-to-back inits, and Swift's sort is
+    // not stable, so relying on construction order made this test flaky.
     let notes = [
-        Note(title: "Grocery list", content: "milk and eggs", createdAt: older),
-        Note(title: "Work notes", content: "meeting agenda", folderId: folder, createdAt: newer),
-        Note(title: "Pinned idea", content: "build a thing", createdAt: older, isPinned: true)
+        Note(title: "Grocery list", content: "milk and eggs", createdAt: older, modifiedAt: older),
+        Note(title: "Work notes", content: "meeting agenda", folderId: folder, createdAt: newer, modifiedAt: newer),
+        Note(title: "Pinned idea", content: "build a thing", createdAt: older, modifiedAt: older, isPinned: true)
     ]
 
     try MainActor.assumeIsolated {
         let all = NotesViewModel.computeFilteredNotes(notes: notes, showAllNotes: true, selectedFolderId: nil, searchText: "")
-        try expectEqual(all.map(\.title), ["Pinned idea", "Work notes", "Grocery list"], "pinned first, then newest by createdAt")
+        try expectEqual(all.map(\.title), ["Pinned idea", "Work notes", "Grocery list"], "pinned first, then newest by modifiedAt")
 
         let inFolder = NotesViewModel.computeFilteredNotes(notes: notes, showAllNotes: false, selectedFolderId: folder, searchText: "")
         try expectEqual(inFolder.map(\.title), ["Work notes"], "folder filter keeps only that folder")
@@ -654,6 +658,198 @@ private func makeVimRig(_ text: String) -> (VimEngine, VimNSTextView, VimTextVie
         }
     }
     return (engine, textView, coordinator, press)
+}
+
+/// Synthesizes a real Control-modified keyDown the way a physical keyboard
+/// delivers it: `characters` carries the raw ASCII control code (Ctrl-R =
+/// U+0012), while the base key is only in `charactersIgnoringModifiers`. This
+/// is exactly the case that used to route to nowhere.
+@MainActor
+private func pressControl(_ textView: VimNSTextView, base: String, code: UInt16) {
+    let scalar = base.uppercased().unicodeScalars.first!.value
+    let controlChar = String(UnicodeScalar(UInt8(scalar % 32)))
+    if let event = NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: .control, timestamp: 0,
+        windowNumber: 0, context: nil, characters: controlChar,
+        charactersIgnoringModifiers: base, isARepeat: false, keyCode: code
+    ) { textView.keyDown(with: event) }
+}
+
+/// Regression for "Ctrl-[ escape / Ctrl-R / Ctrl-O / Ctrl-I dead on real
+/// keyboards": Control combos arrive as raw control codes in `characters`, so
+/// the keyDown router must fall back to `charactersIgnoringModifiers`. Here we
+/// assert the insert-mode Ctrl-[ path (its check used the raw `characters` and
+/// never matched); the general normal-mode control path is exercised by the
+/// jump-list test (Ctrl-O/Ctrl-I) and the engine-level Ctrl-R test.
+func testVimControlKeyRoutingViaKeyDown() throws {
+    try MainActor.assumeIsolated {
+        // Ctrl-[ must leave insert mode exactly like Escape. Its raw control
+        // code is U+001B (ESC), so a `characters == "["` check never fired.
+        let (eng, tv, coord, press) = makeVimRig("abc")
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        press("i")
+        try expect(eng.mode == .insert, "i enters insert mode")
+        pressControl(tv, base: "[", code: 33)
+        try expect(eng.mode == .normal, "Ctrl-[ must return to normal mode from insert")
+        withExtendedLifetime(coord) {}
+    }
+}
+
+/// The Ctrl-O / Ctrl-I jump list: a jump command (here `G`) records the
+/// pre-jump position; Ctrl-O returns to it and Ctrl-I goes forward again.
+func testVimJumpList() throws {
+    try MainActor.assumeIsolated {
+        let (_, tv, coord, press) = makeVimRig("one\ntwo\nthree\nfour\nfive")
+        tv.setSelectedRange(NSRange(location: 0, length: 0)) // line 1
+        press("G")
+        let atEnd = tv.selectedRange().location
+        try expect(atEnd > 0, "G moves off the first line")
+
+        pressControl(tv, base: "o", code: 31) // Ctrl-O
+        try expectEqual(tv.selectedRange().location, 0, "Ctrl-O returns to the pre-jump position")
+
+        pressControl(tv, base: "i", code: 34) // Ctrl-I
+        try expectEqual(tv.selectedRange().location, atEnd, "Ctrl-I moves forward to the jump target again")
+
+        // Ordinary j/k must NOT create jumps: after Ctrl-O to top, a j then
+        // Ctrl-O still has an empty back stack (no new jump was recorded).
+        pressControl(tv, base: "o", code: 31) // back stack now empty
+        press("j")
+        pressControl(tv, base: "o", code: 31)
+        try expectEqual(tv.selectedRange().location, tv.selectedRange().location,
+                        "j is not a jump; Ctrl-O with an empty back stack is a no-op (no crash)")
+        withExtendedLifetime(coord) {}
+    }
+}
+
+/// Regression for "visual mode on an empty note crashes": V then a motion must
+/// not feed a negative location into lineRange.
+func testVimVisualOnEmptyNote() throws {
+    try MainActor.assumeIsolated {
+        let (eng, tv, coord, press) = makeVimRig("")
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        press("V")
+        press("j")
+        try expect(eng.mode == .visualLine, "V-LINE holds on an empty note without crashing")
+        press("l") // charwise-style extend guard on empty doc too
+        withExtendedLifetime(coord) {}
+    }
+}
+
+/// `x` / `X` must fill the register (so `xp` transposes and `3x` then `p`
+/// restores the whole run), and word text objects must not split an emoji.
+func testVimCharDeleteRegisterAndEmojiObject() throws {
+    try MainActor.assumeIsolated {
+        // x sets the register; xp transposes.
+        let (eng, tv, coord, press) = makeVimRig("abcde")
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        press("x")
+        try expectEqual(eng.register, "a", "x yanks the deleted char into the register")
+        try expectEqual(tv.string, "bcde", "x deletes the char")
+        press("p")
+        try expectEqual(tv.string, "bacde", "xp transposes the two characters")
+
+        // 3x yanks the whole run.
+        let (eng2, tv2, coord2, press2) = makeVimRig("abcde")
+        tv2.setSelectedRange(NSRange(location: 0, length: 0))
+        press2("3")
+        press2("x")
+        try expectEqual(tv2.string, "de", "3x deletes three chars")
+        try expectEqual(eng2.register, "abc", "3x yanks the whole run into the register")
+
+        // X yanks the char before the cursor.
+        let (eng3, tv3, coord3, press3) = makeVimRig("abcde")
+        tv3.setSelectedRange(NSRange(location: 3, length: 0)) // on 'd'
+        press3("X")
+        try expectEqual(tv3.string, "abde", "X deletes the char before the cursor")
+        try expectEqual(eng3.register, "c", "X yanks the deleted char")
+
+        // diw on an emoji deletes the whole grapheme, not half a surrogate pair.
+        let (_, tv4, coord4, press4) = makeVimRig("a😀b")
+        tv4.setSelectedRange(NSRange(location: 1, length: 0)) // on the emoji
+        press4("d")
+        press4("i")
+        press4("w")
+        try expectEqual(tv4.string, "ab", "diw on an emoji removes the whole emoji, leaving valid text")
+        withExtendedLifetime((coord, coord2, coord3, coord4)) {}
+    }
+}
+
+/// `gv` reselects the last visual selection — same range and same visual
+/// sub-mode — whether it ended via Esc or via an operator like `y`.
+func testVimGvReselect() throws {
+    try MainActor.assumeIsolated {
+        // Charwise: select "one" (v + 2l), yank — gv must re-select it.
+        let (eng, tv, coord, press) = makeVimRig("one\ntwo\nthree")
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        press("v")
+        press("ll")
+        try expectEqual(tv.selectedRange(), NSRange(location: 0, length: 3), "v2l selects the first word")
+        press("y")
+        try expect(eng.mode == .normal, "y leaves visual mode")
+        try expectEqual(tv.selectedRange().length, 0, "selection collapsed after yank")
+        press("gv")
+        try expect(eng.mode == .visual, "gv re-enters charwise visual mode")
+        try expectEqual(tv.selectedRange(), NSRange(location: 0, length: 3), "gv restores the exact range")
+
+        // Motions keep extending from the restored selection.
+        press("j")
+        try expect(tv.selectedRange().length > 3, "motion after gv extends the restored selection")
+
+        // V-LINE via Esc: select line 2, Esc, gv → V-LINE again, same line.
+        let (eng2, tv2, coord2, press2) = makeVimRig("one\ntwo\nthree")
+        tv2.setSelectedRange(NSRange(location: 4, length: 0)) // on "two"
+        press2("V")
+        try expectEqual(tv2.selectedRange(), NSRange(location: 4, length: 4), "V selects line 2 incl. newline")
+        // Esc arrives with keyCode 53 on real keyboards.
+        if let esc = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, characters: "\u{1B}",
+            charactersIgnoringModifiers: "\u{1B}", isARepeat: false, keyCode: 53
+        ) { tv2.keyDown(with: esc) }
+        try expect(eng2.mode == .normal, "Esc leaves V-LINE")
+        press2("gv")
+        try expect(eng2.mode == .visualLine, "gv restores V-LINE, not charwise")
+        try expectEqual(tv2.selectedRange(), NSRange(location: 4, length: 4), "gv restores the line selection")
+
+        // No previous selection → friendly no-op.
+        let (eng3, tv3, coord3, press3) = makeVimRig("abc")
+        tv3.setSelectedRange(NSRange(location: 0, length: 0))
+        press3("gv")
+        try expect(eng3.mode == .normal, "gv with no history stays in normal mode")
+        try expectEqual(eng3.statusMessage, "No previous visual selection", "gv with no history reports it")
+        withExtendedLifetime((coord, coord2, coord3)) {}
+    }
+}
+
+/// `:s` / `:%s` must edit only the matched spans (preserving surrounding
+/// formatting) and honor Vim's per-line first-match semantics without `g`.
+func testVimSubstitutePerLineAndPreservesFormatting() throws {
+    try MainActor.assumeIsolated {
+        // Non-global %s replaces the first match on every line.
+        let (eng, tv, coord, _) = makeVimRig("aa\naa")
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        coord.executeActions(eng.executeCommand("%s/a/X/"))
+        try expectEqual(tv.string, "Xa\nXa", "%s without g replaces the first match on each line")
+
+        // Global %s replaces every match.
+        let (eng2, tv2, coord2, _) = makeVimRig("aa\naa")
+        tv2.setSelectedRange(NSRange(location: 0, length: 0))
+        coord2.executeActions(eng2.executeCommand("%s/a/X/g"))
+        try expectEqual(tv2.string, "XX\nXX", "%s with g replaces every match")
+
+        // Formatting outside the matched span survives the substitution.
+        let (eng3, tv3, coord3, _) = makeVimRig("foo bar")
+        let boldFont = NSFontManager.shared.convert(NSFont.systemFont(ofSize: 14), toHaveTrait: .boldFontMask)
+        tv3.textStorage?.addAttribute(.font, value: boldFont, range: NSRange(location: 4, length: 3)) // "bar"
+        tv3.setSelectedRange(NSRange(location: 0, length: 0))
+        coord3.executeActions(eng3.executeCommand("s/foo/baz/"))
+        try expectEqual(tv3.string, "baz bar", "substitute replaces the match")
+        let f = tv3.textStorage?.attribute(.font, at: 4, effectiveRange: nil) as? NSFont
+        try expect(f.map { NSFontManager.shared.traits(of: $0).contains(.boldFontMask) } ?? false,
+                   "bold run outside the match is preserved (not flattened to plain text)")
+        withExtendedLifetime((coord, coord2, coord3)) {}
+    }
 }
 
 /// Regression for "yy/p on the file's last line pastes inline": the final line
@@ -1245,6 +1441,49 @@ func testMigrateStoreCopiesStore() throws {
     }
 }
 
+func testQuickCaptureHelpers() throws {
+    // Title rule matches the editor's: first non-empty, non-image line, capped.
+    try expectEqual(QuickCapture.title(from: "Buy milk\nand eggs"), "Buy milk",
+                    "title is the first line")
+    try expectEqual(QuickCapture.title(from: "\n\n  Second line is first non-empty  \nbody"),
+                    "Second line is first non-empty",
+                    "leading empty lines and whitespace are skipped/trimmed")
+    try expectEqual(QuickCapture.title(from: String(repeating: "a", count: 150)).count, 100,
+                    "title caps at 100 characters")
+    try expectEqual(QuickCapture.title(from: ""), "", "empty text yields empty title")
+
+    // NSEvent → Carbon modifier conversion, including all four at once.
+    let all: NSEvent.ModifierFlags = [.control, .option, .shift, .command]
+    let allCarbon = QuickCaptureHotKey.carbonModifiers(from: all)
+    try expectEqual(allCarbon, UInt32(controlKey | optionKey | shiftKey | cmdKey),
+                    "all four modifiers convert to the full Carbon mask")
+    try expectEqual(QuickCaptureHotKey.carbonModifiers(from: [.control, .option]),
+                    UInt32(controlKey | optionKey),
+                    "ctrl+option converts")
+
+    // Display strings use macOS symbol order ⌃⌥⇧⌘ and named special keys.
+    try expectEqual(
+        QuickCaptureHotKey.description(keyCode: QuickCaptureHotKey.defaultKeyCode,
+                                       carbonModifiers: QuickCaptureHotKey.defaultModifiers),
+        "⌃⌥Space",
+        "default shortcut renders as ⌃⌥Space")
+    try expectEqual(
+        QuickCaptureHotKey.description(keyCode: UInt32(kVK_Space), carbonModifiers: allCarbon),
+        "⌃⌥⇧⌘Space",
+        "hyper-style combo renders all four symbols in order")
+
+    // Bare keys are rejected; F-keys and modified keys are accepted.
+    try expect(!QuickCaptureHotKey.isValidShortcut(keyCode: UInt32(kVK_ANSI_A), carbonModifiers: 0),
+               "a bare letter is not a valid global shortcut")
+    try expect(!QuickCaptureHotKey.isValidShortcut(keyCode: UInt32(kVK_ANSI_A),
+                                                   carbonModifiers: UInt32(shiftKey)),
+               "shift alone does not validate")
+    try expect(QuickCaptureHotKey.isValidShortcut(keyCode: UInt32(kVK_F6), carbonModifiers: 0),
+               "an F-key alone is valid")
+    try expect(QuickCaptureHotKey.isValidShortcut(keyCode: UInt32(kVK_ANSI_A), carbonModifiers: allCarbon),
+               "ctrl+option+shift+cmd+letter is valid")
+}
+
 let tests: [(String, () throws -> Void)] = [
     ("Note model derived text", testNoteModelDerivedText),
     ("Editor preferences font sizing", testEditorPreferencesFontSizing),
@@ -1272,6 +1511,12 @@ let tests: [(String, () throws -> Void)] = [
     ("Vim visual count G/gg extends selection", testVimVisualCountGotoLine),
     ("Vim G/gg first non-blank landing", testVimGotoLineFirstNonBlank),
     ("Vim ~ count stops at line end", testVimToggleCaseCountStopsAtLineEnd),
+    ("Vim control-key routing (Ctrl-[/Ctrl-R) via keyDown", testVimControlKeyRoutingViaKeyDown),
+    ("Vim jump list (Ctrl-O/Ctrl-I)", testVimJumpList),
+    ("Vim visual mode on empty note", testVimVisualOnEmptyNote),
+    ("Vim x/X register and emoji text objects", testVimCharDeleteRegisterAndEmojiObject),
+    ("Vim gv reselect last visual selection", testVimGvReselect),
+    ("Vim substitute per-line + preserves formatting", testVimSubstitutePerLineAndPreservesFormatting),
     ("Code-block scoped restyle fast paths", testCodeBlockScopedRestyle),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
@@ -1283,7 +1528,8 @@ let tests: [(String, () throws -> Void)] = [
     ("List marker detection (bullets/checkboxes)", testListMarkerDetection),
     ("Storage pinned-state persistence", testStoragePinnedStatePersists),
     ("Storage migration to a new location", testMigrateStoreCopiesStore),
-    ("Search normalization (fold + lowercase)", testSearchNormalization)
+    ("Search normalization (fold + lowercase)", testSearchNormalization),
+    ("Quick Capture helpers (title/hotkey)", testQuickCaptureHelpers)
 ]
 
 do {

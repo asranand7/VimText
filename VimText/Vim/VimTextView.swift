@@ -194,7 +194,10 @@ struct VimTextView: NSViewRepresentable {
             context.coordinator.lastFontSize = font.pointSize
             context.coordinator.lastFontName = font.fontName
             textView.applyBaseFont(font)
-            textView.restyleCodeBlocks(baseFont: font)
+            // Force a full restyle: applyBaseFont just wiped the mono runs, but
+            // no text changed, so the scoped fast paths would skip the blocks
+            // and leave them proportional at the new size.
+            textView.restyleCodeBlocks(baseFont: font, force: true)
             var attrs = textView.typingAttributes
             attrs[.font] = font
             textView.typingAttributes = attrs
