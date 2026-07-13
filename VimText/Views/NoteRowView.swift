@@ -108,7 +108,7 @@ struct NoteRowView: View {
 
                     if let onCopyPath {
                         hoverIconButton(
-                            icon: didCopy ? "checkmark" : "doc.on.doc",
+                            icon: didCopy ? "checkmark" : "square.on.square",
                             tint: didCopy ? theme.accent : theme.secondaryText,
                             help: "Copy note file path"
                         ) {

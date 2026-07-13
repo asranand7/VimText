@@ -89,7 +89,7 @@ class CommandPaletteState: ObservableObject {
                     }
                 }
             })
-            commands.append(PaletteCommand(id: "copy_note_path", name: "Copy Note File Path", icon: "doc.on.doc", category: "Notes") {
+            commands.append(PaletteCommand(id: "copy_note_path", name: "Copy Note File Path", icon: "square.on.square", category: "Notes") {
                 Task { @MainActor in
                     if let note = viewModel.selectedNote {
                         let pb = NSPasteboard.general
