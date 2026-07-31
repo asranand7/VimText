@@ -1269,6 +1269,137 @@ func testMarkdownHeadingPrefixFolding() throws {
     }
 }
 
+/// The per-keystroke heading pass is incremental (`refreshHeadingFoldsForEdit`):
+/// it re-scans only the edited paragraph and shifts the headings below it,
+/// because a full-document scan per keystroke costs ~16 ms on a large note. The
+/// folded ranges must stay byte-identical to what the full scan produces, or
+/// typing above a heading would hide the wrong characters until the next pause.
+func testIncrementalHeadingFoldsMatchFullScan() throws {
+    try MainActor.assumeIsolated {
+        let font = NSFont.systemFont(ofSize: 14)
+        let text = "intro line\n# One\nbody\n## Two\nmore body\n### Three\ntail"
+        let (_, tv, coord, _) = makeVimRig(text)
+        tv.textContainer?.replaceLayoutManager(FoldingLayoutManager())
+        tv.textStorage?.delegate = tv
+        tv.restyleMarkdown(baseFont: font, force: true)
+
+        let lm = tv.layoutManager as? FoldingLayoutManager
+        /// The incremental result, then the authoritative full scan for the
+        /// same text — they must agree exactly.
+        func expectMatchesFullScan(_ what: String) throws {
+            let incremental = tv.detectedHeadings
+            let foldedIncrementally = lm?.headingPrefixes ?? []
+            tv.refreshHeadingFolds() // full document scan
+            try expectEqual(incremental, tv.detectedHeadings,
+                            "incremental heading scan matches the full scan after \(what)")
+            try expectEqual(foldedIncrementally, lm?.headingPrefixes ?? [],
+                            "hidden prefixes match the full scan after \(what)")
+        }
+
+        // Park the caret on the first line so no heading is unfolded, and let
+        // the folds settle.
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        tv.refreshHeadingFolds()
+        try expectEqual(tv.detectedHeadings.count, 3, "three headings to start")
+
+        // 1. Insert above every heading — they all shift by the same delta.
+        tv.insertText("added\n", replacementRange: NSRange(location: 0, length: 0))
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        tv.applyHeadingFolds()
+        try expect(tv.detectedHeadings.allSatisfy { heading in
+            (tv.string as NSString).substring(with: heading.prefixRange).allSatisfy { $0 == "#" || $0 == " " }
+        }, "every folded prefix still covers only '#' and spaces after a shift edit")
+        try expectMatchesFullScan("an insert above all headings")
+
+        // 2. Delete in the middle — headings below shift back.
+        let midLoc = (tv.string as NSString).range(of: "more body").location
+        tv.textStorage?.replaceCharacters(in: NSRange(location: midLoc, length: 5), with: "")
+        tv.didChangeText()
+        try expectMatchesFullScan("a delete between headings")
+
+        // 3. A line gains heading-ness mid-document.
+        let bodyLoc = (tv.string as NSString).range(of: "body\n").location
+        tv.setSelectedRange(NSRange(location: bodyLoc, length: 0))
+        tv.insertText("#### ", replacementRange: NSRange(location: bodyLoc, length: 0))
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        tv.applyHeadingFolds()
+        try expectEqual(tv.detectedHeadings.count, 4, "the typed prefix adds a heading")
+        try expectMatchesFullScan("a line gaining a prefix")
+
+        // 4. …and loses it again.
+        tv.textStorage?.replaceCharacters(in: NSRange(location: bodyLoc, length: 5), with: "")
+        tv.didChangeText()
+        try expectEqual(tv.detectedHeadings.count, 3, "removing the prefix drops the heading")
+        try expectMatchesFullScan("a line losing its prefix")
+
+        // 5. Joining a heading line into its predecessor (deleting the newline
+        //    before it) must un-heading it — the merged paragraph is re-scanned.
+        let oneLoc = (tv.string as NSString).range(of: "# One").location
+        tv.textStorage?.replaceCharacters(in: NSRange(location: oneLoc - 1, length: 1), with: "")
+        tv.didChangeText()
+        try expectMatchesFullScan("joining a heading onto the line above")
+
+        // 6. A multi-line paste in the middle.
+        let tailLoc = (tv.string as NSString).range(of: "tail").location
+        tv.setSelectedRange(NSRange(location: tailLoc, length: 0))
+        tv.insertText("alpha\n## Pasted\nbeta\n", replacementRange: NSRange(location: tailLoc, length: 0))
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        tv.applyHeadingFolds()
+        try expectMatchesFullScan("a multi-line paste")
+        withExtendedLifetime(coord) {}
+    }
+}
+
+/// The typing-pause restyle skips its whole-document ``` scan when the edit
+/// can't have changed the fence structure (~16 ms per pause on a large note,
+/// paid even by notes with no fences). The resulting `codeBlockRanges` must
+/// still equal what a fresh scan would produce, including when a fence is typed
+/// or deleted — those cases have to fall back to the scan.
+func testCodeBlockScanSkippedWhenStructureIntact() throws {
+    try MainActor.assumeIsolated {
+        let font = NSFont.systemFont(ofSize: 14)
+        let (_, tv, coord, _) = makeVimRig("intro\n```\nlet x = 1\n```\ntail\n```\ntwo\n```\nend")
+        tv.textStorage?.delegate = tv
+        tv.restyleMarkdown(baseFont: font, force: true)
+        try expectEqual(tv.codeBlockRanges.count, 2, "two fenced blocks to start")
+
+        /// Restyle, then check the ranges against an independent fresh scan.
+        func expectMatchesFreshScan(_ what: String) throws {
+            tv.restyleMarkdown(baseFont: font)
+            try expectEqual(tv.codeBlockRanges, tv.computeCodeBlockRanges(),
+                            "code block ranges match a fresh scan after \(what)")
+        }
+
+        // Typing above both blocks shifts them without a re-scan.
+        tv.insertText("added\n", replacementRange: NSRange(location: 0, length: 0))
+        try expectMatchesFreshScan("an insert above both blocks")
+
+        // Typing between the blocks shifts only the second.
+        let tailLoc = (tv.string as NSString).range(of: "tail").location
+        tv.insertText("xx", replacementRange: NSRange(location: tailLoc, length: 0))
+        try expectMatchesFreshScan("an insert between blocks")
+
+        // Deleting between the blocks.
+        tv.textStorage?.replaceCharacters(in: NSRange(location: tailLoc, length: 2), with: "")
+        tv.didChangeText()
+        try expectMatchesFreshScan("a delete between blocks")
+
+        // A newly typed fence pair must be picked up (forces the scan).
+        let endLoc = (tv.string as NSString).range(of: "end").location
+        tv.insertText("```\nthree\n```\n", replacementRange: NSRange(location: endLoc, length: 0))
+        try expectMatchesFreshScan("a newly typed fence pair")
+        try expectEqual(tv.codeBlockRanges.count, 3, "the typed fence pair became a third block")
+
+        // Breaking an existing fence must drop its block (edit inside a block).
+        let firstFence = (tv.string as NSString).range(of: "```").location
+        tv.textStorage?.replaceCharacters(in: NSRange(location: firstFence, length: 1), with: "")
+        tv.didChangeText()
+        try expectMatchesFreshScan("breaking an opening fence")
+        try expectEqual(tv.codeBlockRanges.count, 2, "the broken block is gone")
+        withExtendedLifetime(coord) {}
+    }
+}
+
 /// Regression for "; / , after t/T gets stuck": repeating a till motion must
 /// step over the adjacent target so the cursor advances each time.
 func testVimTillRepeatAdvances() throws {
@@ -1849,6 +1980,8 @@ let tests: [(String, () throws -> Void)] = [
     ("Code-block scoped restyle fast paths", testCodeBlockScopedRestyle),
     ("Markdown heading styling", testMarkdownHeadingStyling),
     ("Markdown heading prefix folding", testMarkdownHeadingPrefixFolding),
+    ("Incremental heading folds match full scan", testIncrementalHeadingFoldsMatchFullScan),
+    ("Code-block scan skipped when structure intact", testCodeBlockScanSkippedWhenStructureIntact),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
     ("Command Palette search matching", testCommandPaletteSearchMatching),

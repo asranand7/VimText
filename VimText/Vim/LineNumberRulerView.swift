@@ -155,6 +155,18 @@ final class LineNumberRulerView: NSRulerView {
         lineAnchor = nil
     }
 
+    /// Drops the anchor only if it sits *after* `location`. A line number is
+    /// `1 + newlines[0, offset)`, so an edit at or after the anchor's offset
+    /// cannot change the anchor's line — and while typing, the anchor (the
+    /// first visible line) is almost always at or above the caret, so this
+    /// keeps the gutter's O(scroll-delta) walk instead of falling back to
+    /// counting the whole document from 0 on every keystroke.
+    func invalidateLineCache(after location: Int) {
+        if let anchor = lineAnchor, anchor.charIndex > location {
+            lineAnchor = nil
+        }
+    }
+
     private func lineNumber(at characterIndex: Int, in nsString: NSString) -> Int {
         let target = min(max(characterIndex, 0), nsString.length)
         guard target > 0 else { return 1 }

@@ -17,6 +17,23 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     /// structure didn't change, instead of rewriting the whole document's
     /// attributes on every typing pause in a note that contains code blocks.
     private var editedRangeSinceRestyle: NSRange?
+    /// Net document-length change across the edits accumulated in
+    /// `editedRangeSinceRestyle`. Together they say "everything outside this
+    /// region is unchanged, and everything after it moved by exactly this
+    /// much" — which is what lets the fence scan be skipped (see
+    /// `codeBlockRangesShiftedIfStructureIntact`).
+    private var lengthDeltaSinceRestyle = 0
+    /// The same accumulation on the heading cadence. Headings are refreshed per
+    /// keystroke and code blocks only on the typing pause, so the two consume
+    /// their edits at different times and can't share one accumulator.
+    private var editedRangeSinceHeadingScan: NSRange?
+    private var lengthDeltaSinceHeadingScan = 0
+    /// Whether a full scan has ever established a baseline for each of the two.
+    /// Until then the incremental paths have nothing trustworthy to shift — the
+    /// storage can be filled before the delegate is wired, which is
+    /// indistinguishable from "no edits since the last scan".
+    private var hasScannedCodeBlocks = false
+    private var hasScannedHeadings = false
     private var copyButtons: [NSButton] = []
     private var blockCursorLayer: CALayer?
     /// Set while a coalesced block-cursor redraw is already queued for this
@@ -359,15 +376,78 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     /// Heading prefixes in the document, recomputed when content changes.
     private(set) var detectedHeadings: [HeadingPrefix] = []
 
-    /// Re-detects `#{1,6} ` prefixes, then applies them. Cheap enough for the
-    /// per-keystroke path: it hops between `#` occurrences rather than walking
-    /// every line, so a note without hashes costs one failed search.
+    /// Re-detects every `#{1,6} ` prefix in the document, then applies them.
+    /// This is the authoritative pass — note open, font/theme change, and the
+    /// deferred typing-pause pass — and it walks the whole document, so it must
+    /// not run per keystroke (see `refreshHeadingFoldsForEdit`).
     func refreshHeadingFolds() {
+        detectedHeadings = scanHeadings(in: NSRange(location: 0, length: (string as NSString).length))
+        hasScannedHeadings = true
+        editedRangeSinceHeadingScan = nil
+        lengthDeltaSinceHeadingScan = 0
+        applyHeadingFolds()
+    }
+
+    /// Per-keystroke heading maintenance. Heading-ness is a line-local property
+    /// and the folds are plain character ranges, so an edit can only do two
+    /// things: change the headings on the lines it touched, and move every
+    /// heading after it by the edit's length delta. Both are derivable from the
+    /// accumulated edit region — so this re-scans one paragraph and shifts an
+    /// array, where a full `refreshHeadingFolds()` scanned the entire document
+    /// on every keystroke (16 ms on a 2.5 MB note, i.e. slower than key repeat).
+    /// The deferred pass still does the full scan, so any drift self-corrects
+    /// on the next typing pause.
+    func refreshHeadingFoldsForEdit() {
+        guard hasScannedHeadings else { refreshHeadingFolds(); return }
+        guard let edited = editedRangeSinceHeadingScan else {
+            // No character edit since the last scan (an attribute-only pass):
+            // the ranges still line up, only the caret may have moved.
+            applyHeadingFolds()
+            return
+        }
+        let delta = lengthDeltaSinceHeadingScan
+        editedRangeSinceHeadingScan = nil
+        lengthDeltaSinceHeadingScan = 0
+
         let ns = string as NSString
-        let length = ns.length
+        let docRange = NSRange(location: 0, length: ns.length)
+        // Re-scan whole paragraphs: a heading is defined by its line, so a line
+        // the edit touched anywhere must be re-decided in full.
+        let region = ns.paragraphRange(for: clamped(edited, to: docRange))
+        // The same region in pre-edit coordinates. Text before it is untouched
+        // (every accumulated edit starts at or after `region.location`), and
+        // text after it moved by exactly `delta`.
+        let oldStart = region.location
+        let oldEnd = max(oldStart, NSMaxRange(region) - delta)
+
+        var updated: [HeadingPrefix] = []
+        updated.reserveCapacity(detectedHeadings.count + 1)
+        for heading in detectedHeadings where NSMaxRange(heading.lineRange) <= oldStart {
+            updated.append(heading)
+        }
+        updated.append(contentsOf: scanHeadings(in: region))
+        for heading in detectedHeadings where heading.lineRange.location >= oldEnd {
+            updated.append(HeadingPrefix(
+                lineRange: NSRange(location: heading.lineRange.location + delta,
+                                   length: heading.lineRange.length),
+                prefixRange: NSRange(location: heading.prefixRange.location + delta,
+                                     length: heading.prefixRange.length)
+            ))
+        }
+        detectedHeadings = updated
+        applyHeadingFolds()
+    }
+
+    /// Every heading prefix on a line starting inside `region`, in document
+    /// order. Hops between `#` occurrences rather than walking every line, so a
+    /// region without hashes costs one failed search.
+    private func scanHeadings(in region: NSRange) -> [HeadingPrefix] {
+        let ns = string as NSString
+        let region = NSIntersectionRange(region, NSRange(location: 0, length: ns.length))
+        let end = NSMaxRange(region)
         var found: [HeadingPrefix] = []
-        var search = NSRange(location: 0, length: length)
-        while search.location < length {
+        var search = region
+        while search.location < end {
             let hash = ns.range(of: "#", options: [], range: search)
             if hash.location == NSNotFound { break }
             var lineStart = 0
@@ -387,11 +467,10 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
                 ))
             }
             let next = max(lineEnd, hash.location + 1)
-            guard next < length else { break }
-            search = NSRange(location: next, length: length - next)
+            guard next < end else { break }
+            search = NSRange(location: next, length: end - next)
         }
-        detectedHeadings = found
-        applyHeadingFolds()
+        return found
     }
 
     /// The `#`-and-whitespace range to hide on a heading line, or nil when the
@@ -685,6 +764,7 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     /// blocks are styled — a lone opening fence stays plain text so it can never
     /// trap the cursor in an unbounded block.
     func computeCodeBlockRanges() -> [NSRange] {
+        hasScannedCodeBlocks = true
         let ns = string as NSString
         let len = ns.length
         var ranges: [NSRange] = []
@@ -718,6 +798,44 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         return ranges
     }
 
+    /// The current `codeBlockRanges` moved to account for `edited`, or nil when
+    /// the edit could have changed which fences pair into blocks (in which case
+    /// the caller must re-scan).
+    ///
+    /// A fence can only appear where a backtick was typed, and can only be
+    /// destroyed by editing a line that is part of an existing block — a block's
+    /// range spans its opening fence line through its closing fence line, so
+    /// both are covered by the intersection test. The one fence that lives
+    /// outside every block is the trailing unpaired one, and removing it leaves
+    /// the earlier pairings (and therefore the block ranges) untouched.
+    private func codeBlockRangesShiftedIfStructureIntact(edited: NSRange?, delta: Int) -> [NSRange]? {
+        // Nothing to shift until a scan has established a baseline: content can
+        // reach the storage before the delegate is wired (test rigs, and any
+        // future load path), and an untracked load looks exactly like "no edits".
+        guard hasScannedCodeBlocks else { return nil }
+        // No character edit since the last scan: the fences can't have moved.
+        guard let edited else { return codeBlockRanges }
+        let ns = string as NSString
+        let docRange = NSRange(location: 0, length: ns.length)
+        let region = ns.paragraphRange(for: clamped(edited, to: docRange))
+        // A new backtick anywhere in the edited text — re-scan.
+        if region.length > 0,
+           ns.range(of: "`", options: [], range: region).location != NSNotFound { return nil }
+        // The edited region in pre-edit coordinates (see accumulateEdit).
+        let oldStart = region.location
+        let oldEnd = max(oldStart, NSMaxRange(region) - delta)
+        // Every known block must lie entirely outside it, or its fences may
+        // have been edited away.
+        for block in codeBlockRanges {
+            guard NSMaxRange(block) <= oldStart || block.location >= oldEnd else { return nil }
+        }
+        return codeBlockRanges.map { block in
+            block.location >= oldEnd
+                ? NSRange(location: block.location + delta, length: block.length)
+                : block
+        }
+    }
+
     func isLocationInCodeBlock(_ loc: Int) -> Bool {
         for r in codeBlockRanges where NSLocationInRange(loc, r) { return true }
         return false
@@ -743,9 +861,16 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     /// below would otherwise leave them at the base font.
     func restyleMarkdown(baseFont: NSFont, force: Bool = false) {
         guard let textStorage = textStorage else { return }
-        let ranges = computeCodeBlockRanges()
         let edited = editedRangeSinceRestyle
+        let delta = lengthDeltaSinceRestyle
         editedRangeSinceRestyle = nil
+        lengthDeltaSinceRestyle = 0
+        // Scanning the whole document for ``` costs ~16 ms on a 2.5 MB note and
+        // ran on every typing pause even in notes with no fences at all. When
+        // the edit provably can't have changed the fence structure, the current
+        // ranges just move with the text instead.
+        let ranges = (force ? nil : codeBlockRangesShiftedIfStructureIntact(edited: edited, delta: delta))
+            ?? computeCodeBlockRanges()
 
         if force {
             codeBlockRanges = ranges
@@ -1972,9 +2097,10 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         super.didChangeText()
         invalidateSearchCaches()
         liveRestyleHeadingAtCaret()
-        refreshHeadingFolds()
+        refreshHeadingFoldsForEdit()
+        // The gutter's line-count anchor was already narrowed (or kept) by the
+        // storage delegate for this edit — here it just needs a repaint.
         if let ruler = enclosingScrollView?.verticalRulerView as? LineNumberRulerView {
-            ruler.invalidateLineCache()
             ruler.needsDisplay = true
         }
         if let engine = vimEngine, !engine.mode.isEditing {
@@ -2394,26 +2520,47 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 // MARK: - NSTextStorageDelegate — edited-range tracking for scoped restyles
 
 extension VimNSTextView: NSTextStorageDelegate {
-    /// Accumulates the union of character edits since the last code-block
-    /// restyle (wired as the storage's delegate in makeNSView). Attribute-only
-    /// edits (theme/color/font passes, including the restyle itself) don't
-    /// carry `.editedCharacters` and are ignored. When an edit lands before
-    /// the accumulated range, the stored range shifts by the length delta —
-    /// approximate, but only ever used to decide how much to re-normalize, and
-    /// a structural fence change always falls back to the full rewrite anyway.
+    /// Accumulates the union of character edits (and the net length change)
+    /// since the last code-block restyle and the last heading scan (wired as
+    /// the storage's delegate in makeNSView). Attribute-only edits
+    /// (theme/color/font passes, including the restyles themselves) don't carry
+    /// `.editedCharacters` and are ignored.
+    ///
+    /// Also lets the line-number gutter keep its line-count anchor when the
+    /// edit landed after it — the anchor counts newlines *before* its offset,
+    /// so text changed at or after that offset can't invalidate it, and
+    /// dropping it outright made every keystroke re-count the document from 0.
     func textStorage(_ textStorage: NSTextStorage,
                      didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange,
                      changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters) else { return }
-        if let existing = editedRangeSinceRestyle {
-            var adjusted = existing
-            if editedRange.location <= existing.location {
-                adjusted.location = max(0, existing.location + delta)
-            }
-            editedRangeSinceRestyle = NSUnionRange(adjusted, editedRange)
-        } else {
-            editedRangeSinceRestyle = editedRange
+        (editedRangeSinceRestyle, lengthDeltaSinceRestyle) = Self.accumulateEdit(
+            union: editedRangeSinceRestyle, netDelta: lengthDeltaSinceRestyle,
+            edit: editedRange, delta: delta
+        )
+        (editedRangeSinceHeadingScan, lengthDeltaSinceHeadingScan) = Self.accumulateEdit(
+            union: editedRangeSinceHeadingScan, netDelta: lengthDeltaSinceHeadingScan,
+            edit: editedRange, delta: delta
+        )
+        (enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?
+            .invalidateLineCache(after: editedRange.location)
+    }
+
+    /// Folds one more edit into an accumulated (union, net delta) pair, keeping
+    /// the union in *current* document coordinates: an edit before it shifts it
+    /// along, an edit inside it grows or shrinks it, an edit after it leaves it
+    /// alone. The result is always a superset of the changed text, which is what
+    /// callers rely on — they re-derive everything inside the union and shift
+    /// everything after it by the net delta.
+    static func accumulateEdit(union: NSRange?, netDelta: Int,
+                               edit: NSRange, delta: Int) -> (NSRange, Int) {
+        guard var current = union else { return (edit, delta) }
+        if edit.location <= current.location {
+            current.location = max(0, current.location + delta)
+        } else if edit.location < NSMaxRange(current) {
+            current.length = max(0, current.length + delta)
         }
+        return (NSUnionRange(current, edit), netDelta + delta)
     }
 }
