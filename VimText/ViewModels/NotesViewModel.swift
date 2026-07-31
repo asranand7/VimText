@@ -202,8 +202,26 @@ final class NotesViewModel: ObservableObject {
     init() {
         Self.current = self
 
+        // The search box is the only input a user can change many times a
+        // second, and a non-matching query scans every note's haystack in full
+        // (measured: ~288 ms at 2k notes, ~708 ms at 5k) — on the main thread,
+        // since everything below `notes` must stay synchronous with it (the
+        // delete paths index into `filteredNotes`). Debouncing the search term
+        // alone collapses a typing burst into one filter run without moving any
+        // of it off-main, so no ordering hazard is introduced. `prepend` sits
+        // *after* the debounce so CombineLatest can fire immediately at launch
+        // instead of waiting out the first interval with an empty list — the
+        // structural inputs stay instantaneous.
+        // Note: `searchActive` in the sidebar reads the undebounced text, so for
+        // one interval the list can render in "searching" layout with the
+        // pre-filter rows. It self-corrects on the next emission.
+        let debouncedSearch = $searchText
+            .debounce(for: .milliseconds(120), scheduler: DispatchQueue.main)
+            .prepend("")
+            .removeDuplicates()
+
         // Recompute filteredNotes whenever any input changes.
-        Publishers.CombineLatest4($notes, $showAllNotes, $selectedFolderId, $searchText)
+        Publishers.CombineLatest4($notes, $showAllNotes, $selectedFolderId, debouncedSearch)
             .map { [weak self] notes, showAll, folderId, search in
                 Self.computeFilteredNotes(
                     notes: notes,
