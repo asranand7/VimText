@@ -1250,6 +1250,10 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
                 return
             }
 
+            if isBackspace && handleSmartListBackspace() {
+                return
+            }
+
             if event.characters == "`" && !modifiers.contains(.control) && handleBacktickAutoClose() {
                 return
             }
@@ -1315,85 +1319,85 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         coordinator.executeActions(actions)
     }
 
-    private struct ListMarker {
-        let indent: String       // leading whitespace of the line
-        let body: String         // text after the marker
-        let existingPrefix: String  // marker text already on the line (incl. trailing space)
-        let nextPrefix: String   // marker to start the following line (incl. trailing space)
+    /// Replaces `range` with `text` through the undo-aware editing path.
+    @discardableResult
+    private func replaceForSmartList(_ range: NSRange, with text: String) -> Bool {
+        guard shouldChangeText(in: range, replacementString: text) else { return false }
+        textStorage?.replaceCharacters(in: range, with: text)
+        didChangeText()
+        return true
     }
 
-    private func parseListMarker(_ line: String) -> ListMarker? {
-        var s = Substring(line)
-        if s.hasSuffix("\n") { s = s.dropLast() }
-        let indent = s.prefix { $0 == " " || $0 == "\t" }
-        let rest = s.dropFirst(indent.count)
-        guard let first = rest.first else { return nil }
-
-        // Unordered: - * + •
-        if "-*+•".contains(first) {
-            let afterMarker = rest.dropFirst()
-            guard afterMarker.first == " " else { return nil }
-            let prefix = "\(first) "
-            return ListMarker(indent: String(indent),
-                              body: String(afterMarker.dropFirst()),
-                              existingPrefix: prefix,
-                              nextPrefix: prefix)
+    /// Renumbers the ordered list block around `location`, keeping the caret
+    /// where the user left it. Called after any edit that can change an item's
+    /// position or level.
+    func renumberLists(around location: Int) {
+        guard smartLists else { return }
+        let edits = SmartList.renumberEdits(in: string as NSString, around: location)
+        guard !edits.isEmpty else { return }
+        var caret = selectedRange().location
+        // Back to front so earlier ranges stay valid.
+        for edit in edits.sorted(by: { $0.range.location > $1.range.location }) {
+            guard replaceForSmartList(edit.range, with: edit.replacement) else { continue }
+            let delta = (edit.replacement as NSString).length - edit.range.length
+            if edit.range.location + edit.range.length <= caret { caret += delta }
         }
-
-        // Ordered: digits followed by . or )
-        let digits = rest.prefix { $0.isNumber }
-        if !digits.isEmpty {
-            let afterDigits = rest.dropFirst(digits.count)
-            guard let sep = afterDigits.first, sep == "." || sep == ")" else { return nil }
-            let afterSep = afterDigits.dropFirst()
-            guard afterSep.first == " " else { return nil }
-            let next = (Int(digits) ?? 0) + 1
-            return ListMarker(indent: String(indent),
-                              body: String(afterSep.dropFirst()),
-                              existingPrefix: "\(digits)\(sep) ",
-                              nextPrefix: "\(next)\(sep) ")
-        }
-
-        return nil
+        let length = (string as NSString).length
+        setSelectedRange(NSRange(location: min(max(caret, 0), length), length: 0))
     }
 
-    /// On Return in insert mode, continue or terminate a list item. Returns true if handled.
+    /// Removes one indent level from the line at `lineStart`, returning how many
+    /// characters went away.
+    private func outdentLine(at lineStart: Int, line: String) -> Int {
+        let removeLength: Int
+        if line.hasPrefix("\t") {
+            removeLength = 1
+        } else {
+            removeLength = min(SmartList.indentUnit.count, line.prefix { $0 == " " }.count)
+        }
+        guard removeLength > 0 else { return 0 }
+        return replaceForSmartList(NSRange(location: lineStart, length: removeLength), with: "") ? removeLength : 0
+    }
+
+    /// On Return in insert mode, continue, split or terminate a list item.
+    /// Returns true if handled.
     private func handleSmartListReturn() -> Bool {
         guard smartLists else { return false }
         let sel = selectedRange()
         guard sel.length == 0 else { return false }
-
         guard !isLocationInCodeBlock(sel.location) else { return false }
 
         let ns = string as NSString
         let pos = sel.location
-        let lineRange = ns.lineRange(for: NSRange(location: min(pos, ns.length), length: 0))
-        let line = ns.substring(with: lineRange)
-        guard let marker = parseListMarker(line) else { return false }
+        guard let (item, lineRange, contentEnd) = SmartList.item(in: ns, at: pos) else { return false }
 
-        // Only act when the cursor sits at the end of the line's content.
-        var contentEnd = lineRange.location + lineRange.length
-        if contentEnd > lineRange.location,
-           ns.substring(with: NSRange(location: contentEnd - 1, length: 1)) == "\n" {
-            contentEnd -= 1
-        }
-        guard pos == contentEnd else { return false }
+        // Inside the marker itself (or before it) Return is just a Return.
+        let bodyStart = lineRange.location + item.prefixLength
+        guard pos >= bodyStart else { return false }
 
-        // Empty item → terminate the list by clearing the marker.
-        if marker.body.trimmingCharacters(in: .whitespaces).isEmpty {
-            let clearRange = NSRange(location: lineRange.location,
-                                     length: contentEnd - lineRange.location)
-            if shouldChangeText(in: clearRange, replacementString: "") {
-                textStorage?.replaceCharacters(in: clearRange, with: "")
-                didChangeText()
+        // Empty item → step out one level, or end the list at the top level.
+        if item.isEmpty {
+            if !item.indent.isEmpty {
+                let line = ns.substring(with: NSRange(location: lineRange.location,
+                                                      length: contentEnd - lineRange.location))
+                let removed = outdentLine(at: lineRange.location, line: line)
+                setSelectedRange(NSRange(location: max(lineRange.location, contentEnd - removed), length: 0))
+                renumberLists(around: lineRange.location)
+            } else {
+                replaceForSmartList(NSRange(location: lineRange.location,
+                                            length: contentEnd - lineRange.location), with: "")
+                setSelectedRange(NSRange(location: lineRange.location, length: 0))
             }
-            setSelectedRange(NSRange(location: lineRange.location, length: 0))
             return true
         }
 
-        // Non-empty item → start the next item.
-        insertText("\n" + marker.indent + marker.nextPrefix,
-                   replacementRange: NSRange(location: pos, length: 0))
+        // Otherwise start a new item — text right of the caret moves down with
+        // it, so Return in the middle of an item splits it in two.
+        let sibling = SmartList.previousSibling(in: ns, beforeLineAt: lineRange.location,
+                                                indentWidth: item.indentWidth)
+        let marker = item.nextMarkerText(previousSibling: sibling)
+        insertText("\n" + item.indent + marker, replacementRange: NSRange(location: pos, length: 0))
+        renumberLists(around: selectedRange().location)
         return true
     }
 
@@ -1406,31 +1410,50 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 
         let ns = string as NSString
         let pos = sel.location
-        let lineRange = ns.lineRange(for: NSRange(location: min(pos, ns.length), length: 0))
-        let line = ns.substring(with: lineRange)
-        guard parseListMarker(line) != nil else { return false }
-
-        let indentUnit = "    "
+        guard let (_, lineRange, contentEnd) = SmartList.item(in: ns, at: pos) else { return false }
+        let line = ns.substring(with: NSRange(location: lineRange.location,
+                                              length: contentEnd - lineRange.location))
 
         if outdent {
-            var removeLen = 0
-            if line.hasPrefix("\t") {
-                removeLen = 1
-            } else {
-                removeLen = min(indentUnit.count, line.prefix { $0 == " " }.count)
-            }
-            guard removeLen > 0 else { return true }
-            let removeRange = NSRange(location: lineRange.location, length: removeLen)
-            if shouldChangeText(in: removeRange, replacementString: "") {
-                textStorage?.replaceCharacters(in: removeRange, with: "")
-                didChangeText()
-            }
-            setSelectedRange(NSRange(location: max(lineRange.location, pos - removeLen), length: 0))
+            let removed = outdentLine(at: lineRange.location, line: line)
+            guard removed > 0 else { return true }
+            setSelectedRange(NSRange(location: max(lineRange.location, pos - removed), length: 0))
+            renumberLists(around: lineRange.location)
             return true
         }
 
-        insertText(indentUnit, replacementRange: NSRange(location: lineRange.location, length: 0))
-        setSelectedRange(NSRange(location: pos + indentUnit.count, length: 0))
+        insertText(SmartList.indentUnit, replacementRange: NSRange(location: lineRange.location, length: 0))
+        setSelectedRange(NSRange(location: pos + SmartList.indentUnit.count, length: 0))
+        renumberLists(around: selectedRange().location)
+        return true
+    }
+
+    /// Backspace at the very start of a list item's text removes the whole
+    /// marker (or steps out one level first) instead of nibbling at it.
+    /// Returns true if handled.
+    private func handleSmartListBackspace() -> Bool {
+        guard smartLists else { return false }
+        let sel = selectedRange()
+        guard sel.length == 0, sel.location > 0 else { return false }
+        guard !isLocationInCodeBlock(sel.location) else { return false }
+
+        let ns = string as NSString
+        let pos = sel.location
+        guard let (item, lineRange, contentEnd) = SmartList.item(in: ns, at: pos) else { return false }
+        guard pos == lineRange.location + item.prefixLength else { return false }
+
+        if !item.indent.isEmpty {
+            let line = ns.substring(with: NSRange(location: lineRange.location,
+                                                  length: contentEnd - lineRange.location))
+            let removed = outdentLine(at: lineRange.location, line: line)
+            guard removed > 0 else { return false }
+            setSelectedRange(NSRange(location: pos - removed, length: 0))
+        } else {
+            let markerRange = NSRange(location: lineRange.location, length: item.prefixLength)
+            guard replaceForSmartList(markerRange, with: "") else { return false }
+            setSelectedRange(NSRange(location: lineRange.location, length: 0))
+        }
+        renumberLists(around: lineRange.location)
         return true
     }
 

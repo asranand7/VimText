@@ -675,6 +675,196 @@ private func pressControl(_ textView: VimNSTextView, base: String, code: UInt16)
     ) { textView.keyDown(with: event) }
 }
 
+/// Synthesizes a keyDown for a key identified by its hardware key code —
+/// Return (36), Tab (48) and Delete (51) carry no useful `characters`, so the
+/// character-driven `press` helper can't reach the smart-list handlers.
+@MainActor
+private func pressKeyCode(_ textView: VimNSTextView, _ keyCode: UInt16,
+                          characters: String, modifiers: NSEvent.ModifierFlags = []) {
+    if let event = NSEvent.keyEvent(
+        with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+        windowNumber: 0, context: nil, characters: characters,
+        charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode
+    ) { textView.keyDown(with: event) }
+}
+
+@MainActor
+private func pressReturn(_ textView: VimNSTextView) { pressKeyCode(textView, 36, characters: "\r") }
+
+@MainActor
+private func pressTab(_ textView: VimNSTextView, shift: Bool = false) {
+    pressKeyCode(textView, 48, characters: "\t", modifiers: shift ? [.shift] : [])
+}
+
+@MainActor
+private func pressBackspace(_ textView: VimNSTextView) {
+    pressKeyCode(textView, 51, characters: "\u{8}")
+}
+
+/// The pure half of smart lists: what a line parses into, and how a block of
+/// ordered items renumbers.
+func testSmartListParsing() throws {
+    // Bullets, with and without a checkbox.
+    guard let bullet = SmartList.parse("- milk") else {
+        throw SmokeTestFailure.failed("`- milk` should parse as a bullet")
+    }
+    try expectEqual(bullet.kind, .bullet("-"), "bullet char is kept")
+    try expectEqual(bullet.checkbox, false, "a plain bullet has no checkbox")
+    try expectEqual(bullet.prefixLength, 2, "`- ` is a two-character marker")
+
+    guard let task = SmartList.parse("    - [x] shipped") else {
+        throw SmokeTestFailure.failed("an indented checkbox should parse")
+    }
+    try expect(task.checkbox && task.checked, "`- [x]` parses as a checked checkbox")
+    try expectEqual(task.indent, "    ", "indent is preserved verbatim")
+    try expectEqual(task.body, "shipped", "body excludes the checkbox")
+    try expectEqual(task.prefixLength, 10, "`    - [x] ` is a ten-character marker")
+    // A new item after a checked box starts unchecked.
+    try expectEqual(task.nextMarkerText(), "- [ ] ", "the next checkbox starts unchecked")
+
+    // An empty checkbox is an empty item — that Return must end the list.
+    guard let emptyTask = SmartList.parse("- [ ] ") else {
+        throw SmokeTestFailure.failed("`- [ ] ` should parse")
+    }
+    try expect(emptyTask.isEmpty, "`- [ ] ` is an empty item, not one whose body is `[ ]`")
+    // …including with no trailing space at all.
+    try expect(SmartList.parse("- [ ]")?.isEmpty == true, "`- [ ]` with no trailing space is empty")
+
+    // Ordered items step to the next number and keep their separator.
+    guard let ordered = SmartList.parse("3) third") else {
+        throw SmokeTestFailure.failed("`3) third` should parse as ordered")
+    }
+    try expectEqual(ordered.nextMarkerText(), "4) ", "ordered continuation increments")
+    try expectEqual(SmartList.parse("1. [ ] task")?.nextMarkerText(), "2. [ ] ",
+                    "numbered checkboxes continue as numbered checkboxes")
+
+    // Non-lists stay non-lists.
+    try expect(SmartList.parse("--- rule") == nil, "`---` is not a list item")
+    try expect(SmartList.parse("-no space") == nil, "a marker needs a trailing space")
+    try expect(SmartList.parse("2021. was a year") != nil, "a year-like number still reads as ordered")
+    try expect(SmartList.parse("plain text") == nil, "plain text is not a list item")
+
+    // Renumbering: nested levels restart at 1, the outer level resumes.
+    let text = """
+    1. one
+    1. two
+        5. nested a
+        9. nested b
+    7. three
+    """ as NSString
+    let edits = SmartList.renumberEdits(in: text, around: 0)
+    var renumbered = NSMutableString(string: text)
+    for edit in edits.sorted(by: { $0.range.location > $1.range.location }) {
+        renumbered.replaceCharacters(in: edit.range, with: edit.replacement)
+    }
+    try expectEqual(renumbered as String, """
+    1. one
+    2. two
+        1. nested a
+        2. nested b
+    3. three
+    """, "each level renumbers independently; nested lists restart at 1")
+
+    // A list the user starts at 5 keeps its start.
+    let offset = "5. a\n9. b" as NSString
+    let offsetEdits = SmartList.renumberEdits(in: offset, around: 0)
+    try expectEqual(offsetEdits.count, 1, "only the out-of-sequence item is rewritten")
+    try expectEqual(offsetEdits.first?.replacement, "6", "the list keeps its 5-based start")
+
+    // Lazy numbering (every item `1.`) is a deliberate style — leave it alone.
+    try expect(SmartList.renumberEdits(in: "1. a\n1. b\n1. c" as NSString, around: 0).isEmpty,
+               "a uniformly numbered list is not renumbered")
+
+    // A blank line ends the block, so a later list is untouched.
+    let twoBlocks = "1. a\n2. b\n\n7. other" as NSString
+    try expect(SmartList.renumberEdits(in: twoBlocks, around: 0).isEmpty,
+               "renumbering stops at the blank line between two lists")
+}
+
+/// Smart lists driven through real keystrokes: Return, Tab, Backspace and the
+/// Vim `o` / `O` openers.
+func testSmartListsViaKeyDown() throws {
+    try MainActor.assumeIsolated {
+        // A checkbox item continues as a checkbox (it used to degrade to `- `).
+        let (_, tv, coord, press) = makeVimRig("- [x] ship it")
+        tv.setSelectedRange(NSRange(location: 13, length: 0))
+        press("i")
+        pressReturn(tv)
+        try expectEqual(tv.string, "- [x] ship it\n- [ ] ",
+                        "Return after a checkbox opens a fresh unchecked checkbox")
+
+        // Return on that empty checkbox ends the list instead of spawning `- `.
+        pressReturn(tv)
+        try expectEqual(tv.string, "- [x] ship it\n", "Return on an empty checkbox ends the list")
+        withExtendedLifetime(coord) {}
+    }
+
+    try MainActor.assumeIsolated {
+        // Return in the middle of an item splits it and carries the marker.
+        let (_, tv, coord, press) = makeVimRig("1. alphabeta\n2. gamma")
+        tv.setSelectedRange(NSRange(location: 8, length: 0)) // between "alpha" and "beta"
+        press("i")
+        pressReturn(tv)
+        try expectEqual(tv.string, "1. alpha\n2. beta\n3. gamma",
+                        "splitting an ordered item renumbers the items below it")
+        withExtendedLifetime(coord) {}
+    }
+
+    try MainActor.assumeIsolated {
+        // An empty nested item steps out one level before ending the list.
+        let (_, tv, coord, press) = makeVimRig("- top\n    - ")
+        tv.setSelectedRange(NSRange(location: 12, length: 0))
+        press("i")
+        pressReturn(tv)
+        try expectEqual(tv.string, "- top\n- ", "an empty nested item outdents first")
+        pressReturn(tv)
+        try expectEqual(tv.string, "- top\n", "a second Return ends the list")
+        withExtendedLifetime(coord) {}
+    }
+
+    try MainActor.assumeIsolated {
+        // Tab nests an item, and both levels renumber.
+        let (_, tv, coord, press) = makeVimRig("1. a\n2. b\n3. c")
+        tv.setSelectedRange(NSRange(location: 9, length: 0)) // end of "2. b"
+        press("i")
+        pressTab(tv)
+        try expectEqual(tv.string, "1. a\n    1. b\n2. c",
+                        "Tab nests the item, restarting it at 1 and closing the gap above")
+        pressTab(tv, shift: true)
+        try expectEqual(tv.string, "1. a\n2. b\n3. c", "Shift-Tab restores the flat numbering")
+        withExtendedLifetime(coord) {}
+    }
+
+    try MainActor.assumeIsolated {
+        // Backspace at the start of an item's text removes the marker whole.
+        let (_, tv, coord, press) = makeVimRig("- [ ] task")
+        tv.setSelectedRange(NSRange(location: 6, length: 0))
+        press("i")
+        pressBackspace(tv)
+        try expectEqual(tv.string, "task", "Backspace clears the whole checkbox marker")
+        try expectEqual(tv.selectedRange().location, 0, "the caret lands before the text")
+        withExtendedLifetime(coord) {}
+    }
+
+    try MainActor.assumeIsolated {
+        // `o` and `O` open list items too, not bare indentation.
+        let (_, tv, coord, press) = makeVimRig("- [ ] one\n- [ ] two")
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        press("o")
+        try expectEqual(tv.string, "- [ ] one\n- [ ] \n- [ ] two",
+                        "o opens the next checkbox below")
+        try expectEqual(tv.selectedRange().location, 16, "the caret sits after the new marker")
+
+        let (_, tv2, coord2, press2) = makeVimRig("1. one\n2. two")
+        tv2.setSelectedRange(NSRange(location: 8, length: 0)) // on "2. two"
+        press2("O")
+        try expectEqual(tv2.string, "1. one\n2. \n3. two",
+                        "O opens an item above and renumbers what follows")
+        withExtendedLifetime(coord) {}
+        withExtendedLifetime(coord2) {}
+    }
+}
+
 /// Regression for "Ctrl-[ escape / Ctrl-R / Ctrl-O / Ctrl-I dead on real
 /// keyboards": Control combos arrive as raw control codes in `characters`, so
 /// the keyDown router must fall back to `charactersIgnoringModifiers`. Here we
@@ -1667,6 +1857,8 @@ let tests: [(String, () throws -> Void)] = [
     ("Link detection and gd", testLinkDetectionAndGx),
     ("Link folding (computeFolds)", testLinkFoldingComputeFolds),
     ("List marker detection (bullets/checkboxes)", testListMarkerDetection),
+    ("Smart list parsing and renumbering", testSmartListParsing),
+    ("Smart lists via keyDown (Return/Tab/Backspace/o)", testSmartListsViaKeyDown),
     ("Storage pinned-state persistence", testStoragePinnedStatePersists),
     ("Storage migration to a new location", testMigrateStoreCopiesStore),
     ("Search normalization (fold + lowercase)", testSearchNormalization),

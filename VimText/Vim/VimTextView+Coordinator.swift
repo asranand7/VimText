@@ -2225,29 +2225,48 @@ extension VimTextView {
                 let lineEnd = lineRange.location + lineRange.length
                 let lineText = nsString.substring(with: lineRange)
                 let indent = String(lineText.prefix(while: { $0 == " " || $0 == "\t" }))
+                // `o` on a list item opens the next item, the way Return does.
+                let prefix = indent + smartListMarker(in: nsString, lineAt: lineRange.location,
+                                                      above: false, textView: textView)
                 let hasNewline = lineEnd > 0 && lineEnd <= length && lineRange.length > 0 && nsString.character(at: lineEnd - 1) == 0x0A
+                let insertPos = lineEnd
                 if hasNewline {
-                    let insertPos = lineEnd
-                    let newText = indent + "\n"
                     textView.setSelectedRange(NSRange(location: insertPos, length: 0))
-                    textView.insertText(newText, replacementRange: NSRange(location: insertPos, length: 0))
-                    textView.setSelectedRange(NSRange(location: insertPos + indent.count, length: 0))
+                    textView.insertText(prefix + "\n", replacementRange: NSRange(location: insertPos, length: 0))
+                    textView.setSelectedRange(NSRange(location: insertPos + (prefix as NSString).length, length: 0))
                 } else {
-                    let insertPos = lineEnd
-                    let newText = "\n" + indent
                     textView.setSelectedRange(NSRange(location: insertPos, length: 0))
-                    textView.insertText(newText, replacementRange: NSRange(location: insertPos, length: 0))
+                    textView.insertText("\n" + prefix, replacementRange: NSRange(location: insertPos, length: 0))
                 }
+                (textView as? VimNSTextView)?.renumberLists(around: textView.selectedRange().location)
 
             case .newLineAbove:
                 let lineRange = nsString.lineRange(for: NSRange(location: cursorPos, length: 0))
                 let lineText = nsString.substring(with: lineRange)
                 let indent = String(lineText.prefix(while: { $0 == " " || $0 == "\t" }))
-                let newText = indent + "\n"
+                let prefix = indent + smartListMarker(in: nsString, lineAt: lineRange.location,
+                                                      above: true, textView: textView)
                 textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
-                textView.insertText(newText, replacementRange: NSRange(location: lineRange.location, length: 0))
-                textView.setSelectedRange(NSRange(location: lineRange.location + indent.count, length: 0))
+                textView.insertText(prefix + "\n", replacementRange: NSRange(location: lineRange.location, length: 0))
+                textView.setSelectedRange(NSRange(location: lineRange.location + (prefix as NSString).length, length: 0))
+                (textView as? VimNSTextView)?.renumberLists(around: textView.selectedRange().location)
             }
+        }
+
+        /// The list marker `o` / `O` should put on the line they open: the next
+        /// item's marker below, the same marker above (renumbering fixes the
+        /// rest). Empty items and non-list lines contribute nothing.
+        private func smartListMarker(in text: NSString, lineAt lineStart: Int,
+                                     above: Bool, textView: NSTextView) -> String {
+            guard (textView as? VimNSTextView)?.smartLists ?? false,
+                  let (item, _, _) = SmartList.item(in: text, at: lineStart),
+                  !item.isEmpty else { return "" }
+            if above {
+                return SmartList.markerText(kind: item.kind, checkbox: item.checkbox, checked: false)
+            }
+            let sibling = SmartList.previousSibling(in: text, beforeLineAt: lineStart,
+                                                    indentWidth: item.indentWidth)
+            return item.nextMarkerText(previousSibling: sibling)
         }
 
         func resolveMotionNTimes(_ motion: Motion, count: Int, in textView: NSTextView) -> Int {
