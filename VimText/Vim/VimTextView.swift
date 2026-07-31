@@ -168,10 +168,14 @@ struct VimTextView: NSViewRepresentable {
             let attrStr = NSAttributedString(string: initialText, attributes: defaultAttrs)
             textView.textStorage?.setAttributedString(attrStr)
         }
-        textView.restyleCodeBlocks(baseFont: font)
+        // Force the full pass when the note has heading lines: with no fenced
+        // code the scoped fast paths would no-op at open (no edited range) and
+        // the headings would render at the base font.
+        textView.restyleMarkdown(baseFont: font, force: VimNSTextView.containsHeadingLine(textView.string))
         textView.renderImageAttachments()
         textView.refreshLinkHighlightsAdaptive()
         textView.refreshListMarkers()
+        textView.refreshHeadingFolds()
         context.coordinator.latestText = initialText
         context.coordinator.latestRTF = initialRTFData
 
@@ -194,10 +198,10 @@ struct VimTextView: NSViewRepresentable {
             context.coordinator.lastFontSize = font.pointSize
             context.coordinator.lastFontName = font.fontName
             textView.applyBaseFont(font)
-            // Force a full restyle: applyBaseFont just wiped the mono runs, but
-            // no text changed, so the scoped fast paths would skip the blocks
-            // and leave them proportional at the new size.
-            textView.restyleCodeBlocks(baseFont: font, force: true)
+            // Force a full restyle: applyBaseFont just wiped the mono and
+            // heading runs, but no text changed, so the scoped fast paths
+            // would skip them and leave everything at the plain base font.
+            textView.restyleMarkdown(baseFont: font, force: true)
             var attrs = textView.typingAttributes
             attrs[.font] = font
             textView.typingAttributes = attrs
@@ -205,6 +209,7 @@ struct VimTextView: NSViewRepresentable {
             // height — refold so they re-reserve their slots at the new size.
             textView.updateLinkFolds()
             textView.applyListMarkers()
+            textView.refreshHeadingFolds()
             scrollView.verticalRulerView?.needsDisplay = true
         }
 

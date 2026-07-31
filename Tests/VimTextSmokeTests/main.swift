@@ -899,7 +899,7 @@ func testCodeBlockScopedRestyle() throws {
             tv.textStorage?.attribute(.codeBlock, at: i, effectiveRange: nil) != nil
         }
 
-        tv.restyleCodeBlocks(baseFont: font)
+        tv.restyleMarkdown(baseFont: font)
         try expectEqual(tv.codeBlockRanges.count, 1, "one fenced block detected")
         let initial = tv.codeBlockRanges[0]
         try expect(isMono(initial.location + 4) && isTagged(initial.location + 4),
@@ -910,7 +910,7 @@ func testCodeBlockScopedRestyle() throws {
         // must land at its shifted offset with styling intact.
         tv.setSelectedRange(NSRange(location: 0, length: 0))
         tv.insertText("added\n", replacementRange: NSRange(location: 0, length: 0))
-        tv.restyleCodeBlocks(baseFont: font)
+        tv.restyleMarkdown(baseFont: font)
         try expectEqual(tv.codeBlockRanges, [NSRange(location: initial.location + 6, length: initial.length)],
                         "block range shifts by the inserted length")
         let shifted = tv.codeBlockRanges[0]
@@ -930,12 +930,151 @@ func testCodeBlockScopedRestyle() throws {
                                           with: NSAttributedString(string: "x", attributes: staleAttrs))
         tv.didChangeText()
         try expect(isMono(after) && isTagged(after), "precondition: inserted char carries stale code styling")
-        tv.restyleCodeBlocks(baseFont: font)
+        tv.restyleMarkdown(baseFont: font)
         try expectEqual(tv.codeBlockRanges, [shifted], "block ranges unchanged by an edit outside them")
         try expect(!isMono(after) && !isTagged(after),
                    "stale code styling outside the block is normalized away")
         try expect(isMono(shifted.location + 4) && isTagged(shifted.location + 4),
                    "block styling survives the scoped normalize")
+        withExtendedLifetime(coord) {}
+    }
+}
+
+/// Markdown heading styling: `#{1,6} ` lines render with a scaled bold font +
+/// `.markdownHeading` level tag, `#` marks stay visible plain characters, and
+/// hashes inside fences / non-heading `#` text stay unstyled. The scoped
+/// restyle must pick up a line gaining or losing its prefix, and the derived
+/// bold must not count as rich formatting (no phantom .rtf sidecars).
+func testMarkdownHeadingStyling() throws {
+    try MainActor.assumeIsolated {
+        let font = NSFont.systemFont(ofSize: 14)
+        let text = "# Title\nbody text\n## Sub\n#hashtag\n```\n# comment\n```\ntail"
+        let (_, tv, coord, _) = makeVimRig(text)
+        tv.textStorage?.delegate = tv
+
+        func fontAt(_ i: Int) -> NSFont {
+            (tv.textStorage?.attribute(.font, at: i, effectiveRange: nil) as? NSFont) ?? font
+        }
+        func level(_ i: Int) -> Int? {
+            tv.textStorage?.attribute(.markdownHeading, at: i, effectiveRange: nil) as? Int
+        }
+        func isBold(_ i: Int) -> Bool {
+            NSFontManager.shared.traits(of: fontAt(i)).contains(.boldFontMask)
+        }
+        let ns = text as NSString
+        let subLoc = ns.range(of: "## Sub").location
+        let tagLoc = ns.range(of: "#hashtag").location
+        let commentLoc = ns.range(of: "# comment").location
+        let bodyLoc = ns.range(of: "body").location
+
+        tv.restyleMarkdown(baseFont: font, force: true)
+        try expectEqual(level(0) ?? 0, 1, "h1 line carries level tag 1")
+        try expect(fontAt(0).pointSize > font.pointSize && isBold(0), "h1 is larger + bold")
+        try expectEqual(level(subLoc) ?? 0, 2, "h2 line carries level tag 2")
+        try expect(fontAt(subLoc).pointSize > font.pointSize
+                    && fontAt(subLoc).pointSize < fontAt(0).pointSize,
+                   "h2 sits between base and h1 size")
+        try expect(level(bodyLoc) == nil && fontAt(bodyLoc).pointSize == font.pointSize,
+                   "body text keeps the base font")
+        try expect(level(tagLoc) == nil && !isBold(tagLoc), "#hashtag (no space) is not a heading")
+        try expect(level(commentLoc) == nil, "a # line inside a code fence is not a heading")
+        try expect(fontAt(commentLoc).fontDescriptor.symbolicTraits.contains(.monoSpace),
+                   "the fenced # line keeps code styling")
+
+        // Note-open gate: heading detection over raw text.
+        try expect(VimNSTextView.containsHeadingLine("intro\n## x"), "containsHeadingLine finds a mid-doc heading")
+        try expect(!VimNSTextView.containsHeadingLine("#hashtag\nurl.com/a#b no heading"),
+                   "containsHeadingLine ignores non-line-start / no-space hashes")
+
+        // Typed path: give the body line a '# ' prefix. The live per-keystroke
+        // pass (didChangeText) must style it immediately — no deferred restyle.
+        tv.setSelectedRange(NSRange(location: bodyLoc, length: 0))
+        tv.insertText("# ", replacementRange: NSRange(location: bodyLoc, length: 0))
+        try expectEqual(level(bodyLoc) ?? 0, 1, "a typed '# ' prefix styles the line live, before any deferred restyle")
+        try expect(isBold(bodyLoc), "the newly prefixed line is bold")
+        // The deferred scoped pass must agree (idempotent over the live one).
+        tv.restyleMarkdown(baseFont: font)
+        try expectEqual(level(bodyLoc) ?? 0, 1, "the deferred scoped restyle keeps the typed heading")
+
+        // Removing the prefix must revert to base styling immediately — the
+        // line no longer contains '#', so detection rides on the stale tag.
+        tv.setSelectedRange(NSRange(location: bodyLoc + 2, length: 0))
+        tv.textStorage?.replaceCharacters(in: NSRange(location: bodyLoc, length: 2), with: "")
+        tv.didChangeText()
+        try expect(level(bodyLoc) == nil, "deleting the '# ' prefix drops the heading tag live")
+        try expect(fontAt(bodyLoc).pointSize == font.pointSize && !isBold(bodyLoc),
+                   "the line reverts to the plain base font (no phantom bold)")
+        tv.restyleMarkdown(baseFont: font)
+        try expect(level(bodyLoc) == nil && !isBold(bodyLoc),
+                   "the deferred scoped restyle agrees after the prefix removal")
+
+        // Derived heading bold must not read as rich formatting, or every
+        // note with a heading would grow an .rtf sidecar.
+        try expect(!tv.hasRichTextFormatting, "heading styling alone must not count as rich text")
+        withExtendedLifetime(coord) {}
+    }
+}
+
+/// Heading `#` prefixes are hidden on screen so `## Sub` reads as `Sub`. The
+/// hiding is display-only (hidden ranges on the folding layout manager — the
+/// text storage still holds the hashes, so Vim offsets and the `.txt` on disk
+/// are unchanged), it skips fenced code and bare `# ` lines, and the line the
+/// caret sits on stays raw so the prefix can be edited.
+func testMarkdownHeadingPrefixFolding() throws {
+    try MainActor.assumeIsolated {
+        let font = NSFont.systemFont(ofSize: 14)
+        let text = "# Title\nbody\n## Sub\n#hashtag\n##\n```\n# comment\n```\ntail"
+        let (_, tv, coord, _) = makeVimRig(text)
+        tv.textContainer?.replaceLayoutManager(FoldingLayoutManager())
+        tv.textStorage?.delegate = tv
+        tv.restyleMarkdown(baseFont: font, force: true)
+
+        let ns = text as NSString
+        let titleLoc = ns.range(of: "# Title").location
+        let subLoc = ns.range(of: "## Sub").location
+        let bodyLoc = ns.range(of: "body").location
+        let bareLoc = ns.range(of: "##\n").location
+        let commentLoc = ns.range(of: "# comment").location
+
+        // Park the caret off every heading line so nothing is unfolded.
+        tv.setSelectedRange(NSRange(location: bodyLoc, length: 0))
+        tv.refreshHeadingFolds()
+
+        let lm = tv.layoutManager as? FoldingLayoutManager
+        func hidden() -> [NSRange] { lm?.headingPrefixes ?? [] }
+        func hides(_ location: Int, _ length: Int) -> Bool {
+            hidden().contains { NSEqualRanges($0, NSRange(location: location, length: length)) }
+        }
+
+        try expect(hides(titleLoc, 2), "'# ' on the h1 line is hidden")
+        try expect(hides(subLoc, 3), "'## ' on the h2 line is hidden, space included")
+        try expectEqual(hidden().count, 2, "#hashtag, a bare '##' line, and a fenced '# ' are all left alone")
+        try expect(!hidden().contains { NSLocationInRange($0.location, NSRange(location: bareLoc, length: 3)) },
+                   "a heading line with no text after the prefix stays visible")
+        try expect(!hidden().contains { NSLocationInRange($0.location, NSRange(location: commentLoc, length: 3)) },
+                   "a '# ' line inside a code fence is not folded")
+
+        // Display-only: the hashes are still in the document.
+        try expectEqual(tv.string, text, "folding must not touch the text storage")
+
+        // The caret's own line shows its raw prefix.
+        tv.setSelectedRange(NSRange(location: subLoc + 4, length: 0))
+        tv.applyHeadingFolds()
+        try expect(!hides(subLoc, 3), "the heading the caret is on unfolds for editing")
+        try expect(hides(titleLoc, 2), "other headings stay folded")
+
+        // A ranged selection keeps everything folded (no reflow mid-selection).
+        tv.setSelectedRange(NSRange(location: 0, length: ns.length))
+        tv.applyHeadingFolds()
+        try expectEqual(hidden().count, 2, "a visual-mode selection doesn't unfold the headings it covers")
+
+        // A typed prefix folds once the caret leaves the line.
+        tv.setSelectedRange(NSRange(location: bodyLoc, length: 0))
+        tv.insertText("### ", replacementRange: NSRange(location: bodyLoc, length: 0))
+        try expect(!hides(bodyLoc, 4), "the just-typed prefix stays visible under the caret")
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        tv.applyHeadingFolds()
+        try expect(hides(bodyLoc, 4), "leaving the line folds the newly typed prefix")
         withExtendedLifetime(coord) {}
     }
 }
@@ -1518,6 +1657,8 @@ let tests: [(String, () throws -> Void)] = [
     ("Vim gv reselect last visual selection", testVimGvReselect),
     ("Vim substitute per-line + preserves formatting", testVimSubstitutePerLineAndPreservesFormatting),
     ("Code-block scoped restyle fast paths", testCodeBlockScopedRestyle),
+    ("Markdown heading styling", testMarkdownHeadingStyling),
+    ("Markdown heading prefix folding", testMarkdownHeadingPrefixFolding),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
     ("Command Palette search matching", testCommandPaletteSearchMatching),

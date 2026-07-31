@@ -2,6 +2,12 @@ import AppKit
 
 extension NSAttributedString.Key {
     static let codeBlock = NSAttributedString.Key("vimTextCodeBlock")
+    /// Tags an ATX-heading line with its level (Int, 1–6). Marks the larger
+    /// bold font as *derived from the `#` prefix* rather than manual user
+    /// formatting, so restyles can revert a line that stopped being a heading
+    /// and serialization can skip/strip it (see hasRichTextFormatting and
+    /// serializedRTF).
+    static let markdownHeading = NSAttributedString.Key("vimTextMarkdownHeading")
 }
 
 final class LineNumberRulerView: NSRulerView {

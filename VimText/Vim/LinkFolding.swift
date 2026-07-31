@@ -133,6 +133,10 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
 
     /// Line-leading list markers (bullets / checkboxes) currently rendered.
     private(set) var markers: [ListMarkers.Marker] = []
+    /// `#{1,6} ` prefixes hidden so a heading renders as its text alone. They
+    /// need no drawn decoration — the scaled bold font comes from the text
+    /// storage — so unlike markers these are pure hidden ranges.
+    private(set) var headingPrefixes: [NSRange] = []
     var markerTextColor: NSColor = .secondaryLabelColor
     var markerAccentColor: NSColor = NSColor.systemBlue
 
@@ -184,8 +188,19 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         invalidate(affected)
     }
 
-    /// Rebuilds the hidden-range index and control-slot widths from both folds
-    /// and markers — the single source the glyph/layout callbacks read.
+    /// Replaces the hidden heading prefixes. Same no-op-when-unchanged contract
+    /// as folds and markers.
+    func setHeadingPrefixes(_ newPrefixes: [NSRange]) {
+        guard newPrefixes != headingPrefixes else { return }
+        let affected = unionRange(headingPrefixes + newPrefixes)
+        headingPrefixes = newPrefixes
+        rebuildIndices()
+        invalidate(affected)
+    }
+
+    /// Rebuilds the hidden-range index and control-slot widths from folds,
+    /// markers and heading prefixes — the single source the glyph/layout
+    /// callbacks read.
     private func rebuildIndices() {
         var ranges: [NSRange] = []
         var slots: [Int: CGFloat] = [:]
@@ -203,6 +218,7 @@ final class FoldingLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             case .checkbox: slots[marker.slotIndex] = checkboxSlotWidth
             }
         }
+        ranges.append(contentsOf: headingPrefixes)
 
         ranges.sort { $0.location < $1.location }
         hiddenStarts = ranges.map { $0.location }

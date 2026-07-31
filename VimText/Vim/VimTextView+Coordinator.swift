@@ -233,7 +233,23 @@ extension VimTextView {
             guard let storage = textView?.textStorage,
                   storage.length > 0,
                   textView?.hasRichTextFormatting == true else { return Data() }
-            let flattened = ImageAttachments.flattened(storage)
+            var flattened = ImageAttachments.flattened(storage)
+            // Heading fonts are derived from the `#` prefix at load/restyle
+            // time — strip them so the sidecar carries only manual formatting.
+            // Encoded heading bold would read back as a manual bold trait,
+            // leaving the line permanently bold once its `#` is deleted.
+            var headingRuns: [NSRange] = []
+            flattened.enumerateAttribute(.markdownHeading, in: NSRange(location: 0, length: flattened.length), options: []) { value, range, _ in
+                if value != nil { headingRuns.append(range) }
+            }
+            if !headingRuns.isEmpty {
+                let clean = NSMutableAttributedString(attributedString: flattened)
+                for r in headingRuns {
+                    clean.removeAttribute(.markdownHeading, range: r)
+                    clean.addAttribute(.font, value: parent.font, range: r)
+                }
+                flattened = clean
+            }
             let range = NSRange(location: 0, length: flattened.length)
             return (try? flattened.data(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])) ?? Data()
         }
@@ -267,9 +283,13 @@ extension VimTextView {
             latestText = synced
             notifyContentChange()
 
-            textView.restyleCodeBlocks(baseFont: parent.font)
+            textView.restyleMarkdown(baseFont: parent.font)
             textView.refreshLinkHighlightsDeferred()
             textView.refreshListMarkers()
+            // Authoritative pass: codeBlockRanges are current again, so a
+            // heading the per-keystroke scan judged against stale fences is
+            // re-decided here.
+            textView.refreshHeadingFolds()
 
             // Re-scan find matches if the find bar is open
             if parent.findController?.isVisible == true,
@@ -320,6 +340,9 @@ extension VimTextView {
             // Re-fold the checkbox the caret just left / unfold the one it
             // entered (no-ops when unchanged).
             textView?.applyListMarkers()
+            // Same for the heading line the caret entered/left: its `#` prefix
+            // shows raw while the caret is on it.
+            textView?.applyHeadingFolds()
 
             // Debounce — don't let @Published cursorLine/cursorCol trigger
             // SwiftUI body re-evaluation on every keystroke.

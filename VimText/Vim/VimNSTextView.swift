@@ -13,7 +13,7 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     var codeBlockRanges: [NSRange] = []
     /// Union of the character ranges edited since the last code-block restyle
     /// (post-edit coordinates, maintained by the text-storage delegate). Lets
-    /// `restyleCodeBlocks` fix up just the edited region when the fence
+    /// `restyleMarkdown` fix up just the edited region when the fence
     /// structure didn't change, instead of rewriting the whole document's
     /// attributes on every typing pause in a note that contains code blocks.
     private var editedRangeSinceRestyle: NSRange?
@@ -345,6 +345,89 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         needsDisplay = true
     }
 
+    // MARK: - Heading prefixes (`## Heading` renders as `Heading`)
+
+    /// One heading line's foldable `#` prefix.
+    struct HeadingPrefix: Equatable {
+        /// The line without its terminator — used to keep the caret's own line
+        /// showing raw `## ` text.
+        let lineRange: NSRange
+        /// The hashes plus the whitespace separating them from the text.
+        let prefixRange: NSRange
+    }
+
+    /// Heading prefixes in the document, recomputed when content changes.
+    private(set) var detectedHeadings: [HeadingPrefix] = []
+
+    /// Re-detects `#{1,6} ` prefixes, then applies them. Cheap enough for the
+    /// per-keystroke path: it hops between `#` occurrences rather than walking
+    /// every line, so a note without hashes costs one failed search.
+    func refreshHeadingFolds() {
+        let ns = string as NSString
+        let length = ns.length
+        var found: [HeadingPrefix] = []
+        var search = NSRange(location: 0, length: length)
+        while search.location < length {
+            let hash = ns.range(of: "#", options: [], range: search)
+            if hash.location == NSNotFound { break }
+            var lineStart = 0
+            var lineEnd = 0
+            var contentsEnd = 0
+            ns.getLineStart(&lineStart, end: &lineEnd, contentsEnd: &contentsEnd, for: hash)
+            // A heading `#` can only start a line, so one probe per line is
+            // enough — skip to the next line either way.
+            if lineStart == hash.location,
+               let prefix = headingPrefix(in: ns, lineStart: lineStart, contentsEnd: contentsEnd),
+               // codeBlockRanges can be up to one typing pause stale here; the
+               // deferred restyle's refresh corrects any misfold.
+               !isLocationInCodeBlock(lineStart) {
+                found.append(HeadingPrefix(
+                    lineRange: NSRange(location: lineStart, length: contentsEnd - lineStart),
+                    prefixRange: prefix
+                ))
+            }
+            let next = max(lineEnd, hash.location + 1)
+            guard next < length else { break }
+            search = NSRange(location: next, length: length - next)
+        }
+        detectedHeadings = found
+        applyHeadingFolds()
+    }
+
+    /// The `#`-and-whitespace range to hide on a heading line, or nil when the
+    /// line isn't a heading or has no text after the prefix — hiding the whole
+    /// of a bare `## ` line would leave an unexplained blank line.
+    private func headingPrefix(in ns: NSString, lineStart: Int, contentsEnd: Int) -> NSRange? {
+        let lineRange = NSRange(location: lineStart, length: contentsEnd - lineStart)
+        guard let level = Self.headingLevel(in: ns, lineRange: lineRange) else { return nil }
+        var i = lineStart + level
+        while i < contentsEnd, ns.character(at: i) == 0x20 || ns.character(at: i) == 0x09 { i += 1 }
+        guard i < contentsEnd else { return nil }
+        return NSRange(location: lineStart, length: i - lineStart)
+    }
+
+    /// Pushes the hidden prefixes to the layout manager, leaving the caret's own
+    /// line raw so the `#`s can be read and edited (and so the caret never has
+    /// to sit among hidden, zero-width glyphs). A ranged selection keeps every
+    /// prefix folded — unfolding each heading a visual-mode selection swept
+    /// over would reflow the text under the selection.
+    func applyHeadingFolds() {
+        guard let foldingLM = layoutManager as? FoldingLayoutManager else { return }
+        guard !detectedHeadings.isEmpty else {
+            foldingLM.setHeadingPrefixes([])
+            return
+        }
+        let sel = selectedRange()
+        let hidden = detectedHeadings.compactMap { heading -> NSRange? in
+            if sel.length == 0,
+               sel.location >= heading.lineRange.location,
+               sel.location <= NSMaxRange(heading.lineRange) { return nil }
+            return heading.prefixRange
+        }
+        foldingLM.setHeadingPrefixes(hidden)
+        needsDisplay = true
+    }
+
     /// If `point` (view coordinates) lands on a rendered checkbox, toggles its
     /// `[ ]`↔`[x]` character in the text. Returns true when it handled the click.
     func toggleCheckboxIfClicked(at point: NSPoint) -> Bool {
@@ -568,9 +651,9 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 
     /// True if the document carries manual rich formatting that only RTF can
     /// preserve: bold/italic/underline/strikethrough runs. Theme foreground
-    /// color, code-block monospacing, and image attachments are deliberately
-    /// excluded — all are re-derived on load from the plain `.txt`
-    /// (applyTextColor, restyleCodeBlocks, renderImageAttachments), and
+    /// color, code-block monospacing, heading fonts, and image attachments are
+    /// deliberately excluded — all are re-derived on load from the plain `.txt`
+    /// (applyTextColor, restyleMarkdown, renderImageAttachments), and
     /// serializedRTF flattens attachments to their Markdown refs anyway, so a
     /// plain-prose, code-only, or image-only note needs no RTF sidecar.
     /// Enumerates with an early exit, so it's ~O(1) for a plain note (one run)
@@ -585,6 +668,8 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
                 || (attrs[.strikethroughStyle] as? Int ?? 0) != 0 {
                 rich = true; stop.pointee = true; return
             }
+            // Heading bold is derived from the `#` prefix, not user formatting.
+            if attrs[.markdownHeading] != nil { return }
             if let font = attrs[.font] as? NSFont {
                 let traits = fontManager.traits(of: font)
                 if traits.contains(.boldFontMask) || traits.contains(.italicFontMask) {
@@ -638,21 +723,25 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         return false
     }
 
-    /// Re-derive code-block styling from the fenced plain text: monospaced font
-    /// inside fences (tagged with .codeBlock for background drawing), proportional
-    /// font with preserved bold/italic elsewhere.
+    /// Re-derive Markdown-structural styling from the plain text: monospaced
+    /// font inside ```-fences (tagged with .codeBlock for background drawing),
+    /// scaled bold font on `#` heading lines (tagged with .markdownHeading),
+    /// proportional base font with preserved bold/italic elsewhere.
     ///
     /// The full-document rewrite only runs when the fence *structure* changed.
     /// When blocks are unchanged or merely shifted by edits outside them (the
     /// common case: typing above a block), the attributes moved with the text,
     /// so only the edited region is normalized — previously every such pause
     /// rewrote the whole document's attributes and invalidated all its layout.
-    /// Pass `force: true` to rewrite the whole document's code-block styling
-    /// even when the fence structure is unchanged — needed after a font-size
-    /// change, which rewrites every font via `applyBaseFont` (wiping the mono
-    /// runs) without editing any text, so the edited-range fast paths below
-    /// would otherwise leave the blocks proportional.
-    func restyleCodeBlocks(baseFont: NSFont, force: Bool = false) {
+    /// Headings need no structure tracking of their own: heading-ness is a
+    /// line-local property, so any line that gained or lost it lies inside the
+    /// (paragraph-expanded) edited region the fast paths already normalize.
+    /// Pass `force: true` to rewrite the whole document's styling even when
+    /// the fence structure is unchanged — needed after a font-size change,
+    /// which rewrites every font via `applyBaseFont` (wiping the mono and
+    /// heading runs) without editing any text, so the edited-range fast paths
+    /// below would otherwise leave them at the base font.
+    func restyleMarkdown(baseFont: NSFont, force: Bool = false) {
         guard let textStorage = textStorage else { return }
         let ranges = computeCodeBlockRanges()
         let edited = editedRangeSinceRestyle
@@ -661,18 +750,21 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         if force {
             codeBlockRanges = ranges
             guard textStorage.length > 0 else { needsDisplay = true; return }
-            applyCodeBlockStyling(in: NSRange(location: 0, length: textStorage.length), baseFont: baseFont)
+            applyMarkdownStyling(in: NSRange(location: 0, length: textStorage.length), baseFont: baseFont)
             needsDisplay = true
             updateCopyButtons()
             return
         }
 
         if ranges == codeBlockRanges {
-            // Structure and offsets untouched. With no blocks there's nothing
-            // code-styled to fix; with blocks, normalize just the edited region
-            // so text inserted at a block edge can't keep inherited mono styling.
-            guard let edited, !ranges.isEmpty else { return }
-            applyCodeBlockStyling(in: edited, baseFont: baseFont)
+            // Structure and offsets untouched: normalize just the edited
+            // region — text inserted at a block edge can't keep inherited mono
+            // styling, and a line that gained or lost its `#` prefix restyles.
+            // With no blocks, skip entirely unless the edit could involve a
+            // heading (keeps the no-op typing path for plain notes).
+            guard let edited else { return }
+            if ranges.isEmpty && !regionMayInvolveHeadings(edited) { return }
+            applyMarkdownStyling(in: edited, baseFont: baseFont)
             return
         }
 
@@ -680,12 +772,14 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         // still fully carries the .codeBlock tag — proof it's the same styled
         // text at new offsets (a restructure that coincidentally matches the
         // shape fails the tag check and takes the full rewrite below).
+        // Heading runs shift along with the text too, so normalizing the
+        // edited region covers them as well.
         if let edited,
            ranges.count == codeBlockRanges.count,
            zip(ranges, codeBlockRanges).allSatisfy({ $0.length == $1.length }),
            ranges.allSatisfy({ hasCodeBlockTag(spanning: $0) }) {
             codeBlockRanges = ranges
-            applyCodeBlockStyling(in: edited, baseFont: baseFont)
+            applyMarkdownStyling(in: edited, baseFont: baseFont)
             needsDisplay = true // block background boxes moved with the text
             updateCopyButtons()
             return
@@ -693,9 +787,67 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 
         codeBlockRanges = ranges
         guard textStorage.length > 0 else { needsDisplay = true; return }
-        applyCodeBlockStyling(in: NSRange(location: 0, length: textStorage.length), baseFont: baseFont)
+        applyMarkdownStyling(in: NSRange(location: 0, length: textStorage.length), baseFont: baseFont)
         needsDisplay = true
         updateCopyButtons()
+    }
+
+    /// Cheap gate for the structure-unchanged fast path in a note with no code
+    /// blocks: the edited region needs a styling pass only if it might contain
+    /// a heading — its text has a `#` (possibly a new heading) or it carries a
+    /// stale .markdownHeading tag (a heading whose `#` was just deleted).
+    private func regionMayInvolveHeadings(_ edited: NSRange) -> Bool {
+        guard let storage = textStorage else { return false }
+        let ns = string as NSString
+        let expanded = ns.paragraphRange(for: clamped(edited, to: NSRange(location: 0, length: ns.length)))
+        guard expanded.length > 0 else { return false }
+        if ns.range(of: "#", options: [], range: expanded).location != NSNotFound { return true }
+        var tagged = false
+        storage.enumerateAttribute(.markdownHeading, in: expanded, options: []) { value, _, stop in
+            if value != nil { tagged = true; stop.pointee = true }
+        }
+        return tagged
+    }
+
+    /// Bounds-clamp that, unlike NSIntersectionRange, keeps a zero-length
+    /// range's location (deletions report their edit as an empty range).
+    private func clamped(_ range: NSRange, to bounds: NSRange) -> NSRange {
+        let loc = min(max(range.location, bounds.location), NSMaxRange(bounds))
+        let end = min(max(NSMaxRange(range), loc), NSMaxRange(bounds))
+        return NSRange(location: loc, length: end - loc)
+    }
+
+    /// Instant heading feedback for the line being edited (called from
+    /// didChangeText, i.e. per keystroke). The deferred restyleMarkdown pass
+    /// on the typing pause is authoritative, but waiting ~500ms for a typed
+    /// `# ` prefix to take effect — or for text typed after a heading's
+    /// newline to shed the inherited big font — reads as lag. Aggressively
+    /// gated: the caret line's desired heading level is compared against its
+    /// current uniform .markdownHeading tagging and the line is only restyled
+    /// on a mismatch, so steady typing pays one attribute walk of one line.
+    private func liveRestyleHeadingAtCaret() {
+        guard let textStorage = textStorage, textStorage.length > 0 else { return }
+        let ns = string as NSString
+        let caret = min(selectedRange().location, ns.length)
+        let lineRange = ns.lineRange(for: NSRange(location: caret, length: 0))
+        // codeBlockRanges can be ~500ms stale here; worst case a keystroke's
+        // live styling is skipped or briefly wrong and the deferred pass
+        // corrects it.
+        guard lineRange.length > 0, !isLocationInCodeBlock(lineRange.location) else { return }
+        let desired = Self.headingLevel(in: ns, lineRange: lineRange)
+
+        var current: Int? = nil
+        var uniform = true
+        var first = true
+        textStorage.enumerateAttribute(.markdownHeading, in: lineRange, options: []) { value, _, stop in
+            let level = value as? Int
+            if first { current = level; first = false }
+            else if level != current { uniform = false; stop.pointee = true }
+        }
+        if uniform && current == desired { return }
+
+        let baseFont = coordinator?.parent.font ?? self.font ?? NSFont.systemFont(ofSize: 16)
+        applyMarkdownStyling(in: lineRange, baseFont: baseFont)
     }
 
     /// True when the `.codeBlock` attribute covers every character of `range`.
@@ -709,39 +861,52 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
         return effective.length == range.length
     }
 
-    /// Rewrites code-block styling over `target` only, deriving everything from
-    /// the current `codeBlockRanges`: base font/paragraph (bold/italic kept)
-    /// outside fences, mono font + `.codeBlock` tag inside, and the block-gap
-    /// paragraph styles on each block's boundary lines. The full restyle passes
+    /// Rewrites Markdown-structural styling over `target` only, deriving
+    /// everything from the current `codeBlockRanges` and the target's line
+    /// text: base font/paragraph (bold/italic kept) as the default, mono font
+    /// + `.codeBlock` tag inside fences with the block-gap paragraph styles on
+    /// each block's boundary lines, and a scaled bold font + `.markdownHeading`
+    /// tag on `#` heading lines outside any fence. The full restyle passes
     /// the whole document; the fast paths pass just the edited region so the
     /// attribute churn — and the layout invalidation it causes — stays O(edit).
-    private func applyCodeBlockStyling(in target: NSRange, baseFont: NSFont) {
+    private func applyMarkdownStyling(in target: NSRange, baseFont: NSFont) {
         guard let textStorage = textStorage, textStorage.length > 0 else { return }
         let ns = string as NSString
         let docRange = NSRange(location: 0, length: ns.length)
-        var target = NSIntersectionRange(target, docRange)
-        guard target.length > 0 else { return }
+        // Clamp by hand: a pure deletion arrives as a zero-length edited
+        // range, which NSIntersectionRange treats as "no intersection" and
+        // relocates to 0. Paragraph-expanding before the emptiness guard keeps
+        // deletions restyling their line (e.g. a heading losing its `#`).
+        var target = clamped(target, to: docRange)
         // Paragraph styles only render correctly over whole paragraphs.
         target = ns.paragraphRange(for: target)
+        guard target.length > 0 else { return }
 
         let monoFont = NSFont.monospacedSystemFont(ofSize: baseFont.pointSize, weight: .regular)
         let fontManager = NSFontManager.shared
         let baseParagraph = VimTextView.paragraphStyle()
         let blockGap: CGFloat = 12
 
-        // Cosmetic-only: don't register code-block restyling on the undo stack.
+        // Cosmetic-only: don't register the restyling on the undo stack.
         undoManager?.disableUndoRegistration()
         textStorage.beginEditing()
         textStorage.removeAttribute(.codeBlock, range: target)
-        // Reset paragraph style + font in the target; blocks override below.
+        // Reset paragraph style + font in the target; blocks and headings
+        // override below.
         textStorage.addAttribute(.paragraphStyle, value: baseParagraph, range: target)
-        textStorage.enumerateAttribute(.font, in: target, options: []) { value, range, _ in
-            let traits = (value as? NSFont).map { fontManager.traits(of: $0) } ?? NSFontTraitMask()
+        textStorage.enumerateAttributes(in: target, options: []) { attrs, range, _ in
+            // A heading run's bold is derived from its `#` prefix, not manual
+            // formatting — ignore its traits so a line that stopped being a
+            // heading reverts to the plain base font.
+            let traits = attrs[.markdownHeading] == nil
+                ? ((attrs[.font] as? NSFont).map { fontManager.traits(of: $0) } ?? NSFontTraitMask())
+                : NSFontTraitMask()
             var f = baseFont
             if traits.contains(.boldFontMask) { f = fontManager.convert(f, toHaveTrait: .boldFontMask) }
             if traits.contains(.italicFontMask) { f = fontManager.convert(f, toHaveTrait: .italicFontMask) }
             textStorage.addAttribute(.font, value: f, range: range)
         }
+        textStorage.removeAttribute(.markdownHeading, range: target)
         // Overlay monospaced font + tag where blocks intersect the target, and
         // re-add the gap above the opening fence / below the closing fence for
         // any boundary line falling inside it.
@@ -772,8 +937,81 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
                 textStorage.addAttribute(.paragraphStyle, value: after, range: NSIntersectionRange(lastLine, docRange))
             }
         }
+        // Heading overlay: `#{1,6} ` lines outside any fence get a scaled bold
+        // font + level tag. The `#` marks stay visible ordinary characters, so
+        // Vim offsets and the plain `.txt` on disk are untouched.
+        var lineStart = target.location
+        while lineStart < NSMaxRange(target) {
+            let lineRange = ns.lineRange(for: NSRange(location: lineStart, length: 0))
+            if !isLocationInCodeBlock(lineRange.location),
+               let level = Self.headingLevel(in: ns, lineRange: lineRange) {
+                textStorage.addAttribute(.font, value: Self.headingFont(level: level, baseFont: baseFont), range: lineRange)
+                textStorage.addAttribute(.markdownHeading, value: level, range: lineRange)
+                let para = baseParagraph.mutableCopy() as! NSMutableParagraphStyle
+                para.paragraphSpacingBefore = 10
+                para.paragraphSpacing = 3
+                textStorage.addAttribute(.paragraphStyle, value: para, range: lineRange)
+            }
+            let next = NSMaxRange(lineRange)
+            if next <= lineStart { break }
+            lineStart = next
+        }
         textStorage.endEditing()
         undoManager?.enableUndoRegistration()
+    }
+
+    /// Level (1–6) of the ATX heading on the line at `lineRange`, or nil: one
+    /// to six `#` characters at the line start followed by a space or tab.
+    /// `#hashtag`, `#!/bin/sh`, and 7+ hashes stay plain text.
+    static func headingLevel(in ns: NSString, lineRange: NSRange) -> Int? {
+        let end = NSMaxRange(lineRange)
+        var i = lineRange.location
+        var hashes = 0
+        while i < end, ns.character(at: i) == 0x23 /* # */ {
+            hashes += 1
+            if hashes > 6 { return nil }
+            i += 1
+        }
+        guard hashes > 0, i < end else { return nil }
+        let next = ns.character(at: i)
+        return (next == 0x20 || next == 0x09) ? hashes : nil
+    }
+
+    /// Heading display font: the base font's family, scaled by level and bold.
+    static func headingFont(level: Int, baseFont: NSFont) -> NSFont {
+        let scale: CGFloat
+        switch level {
+        case 1: scale = 1.5
+        case 2: scale = 1.3
+        case 3: scale = 1.15
+        default: scale = 1.0
+        }
+        let size = (baseFont.pointSize * scale).rounded()
+        let resized = NSFont(descriptor: baseFont.fontDescriptor, size: size) ?? baseFont
+        return NSFontManager.shared.convert(resized, toHaveTrait: .boldFontMask)
+    }
+
+    /// Fast scan used at note-open to decide whether the initial restyle must
+    /// force a full pass (a plain note keeps its zero-cost open otherwise).
+    /// Over-approximates: doesn't exclude fenced code, which only means an
+    /// unnecessary full restyle for a note whose sole `#` lines sit in fences.
+    static func containsHeadingLine(_ text: String) -> Bool {
+        let ns = text as NSString
+        let len = ns.length
+        var search = NSRange(location: 0, length: len)
+        while search.location < len {
+            let found = ns.range(of: "#", options: [], range: search)
+            if found.location == NSNotFound { return false }
+            let lineRange = ns.lineRange(for: NSRange(location: found.location, length: 0))
+            if lineRange.location == found.location,
+               headingLevel(in: ns, lineRange: lineRange) != nil {
+                return true
+            }
+            // A heading `#` can only start a line — skip to the next one.
+            let next = max(NSMaxRange(lineRange), found.location + 1)
+            search = NSRange(location: next, length: len - next)
+        }
+        return false
     }
 
     func updateFontSize(_ newSize: CGFloat) {
@@ -1710,6 +1948,8 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
     override func didChangeText() {
         super.didChangeText()
         invalidateSearchCaches()
+        liveRestyleHeadingAtCaret()
+        refreshHeadingFolds()
         if let ruler = enclosingScrollView?.verticalRulerView as? LineNumberRulerView {
             ruler.invalidateLineCache()
             ruler.needsDisplay = true
@@ -1834,7 +2074,7 @@ class VimNSTextView: NSTextView, NSViewToolTipOwner {
 
     /// Replaces literal `![](assets/…)` Markdown references in the document
     /// with inline image attachments loaded from disk. Runs on load (after the
-    /// text is set), analogous to `restyleCodeBlocks`. References whose asset
+    /// text is set), analogous to `restyleMarkdown`. References whose asset
     /// file is missing are left as plain text so nothing is silently lost.
     func renderImageAttachments() {
         guard let storage = textStorage, storage.length > 0 else { return }
