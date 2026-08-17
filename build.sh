@@ -10,6 +10,11 @@ echo "🔨 Building VimText (release)..."
 # the app is ever produced.
 swift build -c release --product VimText 2>&1
 
+# The MCP stdio server ships inside the bundle, so pointing a client at
+# VimText.app/Contents/MacOS/vimtext-mcp is all the setup there is.
+echo "🔌 Building MCP server..."
+swift build -c release --product vimtext-mcp 2>&1
+
 echo "📦 Creating app bundle..."
 APP_NAME="VimText"
 APP_DIR="$APP_NAME.app/Contents"
@@ -71,6 +76,7 @@ cat > "$APP_DIR/Info.plist" << 'PLIST'
 PLIST
 
 cp .build/release/VimText "$MACOS_DIR/VimText"
+cp .build/release/vimtext-mcp "$MACOS_DIR/vimtext-mcp"
 
 for bundle in .build/release/VimText*.bundle; do
     if [ -d "$bundle" ]; then
@@ -81,11 +87,16 @@ done
 echo "🔏 Signing app bundle..."
 xattr -cr "$APP_NAME.app"
 codesign --force --sign - "$MACOS_DIR/VimText"
+codesign --force --sign - "$MACOS_DIR/vimtext-mcp"
 codesign --force --deep --sign - "$APP_NAME.app"
 codesign --verify --deep --strict --verbose=2 "$APP_NAME.app"
 
 echo "📍 Installing to /Applications..."
-pkill -f "VimText" 2>/dev/null || true
+# Anchored to the app executable: a bare -f "VimText" also matches
+# ".../VimText.app/Contents/MacOS/vimtext-mcp", so every MCP client's relay
+# process was killed along with the app and the client reported the server as
+# crashed ("transport closed unexpectedly") until it was restarted.
+pkill -f "VimText\.app/Contents/MacOS/VimText$" 2>/dev/null || true
 sleep 0.5
 
 rm -rf "/Applications/$APP_NAME.app"

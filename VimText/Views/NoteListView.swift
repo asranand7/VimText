@@ -9,6 +9,7 @@ struct NoteListView: View {
     @State private var isSelectionMode = false
     @State private var showDeleteAllConfirm = false
     @State private var showQuickCaptureShortcutSheet = false
+    @State private var showAIConnectionSheet = false
     @State private var showDeleteSelectedConfirm = false
     @State private var searchFocusTrigger = false
     @State private var highlightedIndex: Int? = nil
@@ -570,6 +571,10 @@ struct NoteListView: View {
                         Button("Quick Capture Shortcut… (\(QuickCaptureHotKey.shared.shortcutDescription))") {
                             showQuickCaptureShortcutSheet = true
                         }
+
+                        Button("Connect an AI Assistant…") {
+                            showAIConnectionSheet = true
+                        }
                     }
 
                     Divider()
@@ -655,8 +660,14 @@ struct NoteListView: View {
         .onReceive(NotificationCenter.default.publisher(for: .openQuickCaptureShortcutSettings)) { _ in
             showQuickCaptureShortcutSheet = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openAIConnectionPanel)) { _ in
+            showAIConnectionSheet = true
+        }
         .sheet(isPresented: $showQuickCaptureShortcutSheet) {
             QuickCaptureShortcutSheet()
+        }
+        .sheet(isPresented: $showAIConnectionSheet) {
+            AIConnectionSheet()
         }
         .onChange(of: viewModel.searchText) {
             if viewModel.searchText.isEmpty {

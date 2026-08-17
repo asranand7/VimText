@@ -56,6 +56,13 @@ final class NotesViewModel: ObservableObject {
         }
         UserDefaults.standard.set(recentNoteIds.map(\.uuidString), forKey: Self.recentNoteIdsKey)
     }
+    /// Incremented whenever the *selected* note's content is replaced from
+    /// outside the editor (an MCP write). `ContentView` keys the editor on this
+    /// alongside the note id, so the change forces the same clean rebuild a
+    /// note switch does. Only bumped for the on-screen note — an edit to any
+    /// other note needs no view work.
+    @Published private(set) var editorReloadToken: Int = 0
+
     @Published var selectedFolderId: UUID?
     @Published var pendingSearchHighlight: String?
     @Published var searchText: String = ""
@@ -384,6 +391,53 @@ final class NotesViewModel: ObservableObject {
         indexNote(note)
         notes.insert(note, at: 0)
         applySaveResult(storage.saveNote(note))
+    }
+
+    /// Creates and saves a note on behalf of an external caller (the MCP
+    /// service) without selecting it — an agent writing a note must not yank
+    /// the editor away from whatever the user is looking at, same reasoning as
+    /// `createQuickCapturedNote`.
+    @discardableResult
+    func createExternalNote(title: String, content: String, folderId: UUID?) -> Note {
+        let note = Note(title: title, content: content, folderId: folderId)
+        indexNote(note)
+        notes.insert(note, at: 0)
+        applySaveResult(storage.saveNote(note))
+        return note
+    }
+
+    /// Applies an external (MCP) edit to a note and returns the updated value,
+    /// or nil if the note is gone or locked.
+    ///
+    /// Unlike `updateNoteContent` (which is fed *by* the editor and so can
+    /// trust it), this is a write coming from behind the editor's back, so it
+    /// has three extra jobs: flush whatever the editor has buffered first so
+    /// this isn't racing it, drop the `.rtf` sidecar (it still holds the
+    /// pre-edit text and outranks the `.txt` at load time), and — when the note
+    /// is the one on screen — bump `editorReloadToken` so the editor is rebuilt
+    /// from the new content instead of overwriting it from its stale
+    /// `NSTextStorage`.
+    @discardableResult
+    func applyExternalEdit(id: UUID, title: String, content: String) -> Note? {
+        NotificationCenter.default.post(name: .commitEditorPendingWork, object: nil)
+        flushPendingSavesSynchronously()
+
+        guard let index = notes.firstIndex(where: { $0.id == id }), !notes[index].isLocked else { return nil }
+
+        indexNote(id: id, title: title, content: content)
+        notes[index].title = title
+        notes[index].content = content
+        notes[index].rtfData = nil
+        notes[index].modifiedAt = Date()
+        rtfInSyncByID[id] = false
+
+        applySaveResult(storage.saveNote(notes[index], rtfInSync: false))
+        storage.waitForPendingWrites()
+
+        if selectedNoteId == id {
+            editorReloadToken &+= 1
+        }
+        return notes[index]
     }
 
     /// Creates a copy of `note` (new id/timestamps, unpinned) directly above it

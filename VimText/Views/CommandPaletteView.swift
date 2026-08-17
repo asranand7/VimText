@@ -168,6 +168,11 @@ class CommandPaletteState: ObservableObject {
             })
         }
 
+        // MARK: AI
+        commands.append(PaletteCommand(id: "connect_ai", name: "Connect an AI Assistant…", icon: "sparkles", category: "AI") {
+            NotificationCenter.default.post(name: .openAIConnectionPanel, object: nil)
+        })
+
         return commands
     }
     

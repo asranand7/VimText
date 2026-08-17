@@ -1,12 +1,13 @@
 import SwiftUI
 import VimTextCore
 
-/// The global Quick Capture hotkey must be registered once at launch,
-/// whether or not a window ever opens — hence an app delegate rather than a
-/// view's onAppear.
+/// The global Quick Capture hotkey and the MCP socket must both come up once at
+/// launch, whether or not a window ever opens — hence an app delegate rather
+/// than a view's onAppear.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         QuickCaptureHotKey.shared.start()
+        MCPSocketServer.shared.start()
     }
 }
 

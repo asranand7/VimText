@@ -1,5 +1,13 @@
 import SwiftUI
 
+/// Identity of the editor view. The note id alone was enough while the editor
+/// was the only writer; `reloadToken` adds the second reason to rebuild — a
+/// write that arrived from outside it (see `NotesViewModel.applyExternalEdit`).
+struct EditorIdentity: Hashable {
+    let noteId: UUID
+    let reloadToken: Int
+}
+
 public struct ContentView: View {
     @StateObject private var viewModel = NotesViewModel()
     @StateObject private var themeManager = ThemeManager()
@@ -180,7 +188,12 @@ public struct ContentView: View {
                     isSidebarVisible: isSidebarVisible,
                     onToggleSidebar: toggleSidebar
                 )
-                .id(noteId)
+                // Keyed on the reload token as well as the id so an external
+                // (MCP) write to the note on screen rebuilds the editor from
+                // the new content — without it, the editor's NSTextStorage
+                // still holds the pre-edit text and would save it back over
+                // the agent's change.
+                .id(EditorIdentity(noteId: noteId, reloadToken: viewModel.editorReloadToken))
             } else {
                 emptyDetail
                     .overlay(alignment: .topLeading) {
