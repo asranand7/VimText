@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import MCPContract
 
 // vimtext-mcp — the MCP stdio server MCP clients are pointed at.
 //
@@ -9,13 +10,20 @@ import Foundation
 // means updating VimText updates the tools, with no client reconfiguration and
 // no second copy of the storage format to keep in sync.
 //
-// Foundation only, no VimTextCore: an MCP client spawns this on every session,
-// so start-up time is a feature.
+// The exception is the part of the protocol that says what this server *is*
+// rather than what the notes contain — handshake, tool list, ping. Those come
+// from `MCPContract`, which the app compiles in too, and are answered here so
+// that opening an agent session never launches a notes app. VimText is started
+// on the first call that actually needs a note.
+//
+// No VimTextCore dependency: an MCP client spawns this on every session, so
+// start-up time is a feature.
 
-let socketPath: String = {
-    let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    return appSupport.appendingPathComponent("VimText/mcp.sock").path
-}()
+/// How long to wait for the app to answer one request before giving up. Every
+/// call is a small local read or write, so this only ever fires when the app is
+/// wedged — in which case an error the agent can report beats a hang with no
+/// way out.
+let replyTimeoutSeconds = 60
 
 func log(_ message: String) {
     // stderr only. Anything on stdout would be parsed as a protocol message.
@@ -26,6 +34,7 @@ func log(_ message: String) {
 
 /// Connects to the app's socket, or returns nil if nothing is listening.
 func connectToApp() -> Int32? {
+    let socketPath = MCPContract.socketPath
     guard FileManager.default.fileExists(atPath: socketPath) else { return nil }
 
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -52,6 +61,8 @@ func connectToApp() -> Int32? {
 
     var on: Int32 = 1
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+    var timeout = timeval(tv_sec: replyTimeoutSeconds, tv_usec: 0)
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
     return fd
 }
 
@@ -88,10 +99,23 @@ func launchApp() {
     }
 }
 
+var connection: Int32?
+
+/// Anything buffered past a reply's newline is kept for the next call — replies
+/// can arrive coalesced in one packet.
+var socketBuffer = Data()
+
+/// A connection to an app that is *already* running, or nil. Never launches.
+func existingConnection() -> Int32? {
+    if let connection { return connection }
+    guard let fd = connectToApp() else { return nil }
+    connection = fd
+    return fd
+}
+
 /// The live connection, launching and waiting for VimText when it isn't up yet.
-func ensureConnection(_ existing: Int32?) -> Int32? {
-    if let existing { return existing }
-    if let fd = connectToApp() { return fd }
+func ensureConnection() -> Int32? {
+    if let fd = existingConnection() { return fd }
 
     log("VimText isn't running — starting it")
     launchApp()
@@ -100,11 +124,22 @@ func ensureConnection(_ existing: Int32?) -> Int32? {
     // a warm app answers almost immediately.
     let deadline = Date().addingTimeInterval(20)
     while Date() < deadline {
-        if let fd = connectToApp() { return fd }
+        if let fd = connectToApp() {
+            connection = fd
+            return fd
+        }
         usleep(150_000)
     }
     log("gave up waiting for VimText to start")
     return nil
+}
+
+/// Drops the current socket so the next request reconnects (and relaunches)
+/// rather than failing forever, and discards any half-read reply with it.
+func dropConnection() {
+    if let connection { close(connection) }
+    connection = nil
+    socketBuffer = Data()
 }
 
 func writeAll(_ fd: Int32, _ data: Data) -> Bool {
@@ -122,72 +157,75 @@ func writeAll(_ fd: Int32, _ data: Data) -> Bool {
     return true
 }
 
-/// Reads one newline-terminated reply. Anything buffered past the newline is
-/// kept for the next call — replies can arrive coalesced in one packet.
-var socketBuffer = Data()
+enum ReplyOutcome {
+    case reply(Data)
+    /// The app is up but didn't answer in time (main thread wedged).
+    case timedOut
+    case disconnected
+}
 
-func readReply(_ fd: Int32) -> Data? {
+/// Reads one newline-terminated reply.
+func readReply(_ fd: Int32) -> ReplyOutcome {
     var chunk = [UInt8](repeating: 0, count: 16 * 1024)
     while true {
         if let newline = socketBuffer.firstIndex(of: UInt8(ascii: "\n")) {
             let line = Data(socketBuffer[socketBuffer.startIndex..<newline])
             socketBuffer = Data(socketBuffer[socketBuffer.index(after: newline)...])
-            return line
+            return .reply(line)
         }
         let count = read(fd, &chunk, chunk.count)
         if count < 0 {
             if errno == EINTR { continue }
-            return nil
+            // SO_RCVTIMEO expiry surfaces as EAGAIN.
+            return errno == EAGAIN || errno == EWOULDBLOCK ? .timedOut : .disconnected
         }
-        guard count > 0 else { return nil } // app closed the connection
+        guard count > 0 else { return .disconnected } // app closed the connection
         socketBuffer.append(contentsOf: chunk[0..<count])
     }
 }
 
-// MARK: - Local handshake
-
-/// Kept in step with `MCPProtocol.supportedProtocolVersions` in the app.
-let supportedProtocolVersions: Set<String> = [
-    "2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", "2026-07-28"
-]
-
-/// `initialize` is answered here rather than forwarded so a cold VimText launch
-/// can't overrun the client's handshake timeout. The app is started on the
-/// first real request instead. The response has to match the app's own — see
-/// `MCPProtocol.initializeResult`.
-func localInitializeResponse(id: Any, params: [String: Any]) -> [String: Any] {
-    let requested = params["protocolVersion"] as? String
-    let version = supportedProtocolVersions.contains(requested ?? "") ? requested! : "2025-06-18"
-    return [
-        "jsonrpc": "2.0",
-        "id": id,
-        "result": [
-            "protocolVersion": version,
-            "capabilities": ["tools": ["listChanged": false]],
-            "serverInfo": ["name": "vimtext", "version": "1.0.0"],
-            "instructions": """
-            VimText is the user's personal notes app. Use these tools to search, read and edit \
-            their notes. Note ids come from search_notes or list_notes — never invent one. \
-            Prefer update_note with mode "append" over "replace" when adding to an existing \
-            note, since replace discards the previous body. Locked notes are read-only and \
-            their contents are hidden.
-            """
-        ] as [String: Any]
-    ]
-}
+// MARK: - Locally answered methods
 
 func emit(_ object: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.withoutEscapingSlashes]) else { return }
     FileHandle.standardOutput.write(data + Data([UInt8(ascii: "\n")]))
 }
 
+func successResponse(id: Any, result: [String: Any]) -> [String: Any] {
+    ["jsonrpc": "2.0", "id": id, "result": result]
+}
+
 func errorResponse(id: Any, message: String) -> [String: Any] {
     ["jsonrpc": "2.0", "id": id, "error": ["code": -32_000, "message": message]]
 }
 
-// MARK: - Relay loop
+/// The reply to a method that describes the server rather than the notes, or
+/// nil when the message has to go to the app.
+///
+/// `initialize` is answered here so a cold VimText launch can't overrun the
+/// client's handshake timeout. `tools/list` is answered here only when the app
+/// isn't already up: a client asks for it as soon as it connects, and launching
+/// a notes app because someone opened a terminal is not what anyone wants —
+/// but a running app is still the authority, and forwarding to it costs
+/// nothing.
+func localResponse(method: String?, id: Any, params: [String: Any]) -> [String: Any]? {
+    switch method {
+    case "initialize":
+        return successResponse(id: id, result: MCPContract.initializeResult(
+            requestedVersion: params["protocolVersion"] as? String
+        ))
+    case "server/discover":
+        return successResponse(id: id, result: MCPContract.discoverResult())
+    case "ping":
+        return successResponse(id: id, result: [:])
+    case "tools/list" where existingConnection() == nil:
+        return successResponse(id: id, result: ["tools": MCPContract.toolDefinitions])
+    default:
+        return nil
+    }
+}
 
-var connection: Int32?
+// MARK: - Relay loop
 
 while let line = readLine(strippingNewline: true) {
     guard !line.isEmpty, let data = line.data(using: .utf8) else { continue }
@@ -199,28 +237,46 @@ while let line = readLine(strippingNewline: true) {
     // misattributed to the wrong request.
     guard let id = message?["id"] else { continue }
 
-    if method == "initialize" {
-        emit(localInitializeResponse(id: id, params: message?["params"] as? [String: Any] ?? [:]))
+    if let local = localResponse(method: method, id: id, params: message?["params"] as? [String: Any] ?? [:]) {
+        emit(local)
         continue
     }
 
-    guard let fd = ensureConnection(connection) else {
+    guard var fd = ensureConnection() else {
         emit(errorResponse(id: id, message: "VimText could not be started, so notes aren't reachable. Open VimText and try again."))
         continue
     }
-    connection = fd
 
-    guard writeAll(fd, data + Data([UInt8(ascii: "\n")])), let reply = readReply(fd) else {
-        // The app quit mid-session. Drop the dead socket so the next request
-        // reconnects (and relaunches) instead of failing forever.
-        close(fd)
-        connection = nil
-        socketBuffer = Data()
-        emit(errorResponse(id: id, message: "Lost the connection to VimText. Try that again."))
-        continue
+    // A failed write means the app went away since the last call — VimText was
+    // quit, or rebuilt — and the request never landed: the app drops a partial
+    // line when the connection closes. That is safe to retry on a fresh
+    // connection, and beats spending the agent's turn on an error the very next
+    // identical call wouldn't hit. (A failed *read* is not retried: the app may
+    // already have applied the write, and a second create_note would duplicate
+    // the note.)
+    let payload = data + Data([UInt8(ascii: "\n")])
+    if !writeAll(fd, payload) {
+        dropConnection()
+        guard let reconnected = ensureConnection(), writeAll(reconnected, payload) else {
+            dropConnection()
+            emit(errorResponse(id: id, message: "Lost the connection to VimText. Try that again."))
+            continue
+        }
+        fd = reconnected
     }
 
-    FileHandle.standardOutput.write(reply + Data([UInt8(ascii: "\n")]))
+    switch readReply(fd) {
+    case .reply(let reply):
+        FileHandle.standardOutput.write(reply + Data([UInt8(ascii: "\n")]))
+    case .timedOut:
+        // The answer may still turn up later on this socket, where it would be
+        // read as the *next* request's reply, so the socket goes too.
+        dropConnection()
+        emit(errorResponse(id: id, message: "VimText didn't respond within \(replyTimeoutSeconds)s. It may be busy — try that again."))
+    case .disconnected:
+        dropConnection()
+        emit(errorResponse(id: id, message: "Lost the connection to VimText. Try that again."))
+    }
 }
 
 if let connection { close(connection) }

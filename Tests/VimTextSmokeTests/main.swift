@@ -1995,7 +1995,13 @@ let tests: [(String, () throws -> Void)] = [
     ("Storage pinned-state persistence", testStoragePinnedStatePersists),
     ("Storage migration to a new location", testMigrateStoreCopiesStore),
     ("Search normalization (fold + lowercase)", testSearchNormalization),
-    ("Quick Capture helpers (title/hotkey)", testQuickCaptureHelpers)
+    ("Quick Capture helpers (title/hotkey)", testQuickCaptureHelpers),
+    ("MCP handshake and JSON-RPC envelope", testMCPHandshakeAndEnvelope),
+    ("MCP tool list matches dispatch", testMCPToolListMatchesDispatch),
+    ("MCP argument clamping and coercion", testMCPArgumentsAreClampedAndCoerced),
+    ("NotesService note lifecycle", testNotesServiceLifecycle),
+    ("MCP lock_note is one-way", testMCPLockIsOneWay),
+    ("NotesService bad references and locked writes", testNotesServiceRejectsBadReferencesAndLockedWrites)
 ]
 
 do {

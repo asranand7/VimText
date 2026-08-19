@@ -17,6 +17,11 @@ A native macOS notes app with broad Vim keybinding support. Think Apple Notes, b
 - **Auto-save** — notes are saved automatically as you type, with visible save/error state
 - **Local storage** — notes are stored locally in `~/Library/Application Support/VimText/`
 
+### AI Assistant Access
+- **Built-in MCP server** — connect Claude Code, Claude Desktop, Gemini CLI or Cursor from the sidebar `⋯` menu (or `⌘P` → "Connect an AI Assistant") and the assistant can search, read, create, update, move, lock and delete your notes. Edits appear live in the open editor.
+- **Locked notes stay yours** — an assistant can read a locked note and can lock one for you, but it can never edit, move, delete or *unlock* one. Unlocking is a click on the lock in VimText's editor header, so an assistant can't work around the protection.
+- **Nothing to install, nothing exposed** — the server ships inside the app bundle and speaks over a private `0600` Unix socket in your own Application Support folder, not a network port. Assistants can reach your notes whether or not VimText is open; the first call starts it in the background.
+
 ### Visual & Customization Options
 - **Paper Styles** — Toggle between **Plain**, **Dotted Grid**, and **Lined Paper** editor backgrounds (aligned to text baselines) via the settings menu or `⌘P` Command Palette.
 - **Line Numbers** — Toggle editor line numbers from the format menu.
@@ -212,6 +217,10 @@ VimText/
 │   └── StorageManager.swift    # Local persistence (json + txt/rtf sidecars), image assets, backups
 ├── ViewModels/
 │   └── NotesViewModel.swift    # App state, filtering pipeline, debounced saves
+├── Service/                    # Agent access — see ARCHITECTURE.md
+│   ├── NotesService.swift      # Stable API over the notes (DTOs, no storage details)
+│   ├── MCPProtocol.swift       # JSON-RPC 2.0 handling + tool dispatch
+│   └── MCPSocketServer.swift   # In-process Unix-socket transport (0600)
 ├── Views/
 │   ├── ContentView.swift       # Main split layout
 │   ├── NoteListView.swift      # Sidebar note list & search
@@ -230,10 +239,14 @@ VimText/
 │   ├── LineNumberRulerView.swift   # Line-number gutter
 │   └── PremiumScroller.swift   # Thin overlay scrollbar
 ├── Theme/                      # Themes, design tokens (DS), date formatters
-├── Support/                    # Notification names, prefs, image Markdown, layout consts
+├── Support/                    # Notification names, prefs, image Markdown, MCP client installer
 └── VimTextApp.swift            # App entry point & global shortcuts
+MCPContract/
+└── MCPContract.swift           # MCP handshake + tool schemas, shared by app and relay
+MCP/
+└── main.swift                  # vimtext-mcp — the stdio relay assistants spawn
 Tests/
-└── VimTextSmokeTests/          # CLI smoke coverage for Vim parsing, storage, image Markdown
+└── VimTextSmokeTests/          # CLI smoke coverage for Vim parsing, storage, MCP, image Markdown
 ```
 
 ## Data Storage

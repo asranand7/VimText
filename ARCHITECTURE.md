@@ -13,7 +13,8 @@ macOS 14+, **no external dependencies** (keep it that way).
 
 - **`./build.sh`** — compile (release) → bundle `.app` → install to
   `/Applications` → relaunch. This is the standard run loop.
-- Compile only: **`swift build -c release --product VimText`**.
+- Compile only: **`swift build -c release --product VimText`** (and
+  `--product vimtext-mcp` for the MCP relay that ships in the bundle).
   > ⚠️ Plain `swift build` fails: it also builds the `VimTextSmokeTests` target,
   > which uses `@testable import` and won't compile in release. Always pass
   > `--product VimText` (build.sh already does).
@@ -32,6 +33,7 @@ macOS 14+, **no external dependencies** (keep it that way).
 | `Models/` | `Note`, `NoteFolder` — plain value types. |
 | `Storage/StorageManager.swift` | Disk persistence (JSON + `.txt`/`.rtf` sidecars), image assets, backups/recovery. Singleton. |
 | `ViewModels/NotesViewModel.swift` | `@MainActor` store: notes/folders state, filtering pipeline, debounced saves. |
+| `Service/` | The agent-facing surface: `NotesService` (stable API over the notes) + the MCP server. See below. |
 | `Views/` | SwiftUI views (sidebar, editor chrome, command palette, content split). |
 | `Vim/` | The editor core: Vim engine + the AppKit text view and its bridge. |
 | `Theme/` | Themes, design tokens (`DS`), cached date formatters. |
@@ -99,6 +101,55 @@ pipeline. There is no per-keystroke full-document copy and no
 `updateNSView` content diffing. `.id(noteId)` recreates the editor per note on
 purpose (isolates undo stack, Vim mode, and marks) — which is what makes the
 initial-content-only model safe.
+
+## Agent access (MCP)
+
+Local AI assistants (Claude Code, Claude Desktop, Gemini CLI, Cursor) read and
+edit notes through a Model Context Protocol server. Two binaries are involved —
+the app, and a tiny stdio relay that ships beside it in the bundle:
+
+| Path | Responsibility |
+| --- | --- |
+| `Service/NotesService.swift` | **The stable API over the notes**: string ids, ISO-8601 dates, DTOs that expose no storage-only field. Integrations talk to this, never to `StorageManager`, so the on-disk format can change without touching a tool. |
+| `Service/MCPProtocol.swift` | JSON-RPC 2.0 handling + dispatch from a tool call onto `NotesService`. Transport-agnostic: one message in, one reply out. |
+| `Service/MCPSocketServer.swift` | The transport: a `0600` Unix socket at `…/Application Support/VimText/mcp.sock`, newline-delimited JSON-RPC. Started from `AppDelegate` alongside the Quick Capture hotkey. |
+| `MCPContract/` (separate SPM target) | What the server *says* it is: handshake, instructions, tool schemas, socket path. Compiled into **both** binaries. |
+| `MCP/main.swift` → `vimtext-mcp` | The stdio server clients are actually pointed at (`VimText.app/Contents/MacOS/vimtext-mcp`). Relays to the socket; holds no note logic. |
+| `Support/MCPClientInstaller.swift` | One-click registration into each client's `mcpServers` config (sidebar `⋯` / ⌘P → "Connect an AI Assistant"). |
+
+- **Why in-process**: the app has no file watcher, so an external server writing
+  the notes folder would be clobbered by the next debounced save. With a window
+  open, reads and writes go through `NotesViewModel` (an agent edit lands in the
+  live UI; `applyExternalEdit` bumps `editorReloadToken` so the on-screen editor
+  rebuilds instead of overwriting from its stale `NSTextStorage`). With no
+  window, the service falls back to `StorageManager` directly.
+- **Why a Unix socket**: a localhost TCP listener makes macOS raise the "accept
+  incoming connections?" firewall prompt. A socket file has no port and, at
+  0600, sits behind the same trust boundary as the notes themselves.
+- **The relay answers `initialize`, `ping`, `server/discover` and — when the app
+  isn't already running — `tools/list` itself**, out of `MCPContract`. So
+  opening an agent session never launches a notes app, and a cold launch can't
+  overrun the client's handshake timeout. The first call that needs an actual
+  note starts VimText with `open -g` and polls for the socket.
+- **Locked notes** read and search normally (the app's own editor and search
+  show them); every *write* is refused. `MCPContract.instructions` tells the
+  model exactly that — when the behaviour changes, change the instructions.
+  `lock_note` is deliberately **one-way**: an unlock tool would be the obvious
+  way around that refusal (unlock → edit → relock), so unlocking stays a human
+  click on the editor header's lock. `NotesService.lock` is the guard to relax
+  if that ever changes.
+- **One request = one read of the store.** `NotesService.withRequestScope`
+  caches the headless `loadNotes`/`loadFolders` for the span of a call; without
+  it, `list_notes` re-read `folders.json` once per row.
+
+### Adding a tool (touches 3 places)
+1. `MCPContract.toolDefinitions` — name, description, JSON schema.
+2. `MCPProtocol.invoke` — one `case` mapping arguments onto the service.
+3. `NotesService` — the behaviour, plus a `ServiceError` case for what it
+   refuses (errors come back as `isError` results, so the model can adjust).
+
+`Tests/VimTextSmokeTests/MCPTests.swift` covers the envelope, argument clamping
+and the service; it fails if a tool is advertised but never dispatched.
 
 ## Cross-cutting gotchas
 

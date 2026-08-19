@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import MCPContract
 
 /// Listens on a Unix domain socket and serves MCP requests out of the running
 /// app, so an agent always sees the same notes the user does.
@@ -27,12 +28,13 @@ public final class MCPSocketServer {
         UserDefaults.standard.object(forKey: enabledDefaultsKey) as? Bool ?? true
     }
 
-    /// Fixed location, deliberately independent of the notes directory (which
-    /// the user can move) so the relay can find it with no configuration.
-    public static var socketPath: String {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return appSupport.appendingPathComponent("VimText/mcp.sock").path
-    }
+    /// Shared with the relay, which has to find this without configuration.
+    public static var socketPath: String { MCPContract.socketPath }
+
+    /// A request larger than this is a client gone wrong, not a note: the
+    /// biggest legitimate one is a note body, and without a ceiling a peer that
+    /// never sends a newline grows this process's memory until it dies.
+    private static let maxRequestBytes = 16 * 1024 * 1024
 
     private let queue = DispatchQueue(label: "com.vimtext.mcp.listener")
     private var listenFD: Int32 = -1
@@ -136,7 +138,12 @@ public final class MCPSocketServer {
     private func acceptPendingConnections() {
         while true {
             let clientFD = accept(listenFD, nil, nil)
-            guard clientFD >= 0 else { return }
+            guard clientFD >= 0 else {
+                // A signal during accept() isn't the "no more pending
+                // connections" answer (EAGAIN) that ends this pass.
+                if errno == EINTR { continue }
+                return
+            }
 
             // Without SO_NOSIGPIPE, a client that goes away mid-write takes the
             // whole app down with SIGPIPE.
@@ -180,6 +187,11 @@ public final class MCPSocketServer {
                 if let reply, !write(fd, reply + Data([UInt8(ascii: "\n")])) {
                     return
                 }
+            }
+
+            if pending.count > Self.maxRequestBytes {
+                NSLog("[VimText MCP] dropping a connection that sent \(pending.count) bytes with no newline")
+                return
             }
         }
     }

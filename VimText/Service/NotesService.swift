@@ -118,8 +118,11 @@ public final class NotesService {
         let filtered = notes()
             .filter { folder == nil || $0.folderId == folderId }
             .sorted { $0.modifiedAt > $1.modifiedAt }
-        guard offset < filtered.count else { return [] }
-        return filtered[offset...].prefix(max(1, limit)).map(summary(for:))
+        // Clamped rather than rejected: paging arguments come straight out of a
+        // model, and a negative offset would trap on the slice below — taking
+        // the whole app down over a bad tool call.
+        let start = min(max(0, offset), filtered.count)
+        return filtered[start...].prefix(max(1, limit)).map(summary(for:))
     }
 
     public func read(id: String?, title: String?) throws -> NoteDetail {
@@ -157,6 +160,7 @@ public final class NotesService {
         if case .failure(let error) = StorageManager.shared.saveNote(note) {
             throw ServiceError.saveFailed(error.localizedDescription)
         }
+        invalidateCachedNotes()
         return detail(for: note)
     }
 
@@ -185,6 +189,7 @@ public final class NotesService {
         if case .failure(let error) = StorageManager.shared.saveNote(copy, rtfInSync: false) {
             throw ServiceError.saveFailed(error.localizedDescription)
         }
+        invalidateCachedNotes()
         return detail(for: copy)
     }
 
@@ -201,8 +206,50 @@ public final class NotesService {
         } else {
             let remaining = notes().filter { $0.id != note.id }
             StorageManager.shared.deleteNote(note, remainingNotes: remaining)
+            invalidateCachedNotes()
         }
         return deleted
+    }
+
+    /// Locks a note, so nothing can change it until the user unlocks it in
+    /// VimText.
+    ///
+    /// One-way on purpose. Every other write here refuses a locked note, and an
+    /// unlock tool would hand a model the obvious way round that — unlock,
+    /// edit, lock again. The lock exists to stop edits nobody asked for, which
+    /// is exactly the mistake an agent is most likely to make, so removing it
+    /// stays a human action: one click on the lock in the editor header. (To
+    /// allow it anyway, this is the method to extend, along with the
+    /// `lock_note` schema and the instructions in `MCPContract`.)
+    @discardableResult
+    public func lock(id: String) throws -> NoteSummary {
+        let note = try resolve(id: id, title: nil)
+        // Idempotent: a model re-locking a locked note has got what it wanted.
+        guard !note.isLocked else { return summary(for: note) }
+
+        if let viewModel = NotesViewModel.current {
+            // The editor may still be holding keystrokes it hasn't serialized;
+            // once the note is locked, `updateNoteContent`'s locked guard would
+            // drop them. Same reasoning as `applyExternalEdit`.
+            NotificationCenter.default.post(name: .commitEditorPendingWork, object: nil)
+            // toggleLock flushes pending saves and hydrates the RTF sidecar
+            // before saving, which is why this doesn't set the flag itself.
+            viewModel.toggleLock(note)
+            let locked = viewModel.notes.first { $0.id == note.id } ?? note
+            return summary(for: locked)
+        }
+
+        var copy = note
+        copy.isLocked = true
+        // Locking isn't a content edit, so `modifiedAt` stays put — the same
+        // choice the app's own lock button makes, and it keeps a lock from
+        // reordering the sidebar. The note came from the eager headless read,
+        // so it still carries its RTF and saving won't drop the sidecar.
+        if case .failure(let error) = StorageManager.shared.saveNote(copy) {
+            throw ServiceError.saveFailed(error.localizedDescription)
+        }
+        invalidateCachedNotes()
+        return summary(for: copy)
     }
 
     public func move(id: String, folder: String?) throws -> NoteSummary {
@@ -222,10 +269,42 @@ public final class NotesService {
         if case .failure(let error) = StorageManager.shared.saveNote(copy) {
             throw ServiceError.saveFailed(error.localizedDescription)
         }
+        invalidateCachedNotes()
         return summary(for: copy)
     }
 
     // MARK: - Backing state
+
+    private var cachedNotes: [Note]?
+    private var cachedFolders: [NoteFolder]?
+    private var requestDepth = 0
+
+    /// Runs one request against a single read of the store.
+    ///
+    /// With a window open the backing state is already in memory, but the
+    /// headless path goes to disk on every access, and the call graph touches
+    /// it a lot: `list` alone re-read `folders.json` once *per row* just to name
+    /// each note's folder, on top of reloading every note. Caching for the span
+    /// of one request makes that one read each. Writes clear the cache, so
+    /// nothing later in the same request can see a note it just changed.
+    func withRequestScope<T>(_ body: () throws -> T) rethrows -> T {
+        requestDepth += 1
+        defer {
+            requestDepth -= 1
+            if requestDepth == 0 { invalidateCache() }
+        }
+        return try body()
+    }
+
+    private func invalidateCache() {
+        cachedNotes = nil
+        cachedFolders = nil
+    }
+
+    /// After a note write. The folder list is untouched by one, so it stays.
+    private func invalidateCachedNotes() {
+        cachedNotes = nil
+    }
 
     /// The live notes when a window is open, otherwise a fresh read from disk.
     ///
@@ -234,11 +313,19 @@ public final class NotesService {
     /// its sidecar deleted by the next `saveNote`, silently dropping the user's
     /// formatting and images.
     private func notes() -> [Note] {
-        NotesViewModel.current?.notes ?? StorageManager.shared.loadNotes()
+        if let viewModel = NotesViewModel.current { return viewModel.notes }
+        if let cachedNotes { return cachedNotes }
+        let loaded = StorageManager.shared.loadNotes()
+        if requestDepth > 0 { cachedNotes = loaded }
+        return loaded
     }
 
     private func folderList() -> [NoteFolder] {
-        NotesViewModel.current?.folders ?? StorageManager.shared.loadFolders()
+        if let viewModel = NotesViewModel.current { return viewModel.folders }
+        if let cachedFolders { return cachedFolders }
+        let loaded = StorageManager.shared.loadFolders()
+        if requestDepth > 0 { cachedFolders = loaded }
+        return loaded
     }
 
     private func resolve(id: String?, title: String?) throws -> Note {
