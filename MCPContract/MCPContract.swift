@@ -55,7 +55,11 @@ public enum MCPContract {
     read and searched like any other, but never modified, moved or deleted — say so \
     rather than trying, and tell the user to unlock it in VimText first. You can \
     lock a note with lock_note, but nothing here can unlock one, so only lock a \
-    note the user has asked you to protect.
+    note the user has asked you to protect. Every note comes back with a "url" \
+    like vimtext://note/<id> that opens it in VimText — include it when you \
+    mention a note, so the user can click straight through instead of going to \
+    look for it. Append ?line=N or ?heading=Some%20Heading to point at a place \
+    inside the note.
     """
 
     public static func initializeResult(requestedVersion: String?) -> [String: Any] {

@@ -70,6 +70,8 @@ extension VimTextView {
         /// Observer that flushes deferred RTF / restyle work before the editor
         /// disappears (e.g. switching notes) so persisted data stays in sync.
         private var commitObserver: Any?
+        /// Observer for `vimtext://` caret targets (see `jumpToTarget`).
+        private var jumpTargetObserver: Any?
 
         init(_ parent: VimTextView) {
             self.parent = parent
@@ -81,6 +83,14 @@ extension VimTextView {
                 queue: nil
             ) { [weak self] _ in
                 self?.flushDeferredWork()
+            }
+            jumpTargetObserver = NotificationCenter.default.addObserver(
+                forName: .jumpToCaretTarget,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let target = notification.object as? DeepLink.Target else { return }
+                self?.jumpToTarget(target)
             }
         }
 
@@ -106,7 +116,35 @@ extension VimTextView {
             if let observer = commitObserver {
                 NotificationCenter.default.removeObserver(observer)
             }
+            if let observer = jumpTargetObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
             deferredWorkItem?.cancel()
+        }
+
+        /// Moves the caret to the line or heading a `vimtext://` link named.
+        ///
+        /// Only the editor that is actually on screen acts: during a note
+        /// switch the outgoing coordinator is briefly still alive and observing,
+        /// and it would otherwise scroll a view that's about to be torn down.
+        private func jumpToTarget(_ target: DeepLink.Target) {
+            guard let textView, textView.window != nil else { return }
+            guard let offset = DeepLink.offset(of: target, in: textView.string) else {
+                // A link written against an older version of the note. Say so
+                // instead of moving the caret somewhere that isn't what was
+                // asked for — the note itself is still open and correct.
+                switch target {
+                case .line(let number):
+                    parent.vimEngine.statusMessage = "Note has no line \(number)"
+                case .heading(let text):
+                    parent.vimEngine.statusMessage = "No heading \"\(text)\" in this note"
+                }
+                return
+            }
+            recordJump(from: textView.selectedRange().location)
+            textView.setSelectedRange(NSRange(location: offset, length: 0))
+            textView.scrollRangeToVisible(NSRange(location: offset, length: 0))
+            textView.window?.makeFirstResponder(textView)
         }
 
         func setupFindController() {

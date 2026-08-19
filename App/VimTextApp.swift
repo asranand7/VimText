@@ -9,6 +9,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         QuickCaptureHotKey.shared.start()
         MCPSocketServer.shared.start()
     }
+
+    /// `vimtext://` links — from an MCP tool result, Spotlight, or anywhere
+    /// else in the system. Handled here rather than with SwiftUI's `onOpenURL`
+    /// for the same reason the hotkey and socket start here: a link can arrive
+    /// before (or without) a window, and the router handles that itself.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        DeepLinkRouter.shared.handle(urls)
+    }
 }
 
 @main

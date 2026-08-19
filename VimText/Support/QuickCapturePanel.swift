@@ -65,10 +65,21 @@ public final class QuickCapturePanelController: NSObject, NSTextViewDelegate {
         }
     }
 
-    public func show() {
+    /// - Parameter prefill: text to drop into the buffer, from a
+    ///   `vimtext://capture?text=…` link. Appended rather than assigned: the
+    ///   buffer survives a dismiss on purpose, and a link arriving while
+    ///   something half-typed is sitting there must not eat it. Saving stays
+    ///   ⌘↩ either way — a link fills the panel, it never writes a note.
+    public func show(prefill: String? = nil) {
         let panel = self.panel ?? buildPanel()
         guard let textView else { return }
         applyTheme(to: panel)
+        if let prefill, !prefill.isEmpty {
+            let existing = textView.string
+            textView.string = existing.isEmpty ? prefill
+                : (existing.hasSuffix("\n") ? existing + prefill : existing + "\n" + prefill)
+            textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        }
         updatePlaceholderVisibility()
         position(panel)
         panel.makeKeyAndOrderFront(nil)

@@ -169,7 +169,10 @@ public enum MCPProtocol {
 
     private static func toolResult<T: Encodable>(_ value: T) -> [String: Any] {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // Slashes unescaped: this JSON is *text* the model reads, and a note's
+        // `vimtext:\/\/note\/…` gets echoed back to the user with the escapes
+        // still in it. (The envelope around this has always done the same.)
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         let text = (try? encoder.encode(value)).flatMap { String(data: $0, encoding: .utf8) }
             ?? "Could not encode the result."
         return ["content": [["type": "text", "text": text]], "isError": false]

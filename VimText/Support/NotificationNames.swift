@@ -33,4 +33,9 @@ public extension Notification.Name {
     /// flushes its debounced code-block restyle + RTF serialization, keeping
     /// the persisted content and rich text in sync.
     static let commitEditorPendingWork = Notification.Name("commitEditorPendingWork")
+    /// Asks the open editor to move the caret to a `DeepLink.Target` (carried
+    /// as the notification object) — a `vimtext://note/<id>?line=…` arriving
+    /// from outside the app. The editor holds the text, so only it can resolve
+    /// a line or heading into an offset.
+    static let jumpToCaretTarget = Notification.Name("jumpToCaretTarget")
 }

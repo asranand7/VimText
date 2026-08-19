@@ -1901,6 +1901,84 @@ func testMigrateStoreCopiesStore() throws {
     }
 }
 
+func testDeepLinkParsing() throws {
+    let id = UUID()
+
+    func parse(_ string: String) -> DeepLink? {
+        guard let url = URL(string: string) else { return nil }
+        return DeepLink.parse(url)
+    }
+
+    // The canonical form we hand out in MCP results round-trips.
+    try expectEqual(DeepLink.url(forNoteId: id), "vimtext://note/\(id.uuidString)",
+                    "note url is vimtext://note/<uuid>")
+    try expectEqual(parse(DeepLink.url(forNoteId: id)), .note(id: id, target: nil),
+                    "a built note url parses back to the same id")
+    // …as does the hand-written query form.
+    try expectEqual(parse("vimtext://note?id=\(id.uuidString)"), .note(id: id, target: nil),
+                    "note?id= is accepted alongside note/<uuid>")
+
+    try expectEqual(parse("vimtext://note/\(id.uuidString)?line=42"),
+                    .note(id: id, target: .line(42)), "line targets parse")
+    try expectEqual(parse("vimtext://note/\(id.uuidString)?heading=Design%20Notes"),
+                    .note(id: id, target: .heading("Design Notes")),
+                    "percent-encoded heading targets parse")
+    // A heading is the more specific of the two and survives edits, so it wins.
+    try expectEqual(parse("vimtext://note/\(id.uuidString)?line=3&heading=Design"),
+                    .note(id: id, target: .heading("Design")),
+                    "heading wins when a link carries both")
+    try expectEqual(parse("vimtext://note/\(id.uuidString)?line=0"),
+                    .note(id: id, target: nil), "line 0 is not a line, and is dropped")
+
+    try expectEqual(parse("vimtext://search?q=standup"), .search(query: "standup"),
+                    "search links parse")
+    try expectEqual(parse("vimtext://capture?text=milk"), .capture(text: "milk"),
+                    "capture links parse")
+    try expectEqual(parse("vimtext://capture"), .capture(text: nil),
+                    "capture with no text is still a capture")
+
+    // Anything unrecognised routes nowhere rather than being guessed at.
+    try expect(parse("vimtext://note/not-a-uuid") == nil, "a malformed id is rejected")
+    try expect(parse("vimtext://note") == nil, "a note link with no id is rejected")
+    try expect(parse("vimtext://delete?id=\(id.uuidString)") == nil,
+               "unknown hosts are rejected — the scheme is navigation-only")
+    try expect(parse("https://note/\(id.uuidString)") == nil, "a foreign scheme is rejected")
+    try expect(parse("vimtext://search") == nil, "search with no query is rejected")
+
+    // A link can't paste unbounded text into the capture panel.
+    let long = String(repeating: "a", count: DeepLink.maxCaptureLength + 500)
+    guard case .capture(let text)? = parse("vimtext://capture?text=\(long)") else {
+        throw SmokeTestFailure.failed("long capture text should still parse")
+    }
+    try expectEqual(text?.count, DeepLink.maxCaptureLength, "capture text is capped")
+}
+
+func testDeepLinkTargetResolution() throws {
+    let note = "first\nsecond\n## Design Notes\nbody\n### Open Questions\ntail"
+
+    try expectEqual(DeepLink.offset(of: .line(1), in: note), 0, "line 1 is the start")
+    try expectEqual(DeepLink.offset(of: .line(2), in: note), 6, "line 2 follows the first newline")
+    try expectEqual(DeepLink.offset(of: .line(3), in: note), 13, "line 3 is the heading line")
+    // Past the end resolves to nothing: better than parking the caret at EOF and
+    // calling it a jump.
+    try expect(DeepLink.offset(of: .line(99), in: note) == nil, "a line past the end is nil")
+    try expect(DeepLink.offset(of: .line(0), in: note) == nil, "line 0 is nil")
+
+    try expectEqual(DeepLink.offset(of: .heading("Design Notes"), in: note), 13,
+                    "a heading resolves to its line start")
+    // URL-friendly spellings find the same heading.
+    try expectEqual(DeepLink.offset(of: .heading("design-notes"), in: note), 13,
+                    "hyphens and case are ignored when matching headings")
+    try expectEqual(DeepLink.offset(of: .heading("open_questions"), in: note), 34,
+                    "deeper headings match too")
+    try expect(DeepLink.offset(of: .heading("Nope"), in: note) == nil, "an absent heading is nil")
+    // "## Design Notes" is a heading; "body" is not, even with the same text.
+    try expect(DeepLink.offset(of: .heading("body"), in: note) == nil,
+               "plain lines are not headings")
+
+    try expectEqual(DeepLink.offset(of: .line(1), in: ""), 0, "line 1 of an empty note is offset 0")
+}
+
 func testQuickCaptureHelpers() throws {
     // Title rule matches the editor's: first non-empty, non-image line, capped.
     try expectEqual(QuickCapture.title(from: "Buy milk\nand eggs"), "Buy milk",
@@ -1996,6 +2074,8 @@ let tests: [(String, () throws -> Void)] = [
     ("Storage migration to a new location", testMigrateStoreCopiesStore),
     ("Search normalization (fold + lowercase)", testSearchNormalization),
     ("Quick Capture helpers (title/hotkey)", testQuickCaptureHelpers),
+    ("Deep link parsing (vimtext://)", testDeepLinkParsing),
+    ("Deep link line/heading resolution", testDeepLinkTargetResolution),
     ("MCP handshake and JSON-RPC envelope", testMCPHandshakeAndEnvelope),
     ("MCP tool list matches dispatch", testMCPToolListMatchesDispatch),
     ("MCP argument clamping and coercion", testMCPArgumentsAreClampedAndCoerced),

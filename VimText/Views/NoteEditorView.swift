@@ -238,9 +238,13 @@ struct NoteEditorView: View {
             // pending; onChange won't fire for a freshly-created editor, so
             // pick it up here.
             applyPendingSearchHighlight()
+            applyPendingCaretTarget()
         }
         .onChange(of: viewModel.pendingSearchHighlight) { _, newValue in
             if newValue != nil { applyPendingSearchHighlight() }
+        }
+        .onChange(of: viewModel.pendingCaretTarget) { _, newValue in
+            if newValue != nil { applyPendingCaretTarget() }
         }
         .onDisappear {
             // Flush the editor's debounced restyle/RTF first (synchronous), so
@@ -786,6 +790,21 @@ struct NoteEditorView: View {
         // run the find then, with no guessed delay.
         DispatchQueue.main.async {
             findController.performFind?(highlight)
+        }
+    }
+
+    /// Hands a deep link's caret destination to the editor. Same guard as the
+    /// search highlight: only the editor for the selected note may take it, or
+    /// the outgoing editor would consume it mid-switch and jump the wrong note.
+    private func applyPendingCaretTarget() {
+        guard noteId == viewModel.selectedNoteId else { return }
+        guard let target = viewModel.pendingCaretTarget else { return }
+        viewModel.pendingCaretTarget = nil
+        // The text view receives its content in makeNSView, so it holds the
+        // full note by the next runloop tick — the same timing the ⌘K search
+        // jump relies on.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .jumpToCaretTarget, object: target)
         }
     }
 

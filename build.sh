@@ -63,6 +63,19 @@ cat > "$APP_DIR/Info.plist" << 'PLIST'
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.vimtext.app.deeplink</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>vimtext</string>
+            </array>
+        </dict>
+    </array>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>LSUIElement</key>

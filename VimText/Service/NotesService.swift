@@ -34,6 +34,10 @@ public final class NotesService {
         public let isPinned: Bool
         public let isLocked: Bool
         public let characterCount: Int
+        /// `vimtext://` link that opens this note. Included so an agent's answer
+        /// can end in something the user clicks, instead of a title they have to
+        /// go and find.
+        public let url: String
     }
 
     public struct NoteDetail: Codable {
@@ -46,6 +50,7 @@ public final class NotesService {
         public let isPinned: Bool
         public let isLocked: Bool
         public let characterCount: Int
+        public let url: String
     }
 
     public struct FolderInfo: Codable {
@@ -401,7 +406,8 @@ public final class NotesService {
             modifiedAt: ISO8601DateFormatter.vimTextService.string(from: note.modifiedAt),
             isPinned: note.isPinned,
             isLocked: note.isLocked,
-            characterCount: note.content.count
+            characterCount: note.content.count,
+            url: DeepLink.url(forNoteId: note.id)
         )
     }
 
@@ -418,7 +424,8 @@ public final class NotesService {
             modifiedAt: ISO8601DateFormatter.vimTextService.string(from: note.modifiedAt),
             isPinned: note.isPinned,
             isLocked: note.isLocked,
-            characterCount: note.content.count
+            characterCount: note.content.count,
+            url: DeepLink.url(forNoteId: note.id)
         )
     }
 }

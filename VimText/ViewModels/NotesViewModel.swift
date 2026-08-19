@@ -65,6 +65,11 @@ final class NotesViewModel: ObservableObject {
 
     @Published var selectedFolderId: UUID?
     @Published var pendingSearchHighlight: String?
+    /// Caret destination for a note being opened from a `vimtext://` link,
+    /// consumed by the editor once it has the note's text. Same handoff as
+    /// `pendingSearchHighlight`: set before `selectedNoteId`, cleared by
+    /// whichever editor takes it.
+    @Published var pendingCaretTarget: DeepLink.Target?
     @Published var searchText: String = ""
     @Published var showAllNotes: Bool = true
     @Published var saveState: NoteSaveState = .saved
