@@ -231,25 +231,25 @@ func run() {
         return notes.first { $0.title == t }
     }
     if let i = plainRTFIndex, let n = note(titledIndex: i) {
-        let h = bench("hydratePlain", iterations: 50) { _ = storage.loadRTFData(for: n.id) }
+        let h = bench("hydratePlain", iterations: 50) { _ = storage.loadRTFData(for: n.id, matching: n.content) }
         print("loadRTFData (plain rtf note)      \(ms(h.median))  \(ms(h.min))")
     }
     if let heavy = heavyRTFIndex, let n = note(titledIndex: heavy.idx) {
-        let h = bench("hydrateHeavy", iterations: 20) { _ = storage.loadRTFData(for: n.id) }
+        let h = bench("hydrateHeavy", iterations: 20) { _ = storage.loadRTFData(for: n.id, matching: n.content) }
         print(String(format: "loadRTFData (image rtf, %.0f KB)   ", Double(heavy.bytes) / 1024) + "\(ms(h.median))  \(ms(h.min))")
     }
     // A note with no sidecar resolves to the miss path (no file read).
-    let missID = notes.first { storage.loadRTFData(for: $0.id) == nil }?.id ?? notes[0].id
-    let miss = bench("hydrateMiss", iterations: 50) { _ = storage.loadRTFData(for: missID) }
+    let missNote = notes.first { storage.loadRTFData(for: $0.id, matching: $0.content) == nil } ?? notes[0]
+    let miss = bench("hydrateMiss", iterations: 50) { _ = storage.loadRTFData(for: missNote.id, matching: missNote.content) }
     print("loadRTFData (no sidecar, miss)    \(ms(miss.median))  \(ms(miss.min))")
 
     // 6. Parse RTF bytes into NSAttributedString — the real per-note-open cost
     //    (loadRTFData only reads bytes; the editor must then parse them).
-    if let i = plainRTFIndex, let n = note(titledIndex: i), let d = storage.loadRTFData(for: n.id) {
+    if let i = plainRTFIndex, let n = note(titledIndex: i), let d = storage.loadRTFData(for: n.id, matching: n.content) {
         let p = bench("parsePlain", iterations: 20) { _ = try? NSAttributedString(data: d, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil) }
         print("parse RTF→attr (plain note)       \(ms(p.median))  \(ms(p.min))")
     }
-    if let heavy = heavyRTFIndex, let n = note(titledIndex: heavy.idx), let d = storage.loadRTFData(for: n.id) {
+    if let heavy = heavyRTFIndex, let n = note(titledIndex: heavy.idx), let d = storage.loadRTFData(for: n.id, matching: n.content) {
         let p = bench("parseHeavy", iterations: 10) { _ = try? NSAttributedString(data: d, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil) }
         print(String(format: "parse RTF→attr (image, %.0f KB)    ", Double(heavy.bytes) / 1024) + "\(ms(p.median))  \(ms(p.min))")
     }
@@ -272,14 +272,14 @@ func run() {
             layout.ensureLayout(for: container)   // force glyph + fragment layout
         }
     }
-    let bigPlain = notes.filter { storage.loadRTFData(for: $0.id) != nil }
+    let bigPlain = notes.filter { storage.loadRTFData(for: $0.id, matching: $0.content) != nil }
         .max { $0.content.count < $1.content.count }
-    if let n = bigPlain, let d = storage.loadRTFData(for: n.id) {
+    if let n = bigPlain, let d = storage.loadRTFData(for: n.id, matching: n.content) {
         let lines = n.content.split(separator: "\n").count
         let o = bench("openBig", iterations: 10, openCost(d))
         print("open note: parse+layout (\(lines) lines)\(ms(o.median))  \(ms(o.min))")
     }
-    if let heavy = heavyRTFIndex, let n = note(titledIndex: heavy.idx), let d = storage.loadRTFData(for: n.id) {
+    if let heavy = heavyRTFIndex, let n = note(titledIndex: heavy.idx), let d = storage.loadRTFData(for: n.id, matching: n.content) {
         let o = bench("openHeavy", iterations: 10, openCost(d))
         print(String(format: "open note: parse+layout (img %.0f KB)", Double(heavy.bytes) / 1024) + "\(ms(o.median))  \(ms(o.min))")
     }

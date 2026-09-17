@@ -152,7 +152,7 @@ final class NotesViewModel: ObservableObject {
             if let note = newValue, let index = notes.firstIndex(where: { $0.id == note.id }) {
                 indexNote(note)
                 notes[index] = note
-                applySaveResult(storage.saveNote(note))
+                persist(at: index)
             }
         }
     }
@@ -263,9 +263,12 @@ final class NotesViewModel: ObservableObject {
     }
 
     deinit {
-        // Flush any unsaved changes synchronously to protect user data on window close
-        for note in pendingSaves.values {
-            StorageManager.shared.saveNote(note)
+        // Flush any unsaved changes synchronously to protect user data on window close.
+        // The in-sync flag has to ride along here too (see `persist(at:)`): a
+        // last-gasp save that claims a lagging sidecar is authoritative would
+        // leave the note opening from older text the next time it is touched.
+        for (id, note) in pendingSaves {
+            StorageManager.shared.saveNote(note, rtfInSync: rtfInSyncByID[id] ?? true)
         }
         StorageManager.shared.waitForPendingWrites()
     }
@@ -291,7 +294,7 @@ final class NotesViewModel: ObservableObject {
         rtfInSyncByID = snapshot.rtfInSyncByID
         notes = snapshot.notes
         folders = loadedFolders
-        storage.makeLaunchBackup()
+        storage.startBackupSchedule()
         let loadedNotes = snapshot.notes
         Task.detached(priority: .utility) {
             StorageManager.shared.pruneOrphanAssets(referencedBy: loadedNotes)
@@ -314,9 +317,27 @@ final class NotesViewModel: ObservableObject {
         guard rtfInSyncByID[id] == true,
               let index = notes.firstIndex(where: { $0.id == id }),
               notes[index].rtfData == nil else { return }
-        if let data = storage.loadRTFData(for: id), !data.isEmpty {
+        // `matching:` makes the sidecar prove it still spells the note's text
+        // before it is allowed to become the document the editor opens.
+        if let data = storage.loadRTFData(for: id, matching: notes[index].content), !data.isEmpty {
             notes[index].rtfData = data
         }
+    }
+
+    /// Saves `notes[index]`, carrying the note's real `.rtf`-in-sync state.
+    ///
+    /// Every save writes the `.txt`; the `.rtf` sidecar is only re-serialized
+    /// at flush points, so between flushes it holds older text and
+    /// `rtfInSyncByID` records that. `saveNote` defaults that flag to `true`,
+    /// which means a metadata-only save (lock, pin, move) would stamp a lagging
+    /// sidecar as authoritative — and the next time the note was opened the
+    /// editor would load the old text from it and then persist that back over
+    /// the good `.txt`, losing everything typed since, with nothing in the undo
+    /// stack to bring it back. Every in-app save of an existing note goes
+    /// through here so the flag can never be guessed.
+    private func persist(at index: Int) {
+        let note = notes[index]
+        applySaveResult(storage.saveNote(note, rtfInSync: rtfInSyncByID[note.id] ?? true))
     }
 
     func load() {
@@ -461,9 +482,12 @@ final class NotesViewModel: ObservableObject {
             folderId: source.folderId
         )
         indexNote(copy)
-        rtfInSyncByID[copy.id] = !(copy.rtfData?.isEmpty ?? true)
+        // Inherit the source's in-sync state, not just "it has bytes": copying
+        // a sidecar that lags the text would make the copy claim an authority
+        // the original doesn't have, and open showing the older text.
+        rtfInSyncByID[copy.id] = (rtfInSyncByID[source.id] ?? true) && !(copy.rtfData?.isEmpty ?? true)
         notes.insert(copy, at: srcIndex + 1)
-        applySaveResult(storage.saveNote(copy))
+        persist(at: srcIndex + 1)
         selectedNoteId = copy.id
         return copy.id
     }
@@ -527,13 +551,24 @@ final class NotesViewModel: ObservableObject {
     }
 
     func toggleLock(_ note: Note) {
-        guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
+        let isLocking = !(notes.first { $0.id == note.id }?.isLocked ?? note.isLocked)
+        // A locked note rejects writes (see updateNoteContent), so anything the
+        // editor is still holding — the text view's 500 ms serialization
+        // debounce and then the editor's own 500 ms update debounce — would be
+        // dropped on the floor by the lock rather than saved. Push it all the
+        // way to disk first, while the note still accepts it.
+        if isLocking {
+            NotificationCenter.default.post(name: .flushEditorEdits, object: nil)
+        }
         // Flush any in-flight edit first so locking can't race a pending save.
         flushPendingSavesSynchronously()
+        // Re-resolve after the flush: it runs editor callbacks that can touch
+        // `notes`, so an index taken before it isn't guaranteed to still hold.
+        guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
         // Saving writes all sidecars; hydrate RTF first so we don't drop it.
         hydrateRTFIfNeeded(note.id)
         notes[index].isLocked.toggle()
-        applySaveResult(storage.saveNote(notes[index]))
+        persist(at: index)
     }
 
     func togglePin(_ note: Note) {
@@ -542,7 +577,7 @@ final class NotesViewModel: ObservableObject {
         hydrateRTFIfNeeded(note.id)
         notes[index].isPinned.toggle()
         notes[index].modifiedAt = Date()
-        applySaveResult(storage.saveNote(notes[index]))
+        persist(at: index)
     }
 
     func updateNoteContent(id: UUID, title: String, content: String, rtfData: Data? = nil) {
@@ -673,7 +708,7 @@ final class NotesViewModel: ObservableObject {
         hydrateRTFIfNeeded(note.id)
         notes[index].folderId = folderId
         notes[index].modifiedAt = Date()
-        applySaveResult(storage.saveNote(notes[index]))
+        persist(at: index)
     }
 
     func createFolder(name: String) {
@@ -692,7 +727,7 @@ final class NotesViewModel: ObservableObject {
         for i in notes.indices where notes[i].folderId == folder.id {
             hydrateRTFIfNeeded(notes[i].id)
             notes[i].folderId = nil
-            applySaveResult(storage.saveNote(notes[i]))
+            persist(at: i)
         }
         folders.removeAll { $0.id == folder.id }
         storage.saveFolders(folders)

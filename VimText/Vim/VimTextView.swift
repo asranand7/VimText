@@ -156,7 +156,22 @@ struct VimTextView: NSViewRepresentable {
 
         // Load rich text content or fall back to plain text. From here on the
         // text storage is authoritative; content flows out via onContentChange.
-        if !initialRTFData.isEmpty, let attrStr = NSAttributedString(rtf: initialRTFData, documentAttributes: nil) {
+        //
+        // The `.txt` is the authority on *text*; the `.rtf` only ever adds
+        // formatting on top of it. Every save writes the `.txt`, while the
+        // `.rtf` is re-serialized only at flush points, so the sidecar can lag
+        // the text — and a note opened from a lagging sidecar would show old
+        // text and then persist it back over the good `.txt`, losing work with
+        // no undo to recover it. `ImageAttachments.flattened` (what the sidecar
+        // is serialized from) produces exactly the string `markdownString`
+        // writes to the `.txt`, so the two match character-for-character when
+        // they are in sync: any mismatch means the sidecar is stale, and the
+        // formatting is dropped rather than the text.
+        let rtfDocument = initialRTFData.isEmpty
+            ? nil
+            : NSAttributedString(rtf: initialRTFData, documentAttributes: nil)
+        let rtfMatchesText = rtfDocument?.string == initialText
+        if let attrStr = rtfDocument, rtfMatchesText {
             textView.textStorage?.setAttributedString(attrStr)
             // One editing transaction for both whole-document normalization
             // passes — layout/processing runs once instead of twice at open.
@@ -177,7 +192,14 @@ struct VimTextView: NSViewRepresentable {
         textView.refreshListMarkers()
         textView.refreshHeadingFolds()
         context.coordinator.latestText = initialText
-        context.coordinator.latestRTF = initialRTFData
+        // A rejected (stale) sidecar must not be handed back to the save path —
+        // reporting it would re-persist it and mark it in sync again. Empty
+        // means "this note has no rich text", which drops the stale file.
+        context.coordinator.latestRTF = rtfMatchesText ? initialRTFData : Data()
+        // Only now may content flow back out: before this point the storage is
+        // empty, and a flush (the broadcast commitEditorPendingWork reaches
+        // every live editor) would report "" over a note that has content.
+        context.coordinator.didLoadInitialContent = true
 
         let isInsert = vimEngine.mode.isEditing || startInInsertMode
         textView.updateCursorAppearance(isBlock: !isInsert)

@@ -33,6 +33,13 @@ public extension Notification.Name {
     /// flushes its debounced code-block restyle + RTF serialization, keeping
     /// the persisted content and rich text in sync.
     static let commitEditorPendingWork = Notification.Name("commitEditorPendingWork")
+    /// Asks the open editor to push its buffered text all the way into the
+    /// view model and to disk, synchronously — one step beyond
+    /// `commitEditorPendingWork`, which only gets the text view as far as the
+    /// editor's own 500 ms debounce. Posted before a change that would make the
+    /// note reject writes (locking it), so the last keystrokes before that
+    /// change are persisted instead of silently dropped.
+    static let flushEditorEdits = Notification.Name("flushEditorEdits")
     /// Asks the open editor to move the caret to a `DeepLink.Target` (carried
     /// as the notification object) — a `vimtext://note/<id>?line=…` arriving
     /// from outside the app. The editor holds the text, so only it can resolve

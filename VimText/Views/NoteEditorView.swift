@@ -1,5 +1,18 @@
 import SwiftUI
 
+/// The editor's latest buffer, held by reference.
+///
+/// `content`/`rtfData` are `@State`, which drives the UI but is written through
+/// SwiftUI's update machinery: a save path that posts
+/// `commitEditorPendingWork` and then reads the `@State` back in the same
+/// synchronous scope is not guaranteed to see what the flush just produced. The
+/// save paths read this instead, so what reaches disk is always the text the
+/// text view actually flushed.
+private final class EditorBuffer {
+    var text: String = ""
+    var rtf: Data = Data()
+}
+
 struct NoteEditorView: View {
     @ObservedObject var viewModel: NotesViewModel
     let noteId: UUID
@@ -10,10 +23,15 @@ struct NoteEditorView: View {
     @StateObject private var findController = FindController()
     @State private var content: String = ""
     @State private var rtfData: Data = Data()
+    @State private var buffer = EditorBuffer()
     @State private var wordCount: Int = 0
     @State private var wordCountTask: Task<Void, Never>? = nil
     @State private var updateViewModelTask: Task<Void, Never>? = nil
     @State private var hasLoaded = false
+    /// The `editorReloadToken` this editor's text was loaded from. A bump means
+    /// the note was rewritten from outside (an MCP edit) and this editor is the
+    /// outgoing one, holding pre-edit text — it must not write that back.
+    @State private var loadedReloadToken = 0
     @State private var startInInsertMode = false
     @State private var showDeleteConfirm = false
     @State private var showThemePicker = false
@@ -280,6 +298,11 @@ struct NoteEditorView: View {
                 showDeleteConfirm = true
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .flushEditorEdits)) { _ in
+            // Something is about to stop accepting writes to this note (a lock).
+            // Get everything buffered here onto disk while it still can be.
+            commitPendingWorkEagerly()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             commitPendingWorkEagerly()
         }
@@ -297,6 +320,8 @@ struct NoteEditorView: View {
             initialText: note?.content ?? "",
             initialRTFData: note?.rtfData ?? Data(),
             onContentChange: { newText, newRTF in
+                buffer.text = newText
+                buffer.rtf = newRTF
                 content = newText
                 rtfData = newRTF
                 updateWordCountAsync(text: newText)
@@ -451,8 +476,16 @@ struct NoteEditorView: View {
         }
     }
 
+    /// Whether this editor's buffer may still be written back to the note.
+    /// False before its content is loaded, and false once an outside writer has
+    /// replaced the note (`editorReloadToken` bumped): this instance then holds
+    /// pre-edit text, and saving it would silently revert that write.
+    private var canWriteBack: Bool {
+        hasLoaded && loadedReloadToken == viewModel.editorReloadToken
+    }
+
     private func queueViewModelUpdate(content: String, rtfData: Data) {
-        guard hasLoaded else { return }
+        guard canWriteBack else { return }
         updateViewModelTask?.cancel()
         updateViewModelTask = Task {
             try? await Task.sleep(nanoseconds: 500_000_000) // 500ms debounce
@@ -469,17 +502,17 @@ struct NoteEditorView: View {
     }
 
     private func commitPendingWorkEagerly() {
-        guard hasLoaded else { return }
+        guard canWriteBack else { return }
         NotificationCenter.default.post(name: .commitEditorPendingWork, object: nil)
         updateViewModelTask?.cancel()
         updateViewModelTask = nil
 
-        let title = extractTitle(from: content)
+        let title = extractTitle(from: buffer.text)
         viewModel.updateNoteContent(
             id: noteId,
             title: title.isEmpty ? "Untitled" : title,
-            content: content,
-            rtfData: rtfData
+            content: buffer.text,
+            rtfData: buffer.rtf
         )
         viewModel.flushPendingSavesSynchronously()
     }
@@ -757,8 +790,11 @@ struct NoteEditorView: View {
         if let note = viewModel.notes.first(where: { $0.id == noteId }) {
             content = note.content
             rtfData = note.rtfData ?? Data()
+            buffer.text = note.content
+            buffer.rtf = note.rtfData ?? Data()
             wordCount = Self.countWords(note.content)
             hasLoaded = true
+            loadedReloadToken = viewModel.editorReloadToken
             let isNewEmpty = note.content.isEmpty && !note.isLocked
             startInInsertMode = isNewEmpty
             vimEngine.mode = isNewEmpty ? .insert : .normal
@@ -809,10 +845,10 @@ struct NoteEditorView: View {
     }
 
     private func saveCurrentNote() {
-        guard hasLoaded else { return }
+        guard canWriteBack else { return }
         NotificationCenter.default.post(name: .commitEditorPendingWork, object: nil)
-        let title = extractTitle(from: content)
-        viewModel.updateNoteContent(id: noteId, title: title.isEmpty ? "Untitled" : title, content: content, rtfData: rtfData)
+        let title = extractTitle(from: buffer.text)
+        viewModel.updateNoteContent(id: noteId, title: title.isEmpty ? "Untitled" : title, content: buffer.text, rtfData: buffer.rtf)
         // Explicit save (⌘S / :w) and closing the editor should hit disk now,
         // not wait for the debounce window.
         viewModel.flushPendingSavesSynchronously()

@@ -17,6 +17,12 @@ extension VimTextView {
         /// and reported together through onContentChange.
         var latestText: String = ""
         var latestRTF: Data = Data()
+        /// False until `makeNSView` has installed the note's content. Nothing
+        /// may be reported back to the save path before then: the text storage
+        /// is still empty, and `commitEditorPendingWork` is broadcast to every
+        /// live editor, so a freshly-built one could otherwise write "" over a
+        /// note that has content (the ⌘K blanking bug, guarded at the source).
+        var didLoadInitialContent = false
         var visualAnchor: Int = 0
         var visualCursorPos: Int = 0
         private var yankHighlightLayer: CALayer?
@@ -247,7 +253,21 @@ extension VimTextView {
 
         /// Reports the latest serialized content to the SwiftUI layer.
         private func notifyContentChange() {
+            guard didLoadInitialContent else { return }
             parent.onContentChange?(latestText, latestRTF)
+        }
+
+        /// Re-reads the document text from the (authoritative) text storage.
+        /// Every path that reports content must call this first: `latestText`
+        /// is only refreshed by the 500 ms deferred sync, so an immediate
+        /// report (a formatting toggle, an image paste or resize, a flush)
+        /// would otherwise carry text from before the last keystrokes and
+        /// persist that older — sometimes empty — version over the note.
+        private func syncLatestTextFromStorage() {
+            guard didLoadInitialContent, let textView else { return }
+            var synced = textView.textStorage.map { ImageAttachments.markdownString(from: $0) } ?? textView.string
+            synced.makeContiguousUTF8()
+            latestText = synced
         }
 
         /// Immediately executes all deferred work (text sync, RTF export,
@@ -294,6 +314,7 @@ extension VimTextView {
 
         private func serializeRTFIfStale() {
             guard rtfStale else { return }
+            syncLatestTextFromStorage()
             latestRTF = serializedRTF()
             rtfStale = false
             notifyContentChange()
@@ -340,10 +361,8 @@ extension VimTextView {
         /// both content (Markdown, with the new `|width`) and RTF so the size
         /// persists.
         func imageDidResize() {
-            guard let storage = textView?.textStorage else { return }
-            var synced = ImageAttachments.markdownString(from: storage)
-            synced.makeContiguousUTF8()
-            latestText = synced
+            guard textView?.textStorage != nil else { return }
+            syncLatestTextFromStorage()
             latestRTF = serializedRTF()
             rtfStale = false
             notifyContentChange()
@@ -354,6 +373,10 @@ extension VimTextView {
             // user actions — serialize RTF immediately so it persists. If the
             // toggle just removed the last formatting, serializedRTF() returns
             // empty and the now-plain note drops its sidecar.
+            // The text goes with it: an image paste routes through here, and
+            // reporting the pre-paste `latestText` alongside the post-paste RTF
+            // would persist the note as it was before the last edits.
+            syncLatestTextFromStorage()
             latestRTF = serializedRTF()
             rtfStale = false
             notifyContentChange()

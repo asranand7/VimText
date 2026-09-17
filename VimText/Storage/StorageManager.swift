@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 public enum StorageError: LocalizedError, Equatable {
     case cannotCreateDirectory(String)
@@ -100,18 +101,43 @@ public final class StorageManager {
         try? fileManager.createDirectory(at: notesURL, withIntermediateDirectories: true)
     }
 
+    /// The smallest note worth protecting from a big one-shot shrink. Below
+    /// this, "half the note vanished" is just normal editing of a short note.
+    private static let recoveryMinimumBytes = 200
+
+    /// Whether writing `newContent` over the note stored at `jsonURL` would
+    /// destroy a meaningful amount of text, and so should be stashed first.
+    ///
+    /// Blanking is the obvious case, but not the only one: the data-loss bug
+    /// this net exists for *reverted* notes to an older, shorter version rather
+    /// than emptying them, and a blank-only rule caught none of it. Losing half
+    /// a note in a single save is not ordinary editing, so that gets a copy
+    /// too. Costs one `stat` per save; the copy itself stays rare, and is
+    /// self-limiting (once the short version is on disk, the next save has
+    /// nothing left to shrink from).
+    private func wouldDestroyContent(newContent: String, at jsonURL: URL) -> Bool {
+        let (txtURL, _) = sidecars(for: jsonURL)
+        guard let size = (try? fileManager.attributesOfItem(atPath: txtURL.path))?[.size] as? NSNumber else {
+            // No sidecar to measure (legacy single-file note): fall back to the
+            // original blank-only rule rather than reading the whole note.
+            return newContent.isEmpty
+        }
+        return Self.isDestructiveShrink(existingBytes: size.intValue, newBytes: newContent.utf8.count)
+    }
+
+    /// The pure rule behind `wouldDestroyContent`, split out so it can be
+    /// tested without a filesystem (the recovery folder is deliberately a
+    /// fixed Application Support path, not something a test may redirect).
+    static func isDestructiveShrink(existingBytes: Int, newBytes: Int) -> Bool {
+        guard existingBytes > 0 else { return false }
+        if newBytes == 0 { return true }
+        return existingBytes >= recoveryMinimumBytes && newBytes * 2 < existingBytes
+    }
+
     /// Copies the on-disk version of a note (json + sidecars) into the
     /// recovered/ folder before it is overwritten. Used as a last-resort
     /// safety net so content can never be silently destroyed.
     private func stashForRecovery(_ jsonURL: URL) {
-        let (etxt, _) = sidecars(for: jsonURL)
-        var existingContent = ""
-        if fileManager.fileExists(atPath: etxt.path) {
-            existingContent = (try? String(contentsOf: etxt, encoding: .utf8)) ?? ""
-        } else if let data = try? Data(contentsOf: jsonURL), let note = try? decoder.decode(Note.self, from: data) {
-            existingContent = note.content
-        }
-        guard !existingContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         try? fileManager.createDirectory(at: recoveredURL, withIntermediateDirectories: true)
         let ts = Self.backupStampFormatter.string(from: Date())
         let (txt, rtf) = sidecars(for: jsonURL)
@@ -129,25 +155,93 @@ public final class StorageManager {
         }
     }
 
-    /// Snapshots the entire notes folder on launch (throttled to once per hour),
-    /// keeping the most recent backups so any corruption is fully recoverable.
-    func makeLaunchBackup() {
+    private static let backupInterval: TimeInterval = 3600
+    private static let backupsKept = 10
+    private var backupTimer: DispatchSourceTimer?
+
+    /// The timestamp a backup directory's *name* encodes, or nil if the name
+    /// isn't one of ours.
+    ///
+    /// Recency has to come from the name, never from the filesystem: `copyItem`
+    /// inherits the source folder's creation date, so every backup looked as
+    /// old as the notes folder itself and the hourly throttle never fired once.
+    /// Each launch then made a fresh full copy, and ten quick relaunches were
+    /// enough to evict every genuinely old snapshot from the ring — the one
+    /// safety net that survives a bad save, emptied by restarting the app.
+    static func backupTimestamp(forDirectoryNamed name: String) -> Date? {
+        backupStampFormatter.date(from: name)
+    }
+
+    /// Snapshots the notes folder now if one is due, then keeps doing so for as
+    /// long as the app runs.
+    ///
+    /// Backing up only at launch is thin cover for an app that lives in the
+    /// menu bar behind a global hotkey and can stay up for weeks: the snapshot
+    /// nearest a mid-session mishap could easily predate everything written
+    /// since. Idempotent — calling it twice does not start a second schedule.
+    func startBackupSchedule() {
+        lock.lock()
+        let alreadyRunning = backupTimer != nil
+        lock.unlock()
+        guard !alreadyRunning else { return }
+
+        makeBackupIfDue()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + Self.backupInterval,
+                       repeating: Self.backupInterval,
+                       leeway: .seconds(300))
+        timer.setEventHandler { [weak self] in self?.makeBackupIfDue() }
+        timer.resume()
+        lock.lock()
+        backupTimer = timer
+        lock.unlock()
+    }
+
+    /// Copies the whole notes folder into `backups/<timestamp>/` when the last
+    /// snapshot is over an hour old *and* a note has changed since. Keeps the
+    /// most recent `backupsKept`, newest-by-name.
+    func makeBackupIfDue() {
         DispatchQueue.global(qos: .utility).async { [self] in
             let src = notesURL
             guard fileManager.fileExists(atPath: src.path) else { return }
             try? fileManager.createDirectory(at: backupsURL, withIntermediateDirectories: true)
-            if let items = try? fileManager.contentsOfDirectory(at: backupsURL, includingPropertiesForKeys: [.creationDateKey]) {
-                let mostRecent = items.compactMap { try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate }.max()
-                if let mostRecent, Date().timeIntervalSince(mostRecent) < 3600 { return }
-            }
+            let existing = ((try? fileManager.contentsOfDirectory(at: backupsURL, includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.hasDirectoryPath }
+            let last = existing.compactMap { Self.backupTimestamp(forDirectoryNamed: $0.lastPathComponent) }.max()
+            guard Self.backupIsDue(lastBackup: last, newestChange: newestNoteChange(in: src), now: Date()) else { return }
             let ts = Self.backupStampFormatter.string(from: Date())
             let dest = backupsURL.appendingPathComponent(ts, isDirectory: true)
             try? fileManager.copyItem(at: src, to: dest)
-            if let dirs = try? fileManager.contentsOfDirectory(at: backupsURL, includingPropertiesForKeys: nil) {
-                let sorted = dirs.filter { $0.hasDirectoryPath }.sorted { $0.lastPathComponent > $1.lastPathComponent }
-                for old in sorted.dropFirst(10) { try? fileManager.removeItem(at: old) }
-            }
+            let all = ((try? fileManager.contentsOfDirectory(at: backupsURL, includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.hasDirectoryPath }
+                .sorted { $0.lastPathComponent > $1.lastPathComponent }
+            for old in all.dropFirst(Self.backupsKept) { try? fileManager.removeItem(at: old) }
         }
+    }
+
+    /// Whether a fresh snapshot is warranted. Pure, so the throttle that
+    /// silently never fired for months is covered by a test rather than by
+    /// reading it and believing it.
+    ///
+    /// Due when there is no snapshot yet, or the newest is at least an interval
+    /// old *and* a note has been written since it was taken — an idle app
+    /// shouldn't churn copies of an unchanged store.
+    static func backupIsDue(lastBackup: Date?, newestChange: Date?, now: Date) -> Bool {
+        guard let lastBackup else { return true }
+        guard now.timeIntervalSince(lastBackup) >= backupInterval else { return false }
+        guard let newestChange else { return true }
+        return newestChange > lastBackup
+    }
+
+    /// Most recent write anywhere in the notes folder (top level; the assets
+    /// directory counts via its own modification date).
+    private func newestNoteChange(in notes: URL) -> Date? {
+        guard let items = try? fileManager.contentsOfDirectory(
+            at: notes, includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return nil }
+        return items.compactMap {
+            try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        }.max()
     }
 
     // MARK: - File naming
@@ -247,10 +341,13 @@ public final class StorageManager {
             if fileManager.fileExists(atPath: txtURL.path) {
                 guard let meta = try? decoder.decode(NoteMetadata.self, from: data),
                       let content = try? String(contentsOf: txtURL, encoding: .utf8) else { continue }
-                let hasRTF = meta.rtfInSync && fileManager.fileExists(atPath: rtfURL.path)
+                var hasRTF = meta.rtfInSync && fileManager.fileExists(atPath: rtfURL.path)
                 var rtf: Data? = nil
                 if hasRTF, loadRTF {
-                    rtf = try? Data(contentsOf: rtfURL)
+                    rtf = (try? Data(contentsOf: rtfURL)).flatMap {
+                        Self.rtfMatchesContent($0, content: content) ? $0 : nil
+                    }
+                    hasRTF = rtf != nil
                 }
                 let note = Note(
                     id: meta.id,
@@ -281,14 +378,37 @@ public final class StorageManager {
     /// `readNotesSnapshot(loadRTF: false)`). Returns nil if the note has no
     /// in-sync sidecar. Safe to call from the main thread — it's one file read,
     /// paid only when a note is opened.
-    func loadRTFData(for id: UUID) -> Data? {
+    ///
+    /// `matching` is the note's current text. The sidecar is only handed back
+    /// when it still spells that exact text: see `rtfMatchesContent`.
+    func loadRTFData(for id: UUID, matching content: String) -> Data? {
         lock.lock()
         let url = urlsByID[id]
         lock.unlock()
         guard let url else { return nil }
         let (_, rtfURL) = sidecars(for: url)
         guard fileManager.fileExists(atPath: rtfURL.path) else { return nil }
-        return try? Data(contentsOf: rtfURL)
+        guard let data = try? Data(contentsOf: rtfURL) else { return nil }
+        return Self.rtfMatchesContent(data, content: content) ? data : nil
+    }
+
+    /// Whether an `.rtf` sidecar still describes `content`.
+    ///
+    /// The `.txt` is the authority on a note's text: it is rewritten on every
+    /// single save, while the `.rtf` is only re-serialized at flush points and
+    /// its "in sync" flag is a claim made by whichever code path saved last.
+    /// A sidecar that has fallen behind must never be loaded — the editor would
+    /// open showing the older text and then persist it back over the good
+    /// `.txt`, destroying work with nothing in the undo stack to recover it.
+    ///
+    /// The comparison is exact and cheap to trust: the sidecar is serialized
+    /// from `ImageAttachments.flattened`, which renders image attachments as
+    /// the very same `![](assets/…)` Markdown the `.txt` holds, so an in-sync
+    /// pair matches character for character.
+    public static func rtfMatchesContent(_ rtf: Data, content: String) -> Bool {
+        guard !rtf.isEmpty else { return false }
+        guard let document = NSAttributedString(rtf: rtf, documentAttributes: nil) else { return false }
+        return document.string == content
     }
 
     /// Applies a previously-read snapshot's url map. Must be called from the
@@ -451,7 +571,7 @@ public final class StorageManager {
         let existing = urlsByID[note.id]
         lock.unlock()
 
-        if note.content.isEmpty, let existing = existing {
+        if let existing = existing, wouldDestroyContent(newContent: note.content, at: existing) {
             stashForRecovery(existing)
         }
 

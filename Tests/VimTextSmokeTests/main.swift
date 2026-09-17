@@ -645,6 +645,10 @@ private func makeVimRig(_ text: String) -> (VimEngine, VimNSTextView, VimTextVie
     textView.vimEngine = engine
     textView.coordinator = coordinator
     coordinator.textView = textView
+    // makeNSView flips this once the note's content is installed; nothing may
+    // be reported back to the save path before then. The rig loads its text
+    // directly, so it sets the flag itself.
+    coordinator.didLoadInitialContent = true
     textView.string = text
     textView.setSelectedRange(NSRange(location: 0, length: 0))
     let press: (String) -> Void = { chars in
@@ -1622,8 +1626,150 @@ func testStorageRoundTripRenameCollisionAndRTF() throws {
         try expect(lazyRichRTF == nil, "lazy snapshot should not read RTF bytes")
         try expect(lazy.rtfInSyncByID[rich.id] == true, "rich note should be flagged in-sync")
         try expect(lazy.rtfInSyncByID[plain.id] == false, "plain note should be flagged not-in-sync")
-        try expect(manager.loadRTFData(for: rich.id) == rtf, "on-demand load returns the sidecar bytes")
-        try expect(manager.loadRTFData(for: plain.id) == nil, "plain note has no sidecar to load")
+        try expect(manager.loadRTFData(for: rich.id, matching: rich.content) == rtf, "on-demand load returns the sidecar bytes")
+        try expect(manager.loadRTFData(for: plain.id, matching: plain.content) == nil, "plain note has no sidecar to load")
+    }
+}
+
+/// The bug this guards: a lagging `.rtf` sidecar being treated as the note's
+/// text. Every save rewrites the `.txt`, but the `.rtf` is only re-serialized
+/// at flush points and its "in sync" flag is whatever the last save path
+/// claimed — a metadata-only save (locking, pinning, moving a note) used to
+/// claim `true` unconditionally. The next open then rebuilt the document from
+/// the older sidecar and persisted that back over the good `.txt`: work
+/// destroyed, with an empty undo stack. Text now has to be proved, not claimed.
+/// `commitEditorPendingWork` is broadcast to every live editor, so an editor
+/// that has been built but not yet filled receives it too. It must stay silent:
+/// reporting its empty text storage is what once blanked notes outright,
+/// leaving them titled "Untitled" with nothing in them and no undo to recover.
+func testEditorReportsNothingBeforeItsContentIsLoaded() throws {
+    _ = NSApplication.shared
+    var reported: [(String, Data)] = []
+    let engine = VimEngine()
+    let parent = VimTextView(
+        initialText: "", initialRTFData: Data(),
+        onContentChange: { text, rtf in reported.append((text, rtf)) },
+        vimEngine: engine, findController: nil, onSave: nil,
+        font: NSFont.systemFont(ofSize: 14)
+    )
+    let coordinator = VimTextView.Coordinator(parent)
+    let textView = VimNSTextView()
+    textView.vimEngine = engine
+    textView.coordinator = coordinator
+    textView.delegate = coordinator
+    coordinator.textView = textView
+    textView.textStorage?.delegate = textView
+
+    // Pre-load: the storage is empty and didLoadInitialContent is still false.
+    // A flush here — which the broadcast triggers — must report nothing.
+    coordinator.flushDeferredWork()
+    coordinator.formattingDidChange()
+    try expect(reported.isEmpty, "an editor must not report content before its note is loaded")
+
+    // Once loaded, the same flush reports normally.
+    coordinator.didLoadInitialContent = true
+    textView.string = "real note text"
+    textView.didChangeText()
+    coordinator.flushDeferredWork()
+    try expect(reported.contains { $0.0 == "real note text" },
+               "a loaded editor still reports its edits")
+    try expect(!reported.contains { $0.0.isEmpty },
+               "no report may carry empty text for a note that has content")
+}
+
+/// The two safety nets that are supposed to survive a bad save. Both had holes.
+///
+/// Backups: recency used to be read from the filesystem's creation date, but
+/// `copyItem` inherits the *source* folder's, so every snapshot looked ancient,
+/// the hourly throttle never fired, and each launch made a full copy — ten
+/// quick relaunches evicted every genuinely old snapshot from the ring.
+/// Recovery stash: it only fired when a save blanked a note, so the reversion
+/// bug (a note dropping back to an older, shorter version) slipped past it.
+func testDataLossSafetyNets() throws {
+    let name = "2026-09-17-19-59-16"
+    guard let stamp = StorageManager.backupTimestamp(forDirectoryNamed: name) else {
+        throw SmokeTestFailure.failed("a backup directory name must parse back to its timestamp")
+    }
+    try expect(StorageManager.backupTimestamp(forDirectoryNamed: "notes") == nil,
+               "a foreign directory name is not a backup timestamp")
+
+    let hour: TimeInterval = 3600
+    let edited = stamp.addingTimeInterval(60)
+    try expect(StorageManager.backupIsDue(lastBackup: nil, newestChange: edited, now: stamp),
+               "the first backup is always due")
+    try expect(!StorageManager.backupIsDue(lastBackup: stamp, newestChange: edited,
+                                           now: stamp.addingTimeInterval(hour - 1)),
+               "a relaunch within the hour must not take another snapshot")
+    try expect(StorageManager.backupIsDue(lastBackup: stamp, newestChange: edited,
+                                          now: stamp.addingTimeInterval(hour + 1)),
+               "an edited store is due again after the interval")
+    try expect(!StorageManager.backupIsDue(lastBackup: stamp, newestChange: stamp.addingTimeInterval(-60),
+                                           now: stamp.addingTimeInterval(hour * 5)),
+               "an untouched store is never due, however long the app runs")
+    try expect(StorageManager.backupIsDue(lastBackup: stamp, newestChange: nil,
+                                          now: stamp.addingTimeInterval(hour + 1)),
+               "an unreadable store errs towards taking the snapshot")
+
+    // Recovery stash: blanking, and the reversion that used to slip through.
+    try expect(StorageManager.isDestructiveShrink(existingBytes: 4000, newBytes: 0),
+               "blanking a note must be stashed")
+    try expect(StorageManager.isDestructiveShrink(existingBytes: 4000, newBytes: 1200),
+               "a note reverting to a much shorter version must be stashed")
+    try expect(!StorageManager.isDestructiveShrink(existingBytes: 4000, newBytes: 3900),
+               "ordinary editing must not stash")
+    try expect(!StorageManager.isDestructiveShrink(existingBytes: 4000, newBytes: 8000),
+               "growing a note must not stash")
+    try expect(!StorageManager.isDestructiveShrink(existingBytes: 40, newBytes: 4),
+               "shrinking a one-line note is just editing")
+    try expect(!StorageManager.isDestructiveShrink(existingBytes: 0, newBytes: 0),
+               "an already-empty note has nothing to protect")
+}
+
+func testStaleRTFSidecarNeverBecomesContent() throws {
+    // Real RTF for the *old* text, serialized the way the editor does it.
+    func rtf(_ text: String) -> Data {
+        let attr = NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 16)])
+        return (try? attr.data(from: NSRange(location: 0, length: attr.length),
+                               documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])) ?? Data()
+    }
+
+    let oldText = "first draft\nsecond line"
+    let newText = "first draft\nsecond line\nthe paragraph I just typed"
+    let staleRTF = rtf(oldText)
+    try expect(!staleRTF.isEmpty, "test needs real RTF bytes")
+
+    try expect(StorageManager.rtfMatchesContent(staleRTF, content: oldText),
+               "a sidecar spelling the note's text is in sync")
+    try expect(!StorageManager.rtfMatchesContent(staleRTF, content: newText),
+               "a sidecar spelling older text is stale")
+    try expect(!StorageManager.rtfMatchesContent(Data(), content: ""),
+               "no sidecar is never in sync")
+    try expect(!StorageManager.rtfMatchesContent(Data("not rtf at all".utf8), content: "x"),
+               "unparseable bytes are never in sync")
+
+    try withTemporaryStorage { manager, _ in
+        // Exactly the on-disk state the lock bug produced: fresh text in the
+        // .txt, older text in the .rtf, and metadata claiming they agree.
+        var note = Note(title: "Journal", content: newText, rtfData: staleRTF)
+        try expectSuccess(manager.saveNote(note, rtfInSync: true), "note should save")
+
+        let eager = manager.loadNotes().first { $0.id == note.id }
+        try expectEqual(eager?.content, newText, "the .txt is the note's text")
+        try expect(eager?.rtfData == nil, "a stale sidecar must not load as the note's rich text")
+
+        let lazy = manager.readNotesSnapshot(loadRTF: false)
+        try expect(lazy.notes.first { $0.id == note.id }?.content == newText, "lazy read still uses the .txt")
+        try expect(manager.loadRTFData(for: note.id, matching: newText) == nil,
+                   "on-demand hydration must refuse a stale sidecar")
+
+        // A sidecar that does still match is loaded as before — the check
+        // rejects staleness, not rich text.
+        note.rtfData = rtf(newText)
+        try expectSuccess(manager.saveNote(note, rtfInSync: true), "re-synced note should save")
+        try expect(manager.loadRTFData(for: note.id, matching: newText) != nil,
+                   "an in-sync sidecar is still loaded")
+        try expect(manager.loadNotes().first { $0.id == note.id }?.rtfData != nil,
+                   "an in-sync sidecar survives a full load")
     }
 }
 
@@ -2062,6 +2208,9 @@ let tests: [(String, () throws -> Void)] = [
     ("Code-block scan skipped when structure intact", testCodeBlockScanSkippedWhenStructureIntact),
     ("Storage round-trip, rename, collision, and RTF", testStorageRoundTripRenameCollisionAndRTF),
     ("Storage malformed files and write errors", testStorageMalformedFilesAndWriteErrors),
+    ("Stale RTF sidecar never becomes content", testStaleRTFSidecarNeverBecomesContent),
+    ("Editor stays silent before its note loads", testEditorReportsNothingBeforeItsContentIsLoaded),
+    ("Backup throttle and recovery stash rules", testDataLossSafetyNets),
     ("Command Palette search matching", testCommandPaletteSearchMatching),
     ("Fuzzy search and palette ranking", testFuzzySearchAndRanking),
     ("Search smart-quote folding", testSearchQuoteFolding),
